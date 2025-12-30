@@ -47,19 +47,55 @@ generateTempRunner modName testModules = unlines
 ||| Generate temporary .ipkg file
 ||| @depends - Additional package dependencies (e.g., from target project's ipkg)
 ||| @sourcedir - Source directory (from target project's ipkg, defaults to "src")
-generateTempIpkg : String -> String -> List String -> String -> List String -> String -> String
-generateTempIpkg pkgName mainMod modules execName depends sourcedir =
+||| @dumpcasesPath - Optional path for --dumpcases output (Nothing = profile only)
+generateTempIpkg : String -> String -> List String -> String -> List String -> String -> Maybe String -> String
+generateTempIpkg pkgName mainMod modules execName depends sourcedir dumpcasesPath =
   let allDepends = "base, contrib, idris2-coverage" ++
         (if null depends then "" else ", " ++ joinStrings ", " depends)
+      optsLine = case dumpcasesPath of
+        Just path => "opts = \"--profile --dumpcases " ++ path ++ "\""
+        Nothing => "opts = \"--profile\""
   in unlines
     [ "package " ++ pkgName
-    , "opts = \"--profile\""
+    , optsLine
     , "sourcedir = \"" ++ sourcedir ++ "\""
     , "main = " ++ mainMod
     , "executable = " ++ execName
     , "depends = " ++ allDepends
     , "modules = " ++ joinStrings ", " modules
     ]
+
+||| Generate pack.toml with local idris2-coverage reference
+||| @idris2CoveragePath - Absolute path to idris2-coverage project
+generateTempPackToml : String -> String
+generateTempPackToml idris2CoveragePath = unlines
+  [ "[custom.all.idris2-coverage]"
+  , "type   = \"local\""
+  , "path   = \"" ++ idris2CoveragePath ++ "\""
+  , "ipkg   = \"idris2-coverage.ipkg\""
+  ]
+
+||| Default path for idris2-coverage (hardcoded for now)
+defaultIdris2CoveragePath : String
+defaultIdris2CoveragePath = "/Users/bob/code/idris2-coverage"
+
+||| Check if a file exists
+fileExists : String -> IO Bool
+fileExists path = do
+  Right _ <- readFile path
+    | Left _ => pure False
+  pure True
+
+||| Write pack.toml only if it doesn't exist, return True if we created it
+writePackTomlIfMissing : String -> String -> IO (Either String Bool)
+writePackTomlIfMissing packTomlPath packTomlContent = do
+  exists <- fileExists packTomlPath
+  if exists
+    then pure $ Right False  -- Didn't create, already exists
+    else do
+      Right () <- writeFile packTomlPath packTomlContent
+        | Left err => pure $ Left $ "Failed to write pack.toml: " ++ show err
+      pure $ Right True  -- Created it
 
 -- =============================================================================
 -- Test Output Parsing
@@ -98,6 +134,11 @@ removeFileIfExists : String -> IO ()
 removeFileIfExists path = do
   _ <- removeFile path
   pure ()
+
+||| Remove pack.toml only if we created it
+cleanupPackToml : String -> Bool -> IO ()
+cleanupPackToml packTomlPath True = removeFileIfExists packTomlPath
+cleanupPackToml _ False = pure ()
 
 ||| Clean up temporary files
 cleanupTempFiles : String -> String -> String -> String -> IO ()
@@ -228,17 +269,28 @@ runTestsWithCoverage projectDir testModules timeout = do
 
       -- Generate temp .ipkg (test modules only - Coverage.* comes from idris2-coverage package)
       let allModules = tempModName :: testModules
-      let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir
+      let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir Nothing
+      let packTomlPath = projectDir ++ "/pack.toml"
+      let packTomlContent = generateTempPackToml defaultIdris2CoveragePath
+
       Right () <- writeFile tempIpkgPath ipkgContent
         | Left err => do
             removeFileIfExists tempIdrPath
             pure $ Left $ "Failed to write temp ipkg: " ++ show err
 
-      -- Build with profiling
-      buildResult <- system $ "cd " ++ projectDir ++ " && idris2 --build " ++ tempExecName ++ ".ipkg 2>&1"
+      -- Write pack.toml for idris2-coverage resolution (only if not present)
+      Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
+        | Left err => do
+            removeFileIfExists tempIdrPath
+            removeFileIfExists tempIpkgPath
+            pure $ Left err
+
+      -- Build with profiling using pack for proper package resolution
+      buildResult <- system $ "cd " ++ projectDir ++ " && pack build " ++ tempExecName ++ ".ipkg 2>&1"
       if buildResult /= 0
         then do
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+          cleanupPackToml packTomlPath createdPackToml
           pure $ Left "Build failed"
         else do
           -- Run executable and capture output
@@ -298,6 +350,7 @@ runTestsWithCoverage projectDir testModules timeout = do
 
           -- REQ_COV_UNI_002: Clean up
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+          cleanupPackToml packTomlPath createdPackToml
 
           pure $ Right $ MkTestCoverageReport
             testResults
@@ -337,6 +390,8 @@ runTestsWithTestCoverage projectDir testModules timeout = do
       let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
       let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
       let tempIpkgName = tempExecName ++ ".ipkg"
+      let packTomlPath = projectDir ++ "/pack.toml"
+      let packTomlContent = generateTempPackToml defaultIdris2CoveragePath
       let ssHtmlPath = projectDir ++ "/" ++ tempExecName ++ ".ss.html"
       let profileHtmlPath = projectDir ++ "/profile.html"
       let dumpcasesPath = "/tmp/idris2_dumpcases_test_" ++ uid ++ ".txt"
@@ -348,20 +403,29 @@ runTestsWithTestCoverage projectDir testModules timeout = do
 
       -- Generate temp .ipkg
       let allModules = tempModName :: testModules
-      let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir
+      let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just dumpcasesPath)
       Right () <- writeFile tempIpkgPath ipkgContent
         | Left err => do
             removeFileIfExists tempIdrPath
             pure $ Left $ "Failed to write temp ipkg: " ++ show err
 
+      -- Write pack.toml for idris2-coverage resolution (only if not present)
+      Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
+        | Left err => do
+            removeFileIfExists tempIdrPath
+            removeFileIfExists tempIpkgPath
+            pure $ Left err
+
       -- Build with --dumpcases on test binary
-      let buildCmd = "cd " ++ projectDir ++ " && idris2 --dumpcases " ++ dumpcasesPath
-                  ++ " --build " ++ tempIpkgName ++ " 2>&1"
+      -- Use pack build to ensure proper package resolution (avoids ambiguous identifier issues)
+      -- The --dumpcases flag is passed via opts in the ipkg file
+      let buildCmd = "cd " ++ projectDir ++ " && pack build " ++ tempIpkgName ++ " 2>&1"
       putStrLn $ "Dumping case trees to " ++ dumpcasesPath
       buildResult <- system buildCmd
       if buildResult /= 0
         then do
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+          cleanupPackToml packTomlPath createdPackToml
           removeFileIfExists dumpcasesPath
           pure $ Left "Build with --dumpcases failed"
         else do
@@ -369,6 +433,7 @@ runTestsWithTestCoverage projectDir testModules timeout = do
           Right dumpContent <- readFile dumpcasesPath
             | Left _ => do
                 cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+                cleanupPackToml packTomlPath createdPackToml
                 pure $ Left "Failed to read dumpcases output"
 
           let funcs = parseDumpcasesFile dumpContent
@@ -385,6 +450,7 @@ runTestsWithTestCoverage projectDir testModules timeout = do
             | Left _ => do
                 -- Return static analysis with 0 executed if no profiler output
                 cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+                cleanupPackToml packTomlPath createdPackToml
                 removeFileIfExists dumpcasesPath
                 removeFileIfExists absOutputFile
                 pure $ Right $ MkTestCoverage "test-binary" analysis.totalCanonical analysis.totalExcluded 0
@@ -395,6 +461,7 @@ runTestsWithTestCoverage projectDir testModules timeout = do
 
           -- Cleanup
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+          cleanupPackToml packTomlPath createdPackToml
           removeFileIfExists dumpcasesPath
           removeFileIfExists absOutputFile
 
@@ -434,6 +501,8 @@ runTestsWithFunctionHits projectDir testModules timeout = do
       let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
       let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
       let tempIpkgName = tempExecName ++ ".ipkg"
+      let packTomlPath = projectDir ++ "/pack.toml"
+      let packTomlContent = generateTempPackToml defaultIdris2CoveragePath
       let ssHtmlPath = projectDir ++ "/" ++ tempExecName ++ ".ss.html"
       let profileHtmlPath = projectDir ++ "/profile.html"
       let dumpcasesPath = "/tmp/idris2_dumpcases_fh_" ++ uid ++ ".txt"
@@ -446,19 +515,28 @@ runTestsWithFunctionHits projectDir testModules timeout = do
 
       -- Generate temp .ipkg
       let allModules = tempModName :: testModules
-      let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir
+      let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just dumpcasesPath)
       Right () <- writeFile tempIpkgPath ipkgContent
         | Left err => do
             removeFileIfExists tempIdrPath
             pure $ Left $ "Failed to write temp ipkg: " ++ show err
 
+      -- Write pack.toml for idris2-coverage resolution (only if not present)
+      Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
+        | Left err => do
+            removeFileIfExists tempIdrPath
+            removeFileIfExists tempIpkgPath
+            pure $ Left err
+
       -- Build with --dumpcases on test binary
-      let buildCmd = "cd " ++ projectDir ++ " && idris2 --dumpcases " ++ dumpcasesPath
-                  ++ " --build " ++ tempIpkgName ++ " 2>&1"
+      -- Use pack build to ensure proper package resolution (avoids ambiguous identifier issues)
+      -- The --dumpcases flag is passed via opts in the ipkg file
+      let buildCmd = "cd " ++ projectDir ++ " && pack build " ++ tempIpkgName ++ " 2>&1"
       buildResult <- system buildCmd
       if buildResult /= 0
         then do
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+          cleanupPackToml packTomlPath createdPackToml
           removeFileIfExists dumpcasesPath
           pure $ Left "Build with --dumpcases failed"
         else do
@@ -466,6 +544,7 @@ runTestsWithFunctionHits projectDir testModules timeout = do
           Right dumpContent <- readFile dumpcasesPath
             | Left _ => do
                 cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+                cleanupPackToml packTomlPath createdPackToml
                 pure $ Left "Failed to read dumpcases output"
 
           let funcs = parseDumpcasesFile dumpContent
@@ -479,6 +558,7 @@ runTestsWithFunctionHits projectDir testModules timeout = do
             | Left _ => do
                 -- Return static-only data with 0 executed
                 cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+                cleanupPackToml packTomlPath createdPackToml
                 removeFileIfExists dumpcasesPath
                 let staticHits = map (\f => MkFunctionRuntimeHit f.fullName f.fullName
                                       (countCanonical f.cases) 0 0 0) funcs
@@ -488,6 +568,7 @@ runTestsWithFunctionHits projectDir testModules timeout = do
           Right ssContent <- readFile ssPath
             | Left _ => do
                 cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+                cleanupPackToml packTomlPath createdPackToml
                 removeFileIfExists dumpcasesPath
                 pure $ Left "Failed to read .ss file"
 
@@ -496,6 +577,7 @@ runTestsWithFunctionHits projectDir testModules timeout = do
 
           -- Cleanup
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
+          cleanupPackToml packTomlPath createdPackToml
           removeFileIfExists dumpcasesPath
 
           pure $ Right functionHits
