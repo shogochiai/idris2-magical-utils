@@ -1,8 +1,8 @@
 ||| Profile HTML Parser for Chez Scheme profiler output
 ||| Parses profile.html and *.ss.html files to extract coverage data
-module Coverage.ProfileParser
+module EvmCoverage.ProfileParser
 
-import Coverage.Types
+import EvmCoverage.Types
 import Data.List
 import Data.List1
 import Data.Maybe

@@ -1,8 +1,8 @@
 ||| Scheme to Idris2 name mapper
 ||| Maps Chez Scheme function names back to Idris2 module.function
-module Coverage.SchemeMapper
+module EvmCoverage.SchemeMapper
 
-import Coverage.Types
+import EvmCoverage.Types
 import Data.List
 import Data.List1
 import Data.String

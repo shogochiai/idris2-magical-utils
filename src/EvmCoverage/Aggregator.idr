@@ -1,9 +1,9 @@
 ||| Coverage aggregation
 ||| Combines static analysis (dumpcases) with dynamic hits (profiler)
-module Coverage.Aggregator
+module EvmCoverage.Aggregator
 
-import Coverage.Types
-import Coverage.SchemeMapper
+import EvmCoverage.Types
+import EvmCoverage.SchemeMapper
 import Data.List
 import Data.Maybe
 import Data.SortedMap

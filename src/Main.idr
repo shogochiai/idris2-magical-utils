@@ -2,13 +2,13 @@
 ||| EVM semantic coverage analysis using Chez Scheme profiler
 module Main
 
-import Coverage.Types
-import Coverage.DumpcasesParser
-import Coverage.ProfileParser
-import Coverage.SchemeMapper
-import Coverage.Aggregator
-import Coverage.Report
-import Coverage.EvmCoverage
+import EvmCoverage.Types
+import EvmCoverage.DumpcasesParser
+import EvmCoverage.ProfileParser
+import EvmCoverage.SchemeMapper
+import EvmCoverage.Aggregator
+import EvmCoverage.Report
+import EvmCoverage.EvmCoverage
 
 import Data.List
 import Data.Maybe

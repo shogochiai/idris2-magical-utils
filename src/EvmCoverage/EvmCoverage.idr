@@ -1,13 +1,13 @@
 ||| High-level EVM coverage API
 ||| Combines dumpcases analysis with Chez profiler
-module Coverage.EvmCoverage
+module EvmCoverage.EvmCoverage
 
-import Coverage.Types
-import Coverage.DumpcasesParser
-import Coverage.ProfileParser
-import Coverage.SchemeMapper
-import Coverage.Aggregator
-import Coverage.Report
+import EvmCoverage.Types
+import EvmCoverage.DumpcasesParser
+import EvmCoverage.ProfileParser
+import EvmCoverage.SchemeMapper
+import EvmCoverage.Aggregator
+import EvmCoverage.Report
 
 import Data.List
 import Data.List1

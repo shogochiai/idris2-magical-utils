@@ -1,8 +1,8 @@
 ||| Parser for Idris2 --dumpcases output
 ||| Extracts semantic coverage information (canonical vs impossible cases)
-module Coverage.DumpcasesParser
+module EvmCoverage.DumpcasesParser
 
-import Coverage.Types
+import EvmCoverage.Types
 import Data.List
 import Data.List1
 import Data.String

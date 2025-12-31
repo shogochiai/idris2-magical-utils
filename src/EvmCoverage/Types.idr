@@ -1,6 +1,6 @@
 ||| Coverage type definitions for idris2-evm-coverage
 ||| Uses Chez Scheme profiler for EVM semantic coverage
-module Coverage.Types
+module EvmCoverage.Types
 
 import Data.List
 import Data.List1

@@ -7,13 +7,13 @@ depends = base, contrib
 
 sourcedir = "src"
 
-modules = Coverage.Types
-        , Coverage.DumpcasesParser
-        , Coverage.ProfileParser
-        , Coverage.SchemeMapper
-        , Coverage.Aggregator
-        , Coverage.Report
-        , Coverage.EvmCoverage
+modules = EvmCoverage.Types
+        , EvmCoverage.DumpcasesParser
+        , EvmCoverage.ProfileParser
+        , EvmCoverage.SchemeMapper
+        , EvmCoverage.Aggregator
+        , EvmCoverage.Report
+        , EvmCoverage.EvmCoverage
         , Main
 
 main = Main

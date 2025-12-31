@@ -1,9 +1,9 @@
 ||| Report generation for coverage output
 ||| Supports JSON and text formats
-module Coverage.Report
+module EvmCoverage.Report
 
-import Coverage.Types
-import Coverage.Aggregator
+import EvmCoverage.Types
+import EvmCoverage.Aggregator
 import Data.List
 import Data.String
 
