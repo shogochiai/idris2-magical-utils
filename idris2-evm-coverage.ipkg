@@ -1,0 +1,20 @@
+package idris2-evm-coverage
+version = "0.1.0"
+authors = "bob"
+brief = "EVM semantic coverage analysis using Chez Scheme profiler"
+
+depends = base, contrib
+
+sourcedir = "src"
+
+modules = Coverage.Types
+        , Coverage.DumpcasesParser
+        , Coverage.ProfileParser
+        , Coverage.SchemeMapper
+        , Coverage.Aggregator
+        , Coverage.Report
+        , Coverage.EvmCoverage
+        , Main
+
+main = Main
+executable = idris2-evm-cov
