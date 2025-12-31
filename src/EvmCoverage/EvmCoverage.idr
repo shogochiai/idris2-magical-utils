@@ -197,6 +197,16 @@ analyzeFromDumpcases dumpcasesPath = do
   pure $ Right cov
 
 -- =============================================================================
+-- Top K Targets (for CLI display)
+-- =============================================================================
+
+||| Get top K high-impact targets from coverage results
+||| Sorted by severity (branch count, descending)
+export
+getTopKTargets : Nat -> AggregatedCoverage -> List HighImpactTarget
+getTopKTargets k cov = topKTargets k cov.uncoveredBranches
+
+-- =============================================================================
 -- Report Generation
 -- =============================================================================
 

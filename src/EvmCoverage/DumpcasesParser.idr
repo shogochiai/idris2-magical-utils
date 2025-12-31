@@ -111,12 +111,17 @@ isProjectFunction name =
     isTestModule : String -> Bool
     isTestModule s = isInfixOf ".Tests." s || isInfixOf "Test." s
 
+    -- Schema/Storages modules (pure storage layout, not business logic)
+    isSchemaModule : String -> Bool
+    isSchemaModule s = isInfixOf ".Storages." s || isInfixOf ".Schema" s
+
     isExcluded : String -> Bool
     isExcluded s =
       isCompilerGenerated s ||
       isStdLib s ||
       isPrimitive s ||
-      isTestModule s
+      isTestModule s ||
+      isSchemaModule s
 
 -- =============================================================================
 -- Line Parsing
@@ -282,3 +287,47 @@ analyzeStatic branches =
        (length optimizer)
        (length unknown)
        (length compiler)
+
+-- =============================================================================
+-- Top-K Targets with Severity
+-- =============================================================================
+
+||| Group branches by function name
+groupByFunc : List ClassifiedBranch -> List (String, List ClassifiedBranch)
+groupByFunc branches = go branches []
+  where
+    insertOrUpdate : String -> ClassifiedBranch -> List (String, List ClassifiedBranch) -> List (String, List ClassifiedBranch)
+    insertOrUpdate fn b [] = [(fn, [b])]
+    insertOrUpdate fn b ((k, vs) :: rest) =
+      if k == fn then (k, b :: vs) :: rest
+      else (k, vs) :: insertOrUpdate fn b rest
+
+    go : List ClassifiedBranch -> List (String, List ClassifiedBranch) -> List (String, List ClassifiedBranch)
+    go [] acc = acc
+    go (b :: bs) acc = go bs (insertOrUpdate b.branchId.funcName b acc)
+
+||| Convert function branches to HighImpactTarget
+funcToTarget : (String, List ClassifiedBranch) -> HighImpactTarget
+funcToTarget (fn, branches) =
+  let canonical = filter (\b => isCanonical b.branchClass) branches
+      canonicalCount = length canonical
+      -- For static-only: executed = 0, severity = Inf
+      severity = 1.0e309  -- Infinity - no runtime data
+      sevLevel = if canonicalCount >= 5 then Error
+                 else if canonicalCount >= 2 then Warning
+                 else Info
+  in MkHighImpactTarget fn canonicalCount 0 severity sevLevel
+       ("Function has " ++ show canonicalCount ++ " untested branches")
+
+||| Get top K high-impact targets from branches, sorted by severity
+||| @k - Maximum number of targets to return
+||| @branches - All classified branches
+export
+topKTargets : Nat -> List ClassifiedBranch -> List HighImpactTarget
+topKTargets k branches =
+  let grouped = groupByFunc branches
+      targets = map funcToTarget grouped
+      -- Filter out functions with 0 canonical branches
+      nonEmpty = filter (\t => t.branchCount > 0) targets
+      sorted = sortBy compareSeverity nonEmpty
+  in take k sorted
