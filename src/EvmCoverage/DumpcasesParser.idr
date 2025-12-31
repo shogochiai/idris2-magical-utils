@@ -67,6 +67,58 @@ parseCrashReason msg =
   else BCUnknownCrash msg
 
 -- =============================================================================
+-- Module Filtering (EVM-specific)
+-- =============================================================================
+
+||| Check if function belongs to project (not runtime/stdlib)
+||| Based on idris2-coverage/exclusions/base.txt patterns
+isProjectFunction : String -> Bool
+isProjectFunction name =
+  let n = case strUncons name of
+            Just ('.', rest) => rest
+            _ => name
+  in not (isExcluded n)
+  where
+    -- Compiler-generated MN names
+    isCompilerGenerated : String -> Bool
+    isCompilerGenerated s =
+      isInfixOf "{csegen:" s ||
+      isInfixOf "{eta:" s ||
+      isInfixOf "{arg:" s ||
+      isInfixOf "{lazyArg:" s ||
+      isInfixOf "{conArg:" s ||
+      isInfixOf "{case" s
+
+    -- Standard library modules
+    isStdLib : String -> Bool
+    isStdLib s =
+      isPrefixOf "Prelude." s ||
+      isPrefixOf "Data." s ||
+      isPrefixOf "System." s ||
+      isPrefixOf "Control." s ||
+      isPrefixOf "Decidable." s ||
+      isPrefixOf "Language." s ||
+      isPrefixOf "Debug." s ||
+      isPrefixOf "PrimIO." s ||
+      isPrefixOf "_builtin." s ||
+      isPrefixOf "Builtin." s
+
+    -- Builtins and primitives
+    isPrimitive : String -> Bool
+    isPrimitive s = isPrefixOf "prim__" s
+
+    -- Test modules (not deployed to EVM)
+    isTestModule : String -> Bool
+    isTestModule s = isInfixOf ".Tests." s || isInfixOf "Test." s
+
+    isExcluded : String -> Bool
+    isExcluded s =
+      isCompilerGenerated s ||
+      isStdLib s ||
+      isPrimitive s ||
+      isTestModule s
+
+-- =============================================================================
 -- Line Parsing
 -- =============================================================================
 
@@ -159,13 +211,17 @@ parseBranches fName (l :: ls) idx =
       else parseBranches fName ls idx
 
 ||| Parse a single function from dumpcases output
+||| Note: In dumpcases output, each function definition is a single line
 parseFunction : String -> List String -> (String, List ClassifiedBranch)
 parseFunction funcLine bodyLines =
   case parseFunctionDef funcLine of
     Nothing => ("", [])
     Just (modName, fName, arity) =>
       let fullName = if null modName then fName else modName ++ "." ++ fName
-          branches = parseBranches fullName bodyLines 0
+          -- Count case branches in the function line itself (not bodyLines)
+          numBranches = countCaseBranches funcLine
+          indices = take numBranches [0..]
+          branches = map (makeBranch fullName 0) indices
       in (fullName, branches)
 
 ||| Parse function list helper
@@ -181,14 +237,15 @@ parseFunctions (l :: rest) acc =
 export
 parseDumpcases : String -> List ClassifiedBranch
 parseDumpcases content =
-  let ls = lines content
-  in parseFunctions ls []
+  let allBranches = parseFunctions (lines content) []
+  in filter (\b => isProjectFunction b.branchId.funcName) allBranches
 
-||| Run idris2 --dumpcases and parse output
+||| Run idris2-yul --dumpcases and parse output
+||| EVM coverage requires idris2-yul compiler for EVM FFI support
 export
 runDumpcasesAndParse : String -> String -> IO (Either String (List ClassifiedBranch))
 runDumpcasesAndParse ipkgPath outputPath = do
-  let cmd = "idris2 --dumpcases " ++ outputPath ++ " --build " ++ ipkgPath
+  let cmd = "idris2-yul --dumpcases " ++ outputPath ++ " --build " ++ ipkgPath
   exitCode <- system cmd
   if exitCode /= 0
     then pure $ Left $ "Failed to run: " ++ cmd
