@@ -1,0 +1,12 @@
+package bench
+version = 0.1.0
+brief = "Benchmark harness for ProfileParser"
+
+depends = base, contrib, idris2-evm-coverage
+
+sourcedir = "."
+
+modules = BenchMain, GenFixtures
+
+main = BenchMain
+executable = bench

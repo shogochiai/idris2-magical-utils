@@ -9,11 +9,15 @@ import EvmCoverage.SchemeMapper
 import EvmCoverage.Aggregator
 import EvmCoverage.Report
 import EvmCoverage.EvmCoverage
+import EvmCoverage.EvmInterpreterCoverage
+import EvmCoverage.ProfileParserLinear
+import EvmCoverage.ProfileParserFSM
 
 import Data.List
 import Data.Maybe
 import Data.String
 import System
+import System.Clock
 import System.File
 
 %default covering
@@ -33,9 +37,13 @@ record Options where
   showVersion  : Bool
   verbose      : Bool
   dumpcasesOnly : Bool
+  evmInterpreter : Bool  -- New: analyze idris2-evm interpreter coverage
+  benchMode    : Bool    -- Benchmark extractSpans (V0)
+  benchV1Mode  : Bool    -- Benchmark extractSpansLinear (V1)
+  benchV2Mode  : Bool    -- Benchmark extractHitsFSM (V2)
 
 defaultOptions : Options
-defaultOptions = MkOptions Nothing Nothing Nothing Text 80.0 False False False False
+defaultOptions = MkOptions Nothing Nothing Nothing Text 80.0 False False False False False False False False
 
 -- =============================================================================
 -- Argument Parsing
@@ -53,6 +61,10 @@ parseArgs ("--text" :: rest) opts = parseArgs rest ({ format := Text } opts)
 parseArgs ("--markdown" :: rest) opts = parseArgs rest ({ format := Markdown } opts)
 parseArgs ("--oneline" :: rest) opts = parseArgs rest ({ format := OneLine } opts)
 parseArgs ("--dumpcases" :: rest) opts = parseArgs rest ({ dumpcasesOnly := True } opts)
+parseArgs ("--evm-interpreter" :: rest) opts = parseArgs rest ({ evmInterpreter := True } opts)
+parseArgs ("--bench" :: rest) opts = parseArgs rest ({ benchMode := True } opts)
+parseArgs ("--bench-v1" :: rest) opts = parseArgs rest ({ benchV1Mode := True } opts)
+parseArgs ("--bench-v2" :: rest) opts = parseArgs rest ({ benchV2Mode := True } opts)
 parseArgs ("--threshold" :: t :: rest) opts =
   let th = fromMaybe 80.0 (parseDouble t)
   in parseArgs rest ({ threshold := th } opts)
@@ -122,6 +134,75 @@ versionText : String
 versionText = "idris2-evm-cov 0.1.0 - EVM Semantic Coverage Analysis"
 
 -- =============================================================================
+-- Benchmark Mode
+-- =============================================================================
+
+getTimeNs : IO Integer
+getTimeNs = do
+  t <- clockTime Monotonic
+  pure $ seconds t * 1000000000 + nanoseconds t
+
+runBench : String -> IO ()
+runBench inputPath = do
+  Right content <- readFile inputPath
+    | Left err => putStrLn $ "Error reading file: " ++ show err
+  putStrLn $ "[V0] Input: " ++ inputPath
+  putStrLn $ "Size: " ++ show (length content) ++ " chars"
+  putStrLn ""
+  -- Run 3 iterations
+  let go : Nat -> IO ()
+      go 0 = pure ()
+      go (S n) = do
+        start <- getTimeNs
+        let spans = extractSpans content
+        let count = length spans
+        end <- getTimeNs
+        let elapsed = (end - start) `div` 1000000
+        putStrLn $ "Run " ++ show (3 `minus` n) ++ ": " ++ show count ++ " spans, " ++ show elapsed ++ " ms"
+        go n
+  go 3
+
+runBenchV1 : String -> IO ()
+runBenchV1 inputPath = do
+  Right content <- readFile inputPath
+    | Left err => putStrLn $ "Error reading file: " ++ show err
+  putStrLn $ "[V1] Input: " ++ inputPath
+  putStrLn $ "Size: " ++ show (length content) ++ " chars"
+  putStrLn ""
+  -- Run 3 iterations
+  let go : Nat -> IO ()
+      go 0 = pure ()
+      go (S n) = do
+        start <- getTimeNs
+        let spans = extractSpans content
+        let count = length spans
+        end <- getTimeNs
+        let elapsed = (end - start) `div` 1000000
+        putStrLn $ "Run " ++ show (3 `minus` n) ++ ": " ++ show count ++ " spans, " ++ show elapsed ++ " ms"
+        go n
+  go 3
+
+runBenchV2 : String -> IO ()
+runBenchV2 inputPath = do
+  Right content <- readFile inputPath
+    | Left err => putStrLn $ "Error reading file: " ++ show err
+  putStrLn $ "[V2 FSM] Input: " ++ inputPath
+  putStrLn $ "Size: " ++ show (length content) ++ " chars"
+  putStrLn ""
+  -- Run 3 iterations
+  let go : Nat -> IO ()
+      go 0 = pure ()
+      go (S n) = do
+        start <- getTimeNs
+        let hits = extractHitsFSM content
+        let count = length hits
+        end <- getTimeNs
+        let elapsed = (end - start) `div` 1000000
+        putStrLn $ "Run " ++ show (3 `minus` n) ++ ": " ++ show count ++ " hits, " ++ show elapsed ++ " ms"
+        go n
+  go 3
+
+-- =============================================================================
 -- Main Execution
 -- =============================================================================
 
@@ -135,35 +216,53 @@ runMain opts =
     Just target => do
       when opts.verbose $ putStrLn $ "Analyzing: " ++ target
 
-      let outputDir = fromMaybe (target ++ "/coverage") opts.outputDir
-      let config = MkEvmCoverageConfig
-                     target
-                     opts.ipkgPath
-                     outputDir
-                     opts.threshold
-                     opts.verbose
-
-      result <- analyzeCoverage config
-
-      case result of
-        Left err => do
-          putStrLn $ "Error: " ++ err
-          exitWith (ExitFailure 1)
-        Right cov => do
-          -- Output report
-          case opts.format of
-            OneLine => putStrLn $ toOneLine cov
-            JSON => putStrLn $ toJson "now" target cov
-            _ => do
-              writeReport opts.format outputDir cov
-              putStrLn $ toOneLine cov
-
-          -- Check threshold
-          if meetsThreshold opts.threshold cov
-            then when opts.verbose $ putStrLn "✓ Coverage threshold met"
-            else do
-              putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
+      -- EVM interpreter coverage mode
+      if opts.evmInterpreter
+        then do
+          let config = MkEvmInterpreterConfig target Nothing True opts.threshold opts.verbose
+          result <- analyzeEvmInterpreterCoverage config
+          case result of
+            Left err => do
+              putStrLn $ "Error: " ++ err
               exitWith (ExitFailure 1)
+            Right cov => do
+              putStrLn $ "EVM Interpreter Coverage: " ++ show cov.canonicalHit ++ "/" ++ show cov.canonicalTotal
+              putStrLn $ "Coverage: " ++ show cov.coveragePercent ++ "%"
+              if meetsThreshold opts.threshold cov
+                then when opts.verbose $ putStrLn "✓ Coverage threshold met"
+                else do
+                  putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
+                  exitWith (ExitFailure 1)
+        else do
+          let outputDir = fromMaybe (target ++ "/coverage") opts.outputDir
+          let config = MkEvmCoverageConfig
+                         target
+                         opts.ipkgPath
+                         outputDir
+                         opts.threshold
+                         opts.verbose
+
+          result <- analyzeCoverage config
+
+          case result of
+            Left err => do
+              putStrLn $ "Error: " ++ err
+              exitWith (ExitFailure 1)
+            Right cov => do
+              -- Output report
+              case opts.format of
+                OneLine => putStrLn $ toOneLine cov
+                JSON => putStrLn $ toJson "now" target cov
+                _ => do
+                  writeReport opts.format outputDir cov
+                  putStrLn $ toOneLine cov
+
+              -- Check threshold
+              if meetsThreshold opts.threshold cov
+                then when opts.verbose $ putStrLn "✓ Coverage threshold met"
+                else do
+                  putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
+                  exitWith (ExitFailure 1)
 
 -- =============================================================================
 -- Entry Point
@@ -178,4 +277,16 @@ main = do
     then putStrLn helpText
     else if opts.showVersion
       then putStrLn versionText
-      else runMain opts
+      else if opts.benchMode
+        then case opts.targetPath of
+          Nothing => putStrLn "Usage: idris2-evm-cov --bench <html_file>"
+          Just path => runBench path
+        else if opts.benchV1Mode
+          then case opts.targetPath of
+            Nothing => putStrLn "Usage: idris2-evm-cov --bench-v1 <html_file>"
+            Just path => runBenchV1 path
+          else if opts.benchV2Mode
+            then case opts.targetPath of
+              Nothing => putStrLn "Usage: idris2-evm-cov --bench-v2 <html_file>"
+              Just path => runBenchV2 path
+            else runMain opts

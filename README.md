@@ -112,13 +112,32 @@ The following are excluded from coverage denominator (based on `idris2-coverage/
 ```
 src/
 ├── EvmCoverage/
-│   ├── Types.idr       # Core types (BranchClass, CoverageGap)
-│   ├── Aggregator.idr  # Coverage aggregation logic
-│   ├── SourceMap.idr   # PC → Idris2 function mapping
-│   ├── Report.idr      # JSON/Markdown report generation
-│   └── UnifiedRunner.idr # End-to-end runner
+│   ├── Types.idr           # Core types (BranchClass, CoverageGap)
+│   ├── Aggregator.idr      # Coverage aggregation logic
+│   ├── ProfileParserFSM.idr # O(n) FSM-based HTML parser
+│   ├── SourceMap.idr       # PC → Idris2 function mapping
+│   ├── Report.idr          # JSON/Markdown report generation
+│   └── UnifiedRunner.idr   # End-to-end runner
 └── Main.idr
 ```
+
+## Performance
+
+The profile HTML parser uses a finite state machine (FSM) for O(n) single-pass parsing:
+
+| Parser | Algorithm | 10k spans | 50k spans |
+|--------|-----------|-----------|-----------|
+| V0 (extractSpans) | O(n²) substr | 21,000 ms | ~8 min |
+| V1 (linear) | O(n²) substr copies | 29,000 ms | ~12 min |
+| **V2 (FSM)** | **O(n) single-pass** | **14 ms** | **90 ms** |
+
+The FSM approach (`ProfileParserFSM.extractHitsFSM`):
+- Single `unpack` String → List Char conversion
+- State machine carries accumulated values through transitions
+- Minimal extraction (line number, hit count only)
+- No intermediate string allocations
+
+Benchmarks: `idris2-evm-cov --bench-v2 <html_file>`
 
 ## Related Projects
 
