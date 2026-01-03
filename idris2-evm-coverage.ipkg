@@ -24,6 +24,7 @@ modules = EvmCoverage.Types
         , EvmCoverage.YulMapper
         , EvmCoverage.AsmJsonParser
         , EvmCoverage.YulCoverage
+        , EvmCoverage.Exclusions
         , Main
 
 main = Main

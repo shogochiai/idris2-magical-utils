@@ -23,6 +23,7 @@ import System.File
 import EvmCoverage.YulMapper
 import EvmCoverage.AsmJsonParser
 import EvmCoverage.TraceParser
+import EvmCoverage.Exclusions
 
 %default covering
 
@@ -101,16 +102,19 @@ countFuncHits yf instrs executedPCs =
   in length hitInstrs
 
 ||| Calculate coverage for a list of Yul functions
+||| @exclusions - Optional list of exclusion patterns to filter out test functions
 export
-calculateYulCoverage : List YulFunc -> List AsmInstr -> List TraceEntry -> YulCoverageResult
-calculateYulCoverage yulFuncs asmInstrs trace =
+calculateYulCoverage : List YulFunc -> List AsmInstr -> List TraceEntry -> List ExclPattern -> YulCoverageResult
+calculateYulCoverage yulFuncs asmInstrs trace exclusions =
   let executedPCs = SortedSet.fromList $ map (.pc) trace
       executedOffsets = getExecutedOffsets trace asmInstrs
       -- Map Yul functions to coverage results
       funcResults = mapMaybe (processFn executedPCs executedOffsets) yulFuncs
-      covered = filter (.executed) funcResults
-      uncovered = filter (not . (.executed)) funcResults
-      idrisCount = length funcResults
+      -- Filter out excluded functions (test-related, helpers, etc.)
+      prodFuncs = filterExcludedFuncs exclusions funcResults
+      covered = filter (.executed) prodFuncs
+      uncovered = filter (not . (.executed)) prodFuncs
+      idrisCount = length prodFuncs
       covCount = length covered
       pct = if idrisCount == 0 then 0.0
             else cast covCount / cast idrisCount * 100.0
@@ -124,6 +128,15 @@ calculateYulCoverage yulFuncs asmInstrs trace =
           let hits = countFuncHits yf asmInstrs executedPCs
               exec = hits > 0 || wasFuncExecuted yf executedOffsets
           in Just $ MkFuncCoverage idris yf hits exec
+
+    -- Build full function name for exclusion matching
+    fullFuncName : FuncCoverage -> String
+    fullFuncName fc = fc.idrisFunc.modulePath ++ "." ++ fc.idrisFunc.funcName
+
+    filterExcludedFuncs : List ExclPattern -> List FuncCoverage -> List FuncCoverage
+    filterExcludedFuncs [] funcs = funcs
+    filterExcludedFuncs pats funcs =
+      filter (\fc => not (isExcluded (fullFuncName fc) pats)) funcs
 
 -- =============================================================================
 -- Module Filtering
@@ -192,13 +205,15 @@ moduleBreakdown r =
 -- =============================================================================
 
 ||| Run full coverage analysis from files
+||| @exclusions - Patterns to exclude test functions from production coverage
 export
 analyzeFromFiles : (yulPath : String) ->
                    (asmJsonPath : String) ->
                    (tracePath : String) ->
                    (moduleFilter : Maybe String) ->
+                   (exclusions : List ExclPattern) ->
                    IO (Either String YulCoverageResult)
-analyzeFromFiles yulPath asmJsonPath tracePath moduleFilter = do
+analyzeFromFiles yulPath asmJsonPath tracePath moduleFilter exclusions = do
   -- Read Yul file
   Right yulFuncs <- readYulFile yulPath
     | Left err => pure $ Left $ "Yul parse error: " ++ err
@@ -216,8 +231,8 @@ analyzeFromFiles yulPath asmJsonPath tracePath moduleFilter = do
                       Nothing => yulFuncs
                       Just pfx => filterByModule pfx yulFuncs
 
-  -- Calculate coverage
-  let result = calculateYulCoverage filteredYul asmInstrs traceEntries
+  -- Calculate coverage with exclusions
+  let result = calculateYulCoverage filteredYul asmInstrs traceEntries exclusions
   pure $ Right result
 
 ||| Quick analysis without trace (just counts functions)
@@ -242,13 +257,15 @@ countFunctions yulPath moduleFilter = do
 
 ||| Run coverage analysis with trace data passed directly (no file I/O)
 ||| This is the preferred API for Library integration with idris2-evm
+||| @exclusions - Patterns to exclude test functions from production coverage
 export
 analyzeWithTrace : (yulPath : String) ->
                    (asmJsonPath : String) ->
                    (traceEntries : List TraceEntry) ->
                    (moduleFilter : Maybe String) ->
+                   (exclusions : List ExclPattern) ->
                    IO (Either String YulCoverageResult)
-analyzeWithTrace yulPath asmJsonPath traceEntries moduleFilter = do
+analyzeWithTrace yulPath asmJsonPath traceEntries moduleFilter exclusions = do
   -- Read Yul file
   Right yulFuncs <- readYulFile yulPath
     | Left err => pure $ Left $ "Yul parse error: " ++ err
@@ -262,6 +279,6 @@ analyzeWithTrace yulPath asmJsonPath traceEntries moduleFilter = do
                       Nothing => yulFuncs
                       Just pfx => filterByModule pfx yulFuncs
 
-  -- Calculate coverage using provided trace
-  let result = calculateYulCoverage filteredYul asmInstrs traceEntries
+  -- Calculate coverage using provided trace with exclusions
+  let result = calculateYulCoverage filteredYul asmInstrs traceEntries exclusions
   pure $ Right result
