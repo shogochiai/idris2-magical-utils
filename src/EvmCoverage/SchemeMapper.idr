@@ -22,21 +22,16 @@ import Data.Maybe
 |||
 ||| Example: "EVM.Interpreter" -> "EVMC-45Interpreter"
 
-||| Decode a single C-XX escape sequence
+||| Decode a single C-NN escape sequence where NN is decimal ASCII code
+||| Idris2 uses decimal encoding: C-45 = chr(45) = '-', C-46 = chr(46) = '.'
 decodeEscape : List Char -> Maybe (Char, List Char)
-decodeEscape ('C' :: '-' :: d1 :: d2 :: rest) =
-  case parseHexDigit d1 of
-    Nothing => Nothing
-    Just h1 => case parseHexDigit d2 of
-                 Nothing => Nothing
-                 Just h2 => Just (chr (h1 * 16 + h2), rest)
-  where
-    parseHexDigit : Char -> Maybe Int
-    parseHexDigit c =
-      if c >= '0' && c <= '9' then Just (ord c - ord '0')
-      else if c >= 'a' && c <= 'f' then Just (ord c - ord 'a' + 10)
-      else if c >= 'A' && c <= 'F' then Just (ord c - ord 'A' + 10)
-      else Nothing
+decodeEscape ('C' :: '-' :: rest) =
+  let digits = takeWhile isDigit rest
+      remaining = dropWhile isDigit rest
+  in if null digits then Nothing
+     else case parsePositive {a=Int} (pack digits) of
+            Nothing => Nothing
+            Just n => Just (chr n, remaining)
 decodeEscape _ = Nothing
 
 ||| Decode all C-XX sequences in a string

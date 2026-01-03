@@ -4,6 +4,7 @@ module EvmCoverage.Report
 
 import EvmCoverage.Types
 import EvmCoverage.Aggregator
+import EvmCoverage.SourceMap
 import Data.List
 import Data.String
 
@@ -178,6 +179,45 @@ toMarkdown target cov =
 export
 reportFilename : String -> String -> String
 reportFilename baseName ext = baseName ++ "." ++ ext
+
+-- =============================================================================
+-- Function Coverage Output (from SourceMap)
+-- =============================================================================
+
+||| Format function coverage as JSON
+export
+functionCoverageToJson : List FunctionCoverage -> String
+functionCoverageToJson [] = "[]"
+functionCoverageToJson funcs =
+  "[\n" ++ (concat $ intersperse ",\n" $ map funcToJson funcs) ++ "\n  ]"
+  where
+    funcToJson : FunctionCoverage -> String
+    funcToJson fc = """
+    {
+      "module": "\{escapeJson fc.location.moduleName}",
+      "function": "\{escapeJson fc.location.functionName}",
+      "hits": \{show fc.hitCount},
+      "pcs_covered": \{show $ length fc.pcsCovered}
+    }
+"""
+
+||| Format function coverage as Markdown
+export
+functionCoverageToMarkdown : List FunctionCoverage -> String
+functionCoverageToMarkdown [] = "_No source map available_\n"
+functionCoverageToMarkdown funcs =
+  let sorted = sortBy (\a, b => compare b.hitCount a.hitCount) funcs
+  in """
+## Idris2 Function Coverage
+
+| Module | Function | Hits | PCs |
+|--------|----------|------|-----|
+\{unlines $ map funcRow sorted}
+"""
+  where
+    funcRow : FunctionCoverage -> String
+    funcRow fc = "| " ++ fc.location.moduleName ++ " | " ++ fc.location.functionName ++
+                 " | " ++ show fc.hitCount ++ " | " ++ show (length fc.pcsCovered) ++ " |"
 
 ||| Available output formats
 public export

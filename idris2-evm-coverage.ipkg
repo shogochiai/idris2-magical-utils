@@ -17,9 +17,13 @@ modules = EvmCoverage.Types
         , EvmCoverage.Report
         , EvmCoverage.EvmCoverage
         , EvmCoverage.EvmInterpreterCoverage
+        , EvmCoverage.FunctionCoverage
         , EvmCoverage.UnifiedRunner
         , EvmCoverage.TraceParser
         , EvmCoverage.SourceMap
+        , EvmCoverage.YulMapper
+        , EvmCoverage.AsmJsonParser
+        , EvmCoverage.YulCoverage
         , Main
 
 main = Main
