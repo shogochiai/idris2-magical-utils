@@ -79,6 +79,10 @@ Chez Scheme profiler  →  Runtime hits  →  Coverage = executed / canonical
 - Idris2 0.7.0+
 - Chez Scheme (for profiling)
 
+## Related Projects
+
+- [idris2-sos-test-coverage-experiment](https://github.com/shogochiai/idris2-sos-test-coverage-experiment) - Demonstrates how GFR Monad + dependent types reduce System of Systems test complexity from O(2^N) to O(N)
+
 ## License
 
 MIT
