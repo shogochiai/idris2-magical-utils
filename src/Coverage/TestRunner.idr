@@ -181,4 +181,15 @@ covering
 discoverTestModules : String -> IO (List String)
 discoverTestModules baseDir = do
   files <- findTestFiles baseDir "*AllTests.idr"
-  pure $ map filePathToModule files
+  -- Convert absolute paths to relative by stripping baseDir prefix
+  let relativePaths = map (stripPrefix baseDir) files
+  pure $ map filePathToModule relativePaths
+  where
+    stripPrefix : String -> String -> String
+    stripPrefix pre path =
+      if isPrefixOf pre path
+         then let stripped = pack $ drop (length pre) (unpack path)
+              in if isPrefixOf "/" stripped
+                    then pack $ drop 1 (unpack stripped)
+                    else stripped
+         else path

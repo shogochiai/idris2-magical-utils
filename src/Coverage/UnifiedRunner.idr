@@ -65,19 +65,45 @@ generateTempIpkg pkgName mainMod modules execName depends sourcedir dumpcasesPat
     , "modules = " ++ joinStrings ", " modules
     ]
 
-||| Generate pack.toml with local idris2-coverage reference
-||| @idris2CoveragePath - Absolute path to idris2-coverage project
+||| Generate pack.toml with idris2-coverage dependency from GitHub
+|||
+||| This function creates a pack.toml that references idris2-coverage from GitHub,
+||| ensuring portability across different development environments.
+|||
+||| If the target project already has a pack.toml with custom dependencies,
+||| those are preserved and merged with the idris2-coverage reference.
+|||
+||| @projectPackToml - Content of project's existing pack.toml (empty string if none)
+||| @return - Complete pack.toml content with idris2-coverage dependency
 generateTempPackToml : String -> String
-generateTempPackToml idris2CoveragePath = unlines
-  [ "[custom.all.idris2-coverage]"
-  , "type   = \"local\""
-  , "path   = \"" ++ idris2CoveragePath ++ "\""
-  , "ipkg   = \"idris2-coverage.ipkg\""
-  ]
+generateTempPackToml projectPackToml =
+  let coverageDef = unlines
+        [ "# Auto-generated: idris2-coverage dependency for test profiling"
+        , "# This enables Coverage.Profiler to track function hits during test execution"
+        , "[custom.all.idris2-coverage]"
+        , "type   = \"github\""
+        , "url    = \"https://github.com/aspect-and-syntax/idris2-coverage\""
+        , "commit = \"latest\""
+        , "ipkg   = \"idris2-coverage.ipkg\""
+        ]
+  in if projectPackToml == ""
+       then coverageDef
+       else projectPackToml ++ "\n\n" ++ coverageDef
 
-||| Default path for idris2-coverage (hardcoded for now)
-defaultIdris2CoveragePath : String
-defaultIdris2CoveragePath = "/Users/bob/code/idris2-coverage"
+||| Read project's existing pack.toml content if it exists
+|||
+||| This preserves any custom package dependencies the target project may have.
+||| For example, if the project depends on non-public packages via GitHub URLs,
+||| those dependencies will be merged into the generated pack.toml.
+|||
+||| @projectDir - Directory containing the project
+||| @return - Content of pack.toml, or empty string if not found
+readProjectPackToml : String -> IO String
+readProjectPackToml projectDir = do
+  let packPath = projectDir ++ "/pack.toml"
+  Right content <- readFile packPath
+    | Left _ => pure ""
+  pure content
 
 ||| Check if a file exists
 fileExists : String -> IO Bool
@@ -183,13 +209,21 @@ parseIpkgSourcedir content =
          in trim $ pack $ filter (/= '"') (unpack stripped)
 
 ||| Find and read first matching ipkg file content
+||| Prefers files without -minimal, -test, -temp prefixes
 findIpkgContent : String -> IO (Maybe String)
 findIpkgContent projectDir = do
   -- Try to find any .ipkg file in the directory
   Right entries <- listDir projectDir
     | Left _ => pure Nothing
   let ipkgFiles = filter (isSuffixOf ".ipkg") entries
-  case ipkgFiles of
+  -- Filter out minimal/test/temp ipkg files
+  let isMainIpkg = \f => not (isInfixOf "-minimal" f || isInfixOf "-test" f || isPrefixOf "temp-" f)
+  let mainIpkgs = filter isMainIpkg ipkgFiles
+  -- Prefer main ipkg, fall back to any ipkg
+  let chosen = case mainIpkgs of
+                 [] => ipkgFiles
+                 xs => xs
+  case chosen of
     [] => pure Nothing
     (f :: _) => do
       Right content <- readFile (projectDir ++ "/" ++ f)
@@ -271,7 +305,8 @@ runTestsWithCoverage projectDir testModules timeout = do
       let allModules = tempModName :: testModules
       let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir Nothing
       let packTomlPath = projectDir ++ "/pack.toml"
-      let packTomlContent = generateTempPackToml defaultIdris2CoveragePath
+      projectPackToml <- readProjectPackToml projectDir
+      let packTomlContent = generateTempPackToml projectPackToml
 
       Right () <- writeFile tempIpkgPath ipkgContent
         | Left err => do
@@ -391,7 +426,8 @@ runTestsWithTestCoverage projectDir testModules timeout = do
       let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
       let tempIpkgName = tempExecName ++ ".ipkg"
       let packTomlPath = projectDir ++ "/pack.toml"
-      let packTomlContent = generateTempPackToml defaultIdris2CoveragePath
+      projectPackToml <- readProjectPackToml projectDir
+      let packTomlContent = generateTempPackToml projectPackToml
       let ssHtmlPath = projectDir ++ "/" ++ tempExecName ++ ".ss.html"
       let profileHtmlPath = projectDir ++ "/profile.html"
       let dumpcasesPath = "/tmp/idris2_dumpcases_test_" ++ uid ++ ".txt"
@@ -502,7 +538,8 @@ runTestsWithFunctionHits projectDir testModules timeout = do
       let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
       let tempIpkgName = tempExecName ++ ".ipkg"
       let packTomlPath = projectDir ++ "/pack.toml"
-      let packTomlContent = generateTempPackToml defaultIdris2CoveragePath
+      projectPackToml <- readProjectPackToml projectDir
+      let packTomlContent = generateTempPackToml projectPackToml
       let ssHtmlPath = projectDir ++ "/" ++ tempExecName ++ ".ss.html"
       let profileHtmlPath = projectDir ++ "/profile.html"
       let dumpcasesPath = "/tmp/idris2_dumpcases_fh_" ++ uid ++ ".txt"

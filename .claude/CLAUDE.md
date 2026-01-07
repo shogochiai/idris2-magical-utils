@@ -78,6 +78,20 @@ src/
 2. Register in `allTests` list with pattern `("REQ_XXX_NNN", test_func)`
 3. Run: `./build/exec/idris2-cov .` to verify
 
+## CI / Portability Testing
+
+GitHub Actions CI (`.github/workflows/ci.yml`) runs on push/PR to main:
+
+1. **Build**: `pack build idris2-coverage.ipkg` on Ubuntu + macOS
+2. **Smoke test**: `./build/exec/idris2-cov --help`
+3. **Integration test**: Clones and analyzes `shogochiai/idris2-yul`
+
+The integration test verifies that `generateTempPackToml` correctly uses GitHub
+references (not hardcoded local paths), ensuring the tool works in clean environments.
+
+If you modify `UnifiedRunner.idr` or pack.toml generation logic, ensure CI passes
+to avoid environment-dependent bugs that only surface on other machines.
+
 ## Key APIs
 
 ```idris

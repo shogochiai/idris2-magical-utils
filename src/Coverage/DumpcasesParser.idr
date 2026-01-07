@@ -676,14 +676,10 @@ toTestCoverage f =
 -- Issue #5: runDumpcases Helper
 -- =============================================================================
 
-||| Run idris2 --dumpcases with correct syntax
+||| Run pack build with --dumpcases flag
 |||
-||| The correct syntax is: idris2 --dumpcases <output-file> --build <package.ipkg>
-|||
-||| This is non-obvious because:
-||| 1. --dumpcases is not documented in --help
-||| 2. It requires an output file argument
-||| 3. It must be paired with --build
+||| Uses pack to handle local package dependencies from pack.toml.
+||| The --dumpcases flag is passed via IDRIS2_OPTS environment variable.
 |||
 ||| @projectDir - Directory containing the .ipkg file
 ||| @ipkgName   - Name of the .ipkg file (e.g., "myproject.ipkg")
@@ -695,10 +691,10 @@ runDumpcases : (projectDir : String)
              -> (outputFile : String)
              -> IO (Either String String)
 runDumpcases projectDir ipkgName outputFile = do
-  -- Build the command with correct syntax:
-  -- idris2 --dumpcases <output-file> --build <package.ipkg>
-  let cmd = "cd " ++ projectDir ++ " && idris2 --dumpcases " ++ outputFile
-         ++ " --build " ++ ipkgName ++ " 2>/dev/null"
+  -- Build using pack with dumpcases flag via IDRIS2_OPTS
+  -- pack respects local pack.toml for custom package paths
+  let cmd = "cd " ++ projectDir ++ " && IDRIS2_OPTS='--dumpcases " ++ outputFile
+         ++ "' pack build " ++ ipkgName ++ " 2>/dev/null"
 
   -- Execute the command
   exitCode <- system cmd
