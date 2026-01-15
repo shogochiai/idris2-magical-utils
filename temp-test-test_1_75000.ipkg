@@ -1,0 +1,7 @@
+package temp-test-test_1_75000
+opts = "--profile --dumpcases /tmp/idris2_dumpcases_fh_test_1_75000.txt"
+sourcedir = "src"
+main = TempTestRunner_test_1_75000
+executable = temp-test-test_1_75000
+depends = base, contrib, idris2-coverage, base, contrib
+modules = TempTestRunner_test_1_75000, Coverage.Tests.AllTests

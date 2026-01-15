@@ -7,6 +7,9 @@ import Data.List1
 import Data.Maybe
 import Data.String
 
+-- Re-export core types for branch classification
+import public Coverage.Classification.BranchClass
+
 %default total
 
 -- =============================================================================
@@ -542,134 +545,9 @@ Show TestCoverageReport where
         ++ ", Branch: " ++ show r.branchCoverage.branchPercent ++ "%"
 
 -- =============================================================================
--- BranchId for Coverage Aggregation (OR-union across test runs)
+-- BranchId, BranchClass, ClassifiedBranch, StaticFunctionAnalysis,
+-- StaticBranchAnalysis are imported from Coverage.Classification.BranchClass
 -- =============================================================================
-
-||| Unique identifier for a branch in compiled code
-||| Enables OR-aggregation across multiple test runs
-public export
-record BranchId where
-  constructor MkBranchId
-  moduleName  : String    -- "Main"
-  funcName    : String    -- "dispatchWith"
-  caseIndex   : Nat       -- Which %case in the function (0-indexed)
-  branchIndex : Nat       -- Which %concase/%constcase in the %case (0-indexed)
-
-public export
-Show BranchId where
-  show b = b.moduleName ++ "." ++ b.funcName ++ ":case" ++ show b.caseIndex
-        ++ ":branch" ++ show b.branchIndex
-
-public export
-Eq BranchId where
-  b1 == b2 = b1.moduleName == b2.moduleName
-          && b1.funcName == b2.funcName
-          && b1.caseIndex == b2.caseIndex
-          && b1.branchIndex == b2.branchIndex
-
-public export
-Ord BranchId where
-  compare b1 b2 =
-    case compare b1.moduleName b2.moduleName of
-      EQ => case compare b1.funcName b2.funcName of
-              EQ => case compare b1.caseIndex b2.caseIndex of
-                      EQ => compare b1.branchIndex b2.branchIndex
-                      x  => x
-              x  => x
-      x  => x
-
--- =============================================================================
--- BranchClass (dunham's classification)
--- =============================================================================
-
-||| Branch classification per dunham's semantic coverage taxonomy
-public export
-data BranchClass : Type where
-  ||| Canonical - reachable branch, counts towards coverage denominator
-  BCCanonical : BranchClass
-  ||| Excluded - NoClauses (void/uninhabited), excluded from denominator
-  BCExcludedNoClauses : BranchClass
-  ||| Bug - UnhandledInput (partial code), genuine coverage gap to fix
-  BCBugUnhandledInput : BranchClass
-  ||| Optimizer - Nat case artifact, non-semantic (ignore in coverage)
-  BCOptimizerNat : BranchClass
-  ||| Unknown - other CRASHes, conservative bucket (investigate)
-  BCUnknownCrash : String -> BranchClass
-  ||| Compiler-generated - {csegen:N}, _builtin.*, prim__*, excluded from denominator
-  BCCompilerGenerated : BranchClass
-
-public export
-Show BranchClass where
-  show BCCanonical          = "canonical"
-  show BCExcludedNoClauses  = "excluded_void"
-  show BCBugUnhandledInput  = "bugs"
-  show BCOptimizerNat       = "optimizer_artifact"
-  show (BCUnknownCrash msg) = "unknown(" ++ msg ++ ")"
-  show BCCompilerGenerated  = "compiler_generated"
-
-public export
-Eq BranchClass where
-  BCCanonical         == BCCanonical         = True
-  BCExcludedNoClauses == BCExcludedNoClauses = True
-  BCBugUnhandledInput == BCBugUnhandledInput = True
-  BCOptimizerNat      == BCOptimizerNat      = True
-  BCUnknownCrash m1   == BCUnknownCrash m2   = m1 == m2
-  BCCompilerGenerated == BCCompilerGenerated = True
-  _                   == _                   = False
-
-||| Check if branch should be counted in coverage denominator
-public export
-isCountedInDenominator : BranchClass -> Bool
-isCountedInDenominator BCCanonical = True
-isCountedInDenominator _           = False
-
--- =============================================================================
--- ClassifiedBranch - BranchId + BranchClass
--- =============================================================================
-
-||| A branch with unique ID and classification
-public export
-record ClassifiedBranch where
-  constructor MkClassifiedBranch
-  branchId    : BranchId
-  branchClass : BranchClass
-  pattern     : String      -- Pattern description (for debugging)
-
-public export
-Show ClassifiedBranch where
-  show cb = show cb.branchId ++ " [" ++ show cb.branchClass ++ "] " ++ cb.pattern
-
-public export
-Eq ClassifiedBranch where
-  cb1 == cb2 = cb1.branchId == cb2.branchId
-
--- =============================================================================
--- StaticBranchAnalysis - Static analysis result from --dumpcases
--- =============================================================================
-
-||| Static analysis result for a single function
-public export
-record StaticFunctionAnalysis where
-  constructor MkStaticFunctionAnalysis
-  fullName : String
-  branches : List ClassifiedBranch
-
-public export
-Show StaticFunctionAnalysis where
-  show sfa = sfa.fullName ++ ": " ++ show (length sfa.branches) ++ " branches"
-
-||| Static analysis result for entire project
-public export
-record StaticBranchAnalysis where
-  constructor MkStaticBranchAnalysis
-  functions      : List StaticFunctionAnalysis
-  allBranches    : List ClassifiedBranch        -- Flat list of all branches
-  canonicalCount : Nat                          -- Count of BCCanonical branches
-
-public export
-Show StaticBranchAnalysis where
-  show sba = "StaticAnalysis: " ++ show (length sba.functions) ++ " functions, "
-          ++ show sba.canonicalCount ++ " canonical branches"
 
 -- =============================================================================
 -- TestRunHits - Runtime hit data from a single test run

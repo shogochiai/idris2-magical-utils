@@ -8,6 +8,11 @@ import Data.Nat
 import Data.String
 import System.File
 
+-- Import core exclusion types (ExclPattern with Prefix/Suffix/Contains/Exact)
+-- Note: This module also defines its own ExclusionPattern for backward compatibility
+-- with the existing version-specific exclusion file format
+import public Coverage.Core.Exclusions as CoreExcl
+
 %default partial
 
 -- =============================================================================

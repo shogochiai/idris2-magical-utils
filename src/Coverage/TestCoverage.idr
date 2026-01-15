@@ -437,6 +437,8 @@ isCompilerGenerated name =
 isStandardLibrary : String -> Bool
 isStandardLibrary name =
      isPrefixOf "Prelude." name
+  || isPrefixOf "Builtin." name
+  || isPrefixOf "PrimIO." name
   || isPrefixOf "Data." name
   || isPrefixOf "System." name
   || isPrefixOf "Control." name

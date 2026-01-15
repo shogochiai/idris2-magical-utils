@@ -13,62 +13,18 @@ import Data.Maybe
 import System
 import System.File
 
+-- Import core types for crash classification
+import public Coverage.Classification.CrashReason
+
+-- Re-export Core.DumpcasesRunner for backend-agnostic dumpcases execution
+-- This module's runDumpcases uses pack; Core.DumpcasesRunner uses direct idris2
+import public Coverage.Core.DumpcasesRunner as CoreRunner
+
 %default covering
 
 -- =============================================================================
--- Test Coverage Types
+-- CrashReason and CaseKind are imported from Coverage.Classification.CrashReason
 -- =============================================================================
-
-||| Reason for CRASH in --dumpcases output
-||| Based on Idris2 community feedback (dunham, Thomas):
-|||   - "No clauses in ..."     → Excluded (void etc, safe to exclude from denominator)
-|||   - "Unhandled input for ..." → Bug (partial code, genuine coverage issue)
-|||   - "Nat case not covered"  → OptimizerArtifact (Nat→Integer translation, non-semantic)
-|||   - Other                   → Unknown (never exclude, show separately)
-public export
-data CrashReason : Type where
-  ||| "No clauses in ..." - empty function (void etc), EXCLUDED from denominator
-  CrashNoClauses      : CrashReason
-  ||| "Unhandled input for ..." - partial code bug, INCLUDED as coverage gap
-  CrashUnhandledInput : CrashReason
-  ||| "Nat case not covered" - optimizer artifact, NON-SEMANTIC (separate warning)
-  CrashOptimizerNat   : CrashReason
-  ||| Unknown CRASH - NEVER exclude, show in Unknown bucket
-  CrashUnknown        : String -> CrashReason
-
-public export
-Show CrashReason where
-  show CrashNoClauses       = "NoClauses"
-  show CrashUnhandledInput  = "UnhandledInput"
-  show CrashOptimizerNat    = "OptimizerNat"
-  show (CrashUnknown msg)   = "Unknown(" ++ msg ++ ")"
-
-public export
-Eq CrashReason where
-  CrashNoClauses      == CrashNoClauses      = True
-  CrashUnhandledInput == CrashUnhandledInput = True
-  CrashOptimizerNat   == CrashOptimizerNat   = True
-  CrashUnknown m1     == CrashUnknown m2     = m1 == m2
-  _                   == _                   = False
-
-||| Case classification for semantic coverage
-public export
-data CaseKind : Type where
-  ||| Reachable case - included in denominator
-  Canonical    : CaseKind
-  ||| Unreachable/undefined - excluded from denominator or handled separately
-  NonCanonical : CrashReason -> CaseKind
-
-public export
-Show CaseKind where
-  show Canonical         = "Canonical"
-  show (NonCanonical r)  = "NonCanonical(" ++ show r ++ ")"
-
-public export
-Eq CaseKind where
-  Canonical       == Canonical       = True
-  NonCanonical r1 == NonCanonical r2 = r1 == r2
-  _               == _               = False
 
 -- =============================================================================
 -- Compiled Case with CaseKind and BranchId
@@ -264,26 +220,8 @@ totalCompilerGenerated : TestAnalysis -> Nat
 totalCompilerGenerated a = totalExcludedFromDenom a.exclusionBreakdown
 
 -- =============================================================================
--- CrashReason Detection from CRASH Messages
+-- classifyCrashMessage is imported from Coverage.Classification.CrashReason
 -- =============================================================================
-
-||| Determine CrashReason from CRASH message text
-||| Based on dunham's Idris2 community feedback:
-|||   "No clauses in ..."         → CrashNoClauses (void etc, excluded)
-|||   "Unhandled input for ..."   → CrashUnhandledInput (partial bug, coverage gap)
-|||   "Nat case not covered"      → CrashOptimizerNat (optimizer artifact, non-semantic)
-|||   Other                       → CrashUnknown (never exclude)
-|||
-||| Order matters: more specific patterns first
-public export
-classifyCrashMessage : String -> CrashReason
-classifyCrashMessage msg =
-  -- Most specific first
-  if isInfixOf "No clauses in" msg then CrashNoClauses
-  else if isInfixOf "Unhandled input for" msg then CrashUnhandledInput
-  else if isInfixOf "Nat case not covered" msg then CrashOptimizerNat
-  -- Fallback: everything else is Unknown (conservative - never exclude)
-  else CrashUnknown msg
 
 -- =============================================================================
 -- Parser Utilities
@@ -296,18 +234,7 @@ splitFirst c s =
     (before, []) => Nothing
     (before, _ :: after) => Just (pack before, pack after)
 
-||| Extract module and function name from "Module.Name.funcName"
-parseFullName : String -> (String, String)
-parseFullName fullName =
-  let parts = toList $ split (== '.') fullName
-  in case parts of
-       [] => ("", fullName)
-       [x] => ("", x)
-       (x :: y :: []) => (x, y)
-       (x :: rest) => (x, fromMaybe "" (last' rest))
-  where
-    toList : List1 a -> List a
-    toList (x ::: xs) = x :: xs
+-- parseFullName is now imported from Coverage.Core.Types
 
 -- =============================================================================
 -- Pattern Detection

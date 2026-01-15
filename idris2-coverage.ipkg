@@ -6,7 +6,7 @@ brief = "Code coverage tool for Idris2 with type-driven analysis"
 sourcedir = "src"
 main = Main
 
-depends = base, contrib
+depends = base, contrib, idris2-coverage-core
 
 modules = Main
         , Coverage.Types
