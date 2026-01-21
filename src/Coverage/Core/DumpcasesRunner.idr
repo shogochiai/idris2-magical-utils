@@ -93,17 +93,18 @@ runDumpcases : (backend : Backend)
             -> IO (Either String String)
 runDumpcases backend projectDir ipkgName outputPath = do
   let cmd = buildDumpcasesCommand backend projectDir ipkgName outputPath
-  exitCode <- system cmd
-  if exitCode /= 0
-    then pure $ Left $ "Build failed with exit code " ++ show exitCode
-    else do
-      result <- readFile outputPath
-      case result of
-        Left err => pure $ Left $ "Failed to read dumpcases output: " ++ show err
-        Right content =>
-          if null (trim content)
-            then pure $ Left "No dumpcases output generated (build may have failed)"
-            else pure $ Right content
+  _ <- system cmd
+  -- Note: We ignore exit code because dumpcases output is written BEFORE
+  -- C compilation. On macOS with Homebrew, RefC backend often fails to find
+  -- gmp.h during C compilation, but the dumpcases output is already generated.
+  -- We check if the output file exists and has content instead.
+  result <- readFile outputPath
+  case result of
+    Left err => pure $ Left $ "Failed to read dumpcases output: " ++ show err
+    Right content =>
+      if null (trim content)
+        then pure $ Left "No dumpcases output generated (build may have failed)"
+        else pure $ Right content
 
 ||| Run dumpcases with default output path for backend
 public export

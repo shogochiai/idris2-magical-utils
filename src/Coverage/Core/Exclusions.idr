@@ -192,6 +192,9 @@ defaultExclusions =
     -- Debug/development methods
   , prefixPattern "debug_" "Debug method"
   , prefixPattern "test_" "Test helper method"
+
+    -- Default interface implementations (auto-generated, trivial)
+  , suffixPattern "./=" "Default Eq./= implementation"
   ]
 
 -- =============================================================================

@@ -10,6 +10,9 @@ depends = base, contrib
 modules = Coverage.Core.Types
         , Coverage.Core.Exclusions
         , Coverage.Core.Stats
+        , Coverage.Core.Result
         , Coverage.Core.DumpcasesRunner
+        , Coverage.Core.RuntimeHit
+        , Coverage.Core.HighImpact
         , Coverage.Classification.CrashReason
         , Coverage.Classification.BranchClass
