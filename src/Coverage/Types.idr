@@ -10,6 +10,10 @@ import Data.String
 -- Re-export core types for branch classification
 import public Coverage.Classification.BranchClass
 
+-- Re-export shared runtime hit types from core
+import public Coverage.Core.RuntimeHit
+import public Coverage.Core.HighImpact
+
 %default total
 
 -- =============================================================================
@@ -654,39 +658,8 @@ aggregateCoverage static runs =
   in MkAggregatedCoverage static runs covered canonTotal canonCovered bugsTotal unknownTotal
 
 -- =============================================================================
--- FunctionRuntimeHit - Per-function runtime coverage (shared CLI/API type)
+-- FunctionRuntimeHit - Re-exported from Coverage.Core.RuntimeHit
 -- =============================================================================
 
-||| Per-function runtime coverage data
-||| This is the shared type between CLI and Library API for accurate severity calculation
-|||
-||| Design rationale:
-|||   - CLI and Library API need the same per-function executed counts
-|||   - Previously: CLI used proportional approximation, Library API used 0
-|||   - Now: Both use actual profiler data via this shared type
-public export
-record FunctionRuntimeHit where
-  constructor MkFunctionRuntimeHit
-  funcName       : String    -- Idris function name (e.g., "Main.dispatch")
-  schemeFunc     : String    -- Scheme function name for matching with profiler
-  canonicalCount : Nat       -- Static: canonical branches from --dumpcases
-  executedCount  : Nat       -- Runtime: hit count from .ss.html profiler
-  totalExprs     : Nat       -- Expression count in function (from profiler)
-  coveredExprs   : Nat       -- Covered expression count (from profiler)
-
-public export
-Show FunctionRuntimeHit where
-  show h = h.funcName ++ ": " ++ show h.executedCount ++ "/" ++ show h.canonicalCount
-        ++ " branches, " ++ show h.coveredExprs ++ "/" ++ show h.totalExprs ++ " exprs"
-
-public export
-Eq FunctionRuntimeHit where
-  h1 == h2 = h1.funcName == h2.funcName && h1.schemeFunc == h2.schemeFunc
-
-||| Calculate coverage percentage for a function
-public export
-functionRuntimeCoveragePercent : FunctionRuntimeHit -> Double
-functionRuntimeCoveragePercent h =
-  if h.canonicalCount == 0
-  then 100.0
-  else cast h.executedCount / cast h.canonicalCount * 100.0
+-- FunctionRuntimeHit, MkFunctionRuntimeHit, functionRuntimeCoveragePercent
+-- are now imported from Coverage.Core.RuntimeHit

@@ -296,63 +296,11 @@ runtimeHitToTestCoverageSimple hit =
        0
 
 -- =============================================================================
--- High Impact Targets (Pragmatic v1.0)
+-- High Impact Targets (imported from Coverage.Core.HighImpact via Coverage.Types)
 -- =============================================================================
 
-||| Classification of high-impact coverage gaps
-public export
-data HighImpactKind
-  = HIT_UntestedCanonical   -- canonical > 0 && executed == 0
-  | HIT_BugUnhandledInput   -- bugUnhandledInput > 0
-  | HIT_UnknownCrash        -- unknownCrash > 0
-
-public export
-Show HighImpactKind where
-  show HIT_UntestedCanonical = "untested_canonical"
-  show HIT_BugUnhandledInput = "bug_unhandled_input"
-  show HIT_UnknownCrash      = "unknown_crash"
-
-public export
-Eq HighImpactKind where
-  HIT_UntestedCanonical == HIT_UntestedCanonical = True
-  HIT_BugUnhandledInput == HIT_BugUnhandledInput = True
-  HIT_UnknownCrash      == HIT_UnknownCrash      = True
-  _ == _ = False
-
-||| A high-impact target for coverage improvement
-public export
-record HighImpactTarget where
-  constructor MkHighImpactTarget
-  kind         : HighImpactKind
-  funcName     : String
-  moduleName   : String
-  branchCount  : Nat     -- total canonical branches OR bug/unknown count
-  executedCount : Nat    -- branches executed at runtime (from .ss.html)
-  severity     : Double  -- branchCount/executedCount ratio (Inf if executedCount=0)
-  note         : String  -- human-readable explanation
-
-||| Format severity as string (handles Inf case)
-export
-showSeverity : Double -> String
-showSeverity s = if s > 1.0e308 then "Inf"
-                 else let rounded = cast {to=Int} (s * 100.0)
-                      in show (cast {to=Double} rounded / 100.0)
-
-public export
-Show HighImpactTarget where
-  show t = "[" ++ show t.kind ++ "] " ++ t.funcName
-        ++ " (executed=" ++ show t.executedCount ++ "/" ++ show t.branchCount
-        ++ ", severity=" ++ showSeverity t.severity ++ ")"
-
-||| Calculate severity score as branchCount/executedCount ratio
-||| Returns Infinity (1e309) if executedCount = 0, otherwise ratio with 2 decimal places
-||| For bugs/unknown: use branchCount as severity (they don't have executed concept)
-public export
-severityRatio : Nat -> Nat -> Double
-severityRatio branchCount executedCount =
-  if executedCount == 0
-     then 1.0e309  -- Infinity
-     else cast branchCount / cast executedCount
+-- HighImpactKind, HighImpactTarget, MkHighImpactTarget, showSeverity, severityRatio,
+-- severityInfinity are now imported from Coverage.Core.HighImpact
 
 ||| Extract high-impact targets from a FunctionTestCoverage
 ||| Returns 0-3 targets depending on which coverage issues exist
@@ -400,16 +348,7 @@ targetsFromFunction fsc =
                 else []
   in untested ++ bugs ++ unknown
 
-||| Sort targets by severity (descending), then by branchCount (descending) for ties
-public export
-sortTargets : List HighImpactTarget -> List HighImpactTarget
-sortTargets = sortBy compareSeverity
-  where
-    compareSeverity : HighImpactTarget -> HighImpactTarget -> Ordering
-    compareSeverity a b =
-      case compare b.severity a.severity of
-        EQ => compare b.branchCount a.branchCount  -- secondary sort by branchCount
-        other => other
+-- sortTargets is now imported from Coverage.Core.HighImpact via Coverage.Types
 
 -- Helper: check if string contains only digits
 isDigitString : String -> Bool
@@ -519,7 +458,7 @@ topKTargetsWithExclusions excl config k funcs =
       -- Filter out excluded functions using both exclusions/ patterns and config
       userTargets = filter (not . shouldExcludeWithExclusions excl config . funcName) allTargets
       sorted = sortTargets userTargets
-  in take k sorted
+  in Data.List.take k sorted
 
 ||| Get top K high-impact targets from list of functions with config
 ||| Filters out compiler-generated, standard library, type constructors, and user-specified
@@ -531,7 +470,7 @@ topKTargetsWithConfig config k funcs =
       -- Filter out non-user functions
       userTargets = filter (not . shouldExcludeFromTargetsWithConfig config . funcName) allTargets
       sorted = sortTargets userTargets
-  in take k sorted
+  in Data.List.take k sorted
 
 ||| Get top K high-impact targets (default empty config)
 public export
@@ -671,41 +610,7 @@ testCoverageToJson sc =
 -- High Impact Targets JSON Output
 -- =============================================================================
 
-||| Reading guide for LLM/tool consumption
-public export
-coverageReadingGuide : String
-coverageReadingGuide = """
-high_impact_targets: Functions with coverage issues, sorted by severity (highest first).
-- kind: untested_canonical = has untested branches; bug_unhandled_input = partial code (CRASH); unknown_crash = investigate.
-- branchCount: Total canonical branches in function (or bug/crash count).
-- executedCount: Branches executed at runtime (from .ss.html profiler).
-- severity: branchCount/executedCount ratio (2 decimal places). Inf = no branches executed or bug/unknown.
-Action: Start fixing from the top of the list (highest severity) for maximum coverage improvement.
-"""
-
-||| Convert single HighImpactTarget to JSON object string
-public export
-targetToJson : HighImpactTarget -> String
-targetToJson t = unlines
-  [ "    {"
-  , "      \"kind\": \"" ++ show t.kind ++ "\","
-  , "      \"funcName\": \"" ++ t.funcName ++ "\","
-  , "      \"moduleName\": \"" ++ t.moduleName ++ "\","
-  , "      \"branchCount\": " ++ show t.branchCount ++ ","
-  , "      \"executedCount\": " ++ show t.executedCount ++ ","
-  , "      \"severity\": \"" ++ showSeverity t.severity ++ "\","
-  , "      \"note\": \"" ++ t.note ++ "\""
-  , "    }"
-  ]
-
-||| Convert list of targets to JSON array
-public export
-targetsToJsonArray : List HighImpactTarget -> String
-targetsToJsonArray [] = "[]"
-targetsToJsonArray targets =
-  let items = map targetToJson targets
-      joined = fastConcat $ intersperse ",\n" items
-  in "[\n" ++ joined ++ "\n  ]"
+-- coverageReadingGuide, targetToJson, targetsToJsonArray are now imported from Coverage.Core.HighImpact
 
 ||| Full coverage report with high impact targets as JSON
 ||| This is the canonical output format for both CLI and lazy core ask
@@ -713,7 +618,7 @@ public export
 coverageReportToJson : TestAnalysis -> List HighImpactTarget -> String
 coverageReportToJson analysis targets = unlines
   [ "{"
-  , "  \"reading_guide\": \"" ++ escapeJson coverageReadingGuide ++ "\","
+  , "  \"reading_guide\": \"" ++ escapeJson Coverage.Core.HighImpact.coverageReadingGuide ++ "\","
   , "  \"summary\": {"
   , "    \"total_functions\": " ++ show analysis.totalFunctions ++ ","
   , "    \"total_canonical\": " ++ show analysis.totalCanonical ++ ","
@@ -729,7 +634,7 @@ coverageReportToJson analysis targets = unlines
   , "      \"test_code\": " ++ show analysis.exclusionBreakdown.testCode
   , "    }"
   , "  },"
-  , "  \"high_impact_targets\": " ++ targetsToJsonArray targets
+  , "  \"high_impact_targets\": " ++ Coverage.Core.HighImpact.targetsToJsonArray targets
   , "}"
   ]
   where

@@ -1,5 +1,7 @@
 [custom.all.idris2-coverage-core]
-type = "github"
-url = "https://github.com/shogochiai/idris2-coverage-core"
-commit = "b1c3e0bc5dfbf73fbed4851869daff117746083e"
+type = "local"
+path = "/Users/bob/code/idris2-coverage-core"
 ipkg = "idris2-coverage-core.ipkg"
+
+[install]
+libs = ["idris2-coverage-core"]
