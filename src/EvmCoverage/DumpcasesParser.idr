@@ -306,28 +306,30 @@ groupByFunc branches = go branches []
     go [] acc = acc
     go (b :: bs) acc = go bs (insertOrUpdate b.branchId.funcName b acc)
 
-||| Convert function branches to HighImpactTarget
+||| Extract module name from function name
+extractModuleName : String -> String
+extractModuleName fn =
+  let parts = forget $ split (== '.') fn
+  in case init' parts of
+       Nothing => ""
+       Just modParts => fastConcat $ intersperse "." modParts
+
+||| Convert function branches to HighImpactTarget (using shared core type)
 funcToTarget : (String, List ClassifiedBranch) -> HighImpactTarget
 funcToTarget (fn, branches) =
   let canonical = filter (\b => isCanonical b.branchClass) branches
       canonicalCount = length canonical
-      -- For static-only: executed = 0, severity = Inf
-      severity = 1.0e309  -- Infinity - no runtime data
-      sevLevel = if canonicalCount >= 5 then Error
-                 else if canonicalCount >= 2 then Warning
-                 else Info
-  in MkHighImpactTarget fn canonicalCount 0 severity sevLevel
-       ("Function has " ++ show canonicalCount ++ " untested branches")
+      modName = extractModuleName fn
+  in mkUntestedTarget fn modName canonicalCount 0
 
 ||| Get top K high-impact targets from branches, sorted by severity
 ||| @k - Maximum number of targets to return
 ||| @branches - All classified branches
 export
-topKTargets : Nat -> List ClassifiedBranch -> List HighImpactTarget
-topKTargets k branches =
+topKTargetsFromBranches : Nat -> List ClassifiedBranch -> List HighImpactTarget
+topKTargetsFromBranches k branches =
   let grouped = groupByFunc branches
       targets = map funcToTarget grouped
       -- Filter out functions with 0 canonical branches
       nonEmpty = filter (\t => t.branchCount > 0) targets
-      sorted = sortBy compareSeverity nonEmpty
-  in take k sorted
+  in Coverage.Core.HighImpact.topKTargets k nonEmpty

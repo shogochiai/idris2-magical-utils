@@ -7,6 +7,10 @@ import Data.List1
 import Data.Maybe
 import Data.String
 
+-- Import shared types from coverage-core
+import public Coverage.Core.HighImpact
+import public Coverage.Core.RuntimeHit
+
 %default total
 
 -- =============================================================================
@@ -224,56 +228,10 @@ branchToGap cb =
     _                   => Nothing
 
 -- =============================================================================
--- High Impact Target (for severity-based ranking)
+-- High Impact Target (imported from Coverage.Core.HighImpact)
 -- =============================================================================
-
-||| Severity level for gaps (matches LazyCore GapSeverity)
-public export
-data GapSeverity = Info | Warning | Error
-
-public export
-Show GapSeverity where
-  show Info = "info"
-  show Warning = "warning"
-  show Error = "error"
-
-public export
-Eq GapSeverity where
-  Info == Info = True
-  Warning == Warning = True
-  Error == Error = True
-  _ == _ = False
-
-||| A high-impact target with severity for top-K display
-public export
-record HighImpactTarget where
-  constructor MkHighImpactTarget
-  funcName      : String
-  branchCount   : Nat      -- total canonical branches
-  executedCount : Nat      -- branches executed (0 for static-only)
-  severity      : Double   -- branchCount/executedCount (Inf if 0)
-  severityLevel : GapSeverity
-  note          : String
-
-||| Format severity as string (handles Inf case)
-public export
-showSeverity : Double -> String
-showSeverity s = if s > 1.0e308 then "Inf"
-                 else let rounded = cast {to=Int} (s * 100.0)
-                      in show (cast {to=Double} rounded / 100.0)
-
-public export
-Show HighImpactTarget where
-  show t = t.funcName ++ " (" ++ show t.branchCount
-        ++ " branches, severity=" ++ showSeverity t.severity ++ ")"
-
-||| Compare targets by severity (descending)
-public export
-compareSeverity : HighImpactTarget -> HighImpactTarget -> Ordering
-compareSeverity a b =
-  case compare b.severity a.severity of
-    EQ => compare b.branchCount a.branchCount  -- secondary sort by branchCount
-    other => other
+-- HighImpactTarget, HighImpactKind, showSeverity, compareSeverity
+-- are now imported from Coverage.Core.HighImpact
 
 -- =============================================================================
 -- JSON Output Types

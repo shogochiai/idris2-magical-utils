@@ -9,7 +9,6 @@ import EvmCoverage.SchemeMapper
 import EvmCoverage.Aggregator
 import EvmCoverage.Report
 import EvmCoverage.EvmCoverage
-import EvmCoverage.EvmInterpreterCoverage
 import EvmCoverage.ProfileParserLinear
 import EvmCoverage.ProfileParserFSM
 
@@ -216,53 +215,40 @@ runMain opts =
     Just target => do
       when opts.verbose $ putStrLn $ "Analyzing: " ++ target
 
-      -- EVM interpreter coverage mode
-      if opts.evmInterpreter
-        then do
-          let config = MkEvmInterpreterConfig target Nothing True opts.threshold opts.verbose
-          result <- analyzeEvmInterpreterCoverage config
-          case result of
-            Left err => do
-              putStrLn $ "Error: " ++ err
+      -- EVM interpreter coverage mode (not yet implemented)
+      when opts.evmInterpreter $ do
+        putStrLn "Error: --evm-interpreter mode not yet implemented"
+        exitWith (ExitFailure 1)
+
+      let outputDir = fromMaybe (target ++ "/coverage") opts.outputDir
+      let config = MkEvmCoverageConfig
+                     target
+                     opts.ipkgPath
+                     outputDir
+                     opts.threshold
+                     opts.verbose
+
+      result <- analyzeCoverage config
+
+      case result of
+        Left err => do
+          putStrLn $ "Error: " ++ err
+          exitWith (ExitFailure 1)
+        Right cov => do
+          -- Output report
+          case opts.format of
+            OneLine => putStrLn $ toOneLine cov
+            JSON => putStrLn $ toJson "now" target cov
+            _ => do
+              writeReport opts.format outputDir cov
+              putStrLn $ toOneLine cov
+
+          -- Check threshold
+          if meetsThreshold opts.threshold cov
+            then when opts.verbose $ putStrLn "✓ Coverage threshold met"
+            else do
+              putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
               exitWith (ExitFailure 1)
-            Right cov => do
-              putStrLn $ "EVM Interpreter Coverage: " ++ show cov.canonicalHit ++ "/" ++ show cov.canonicalTotal
-              putStrLn $ "Coverage: " ++ show cov.coveragePercent ++ "%"
-              if meetsThreshold opts.threshold cov
-                then when opts.verbose $ putStrLn "✓ Coverage threshold met"
-                else do
-                  putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
-                  exitWith (ExitFailure 1)
-        else do
-          let outputDir = fromMaybe (target ++ "/coverage") opts.outputDir
-          let config = MkEvmCoverageConfig
-                         target
-                         opts.ipkgPath
-                         outputDir
-                         opts.threshold
-                         opts.verbose
-
-          result <- analyzeCoverage config
-
-          case result of
-            Left err => do
-              putStrLn $ "Error: " ++ err
-              exitWith (ExitFailure 1)
-            Right cov => do
-              -- Output report
-              case opts.format of
-                OneLine => putStrLn $ toOneLine cov
-                JSON => putStrLn $ toJson "now" target cov
-                _ => do
-                  writeReport opts.format outputDir cov
-                  putStrLn $ toOneLine cov
-
-              -- Check threshold
-              if meetsThreshold opts.threshold cov
-                then when opts.verbose $ putStrLn "✓ Coverage threshold met"
-                else do
-                  putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
-                  exitWith (ExitFailure 1)
 
 -- =============================================================================
 -- Entry Point

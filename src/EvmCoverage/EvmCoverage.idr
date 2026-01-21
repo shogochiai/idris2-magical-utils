@@ -204,7 +204,7 @@ analyzeFromDumpcases dumpcasesPath = do
 ||| Sorted by severity (branch count, descending)
 export
 getTopKTargets : Nat -> AggregatedCoverage -> List HighImpactTarget
-getTopKTargets k cov = topKTargets k cov.uncoveredBranches
+getTopKTargets k cov = topKTargetsFromBranches k cov.uncoveredBranches
 
 -- =============================================================================
 -- Report Generation

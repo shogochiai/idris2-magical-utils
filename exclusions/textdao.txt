@@ -1,0 +1,62 @@
+# TextDAO exclusion patterns for EVM/Yul source coverage
+# Format: see base.txt for pattern syntax documentation
+
+# =============================================================================
+# Constants (inlined at compile time, no runtime coverage possible)
+# =============================================================================
+
+# Storage slot constants
+*_SLOT_*
+
+# Offset constants within structs
+*_OFFSET_*
+
+# Event signature constants
+*_EVENT_*
+
+# =============================================================================
+# Compiler-generated duplicates
+# =============================================================================
+# idris2-yul creates duplicate copies when functions are imported across modules.
+# Example: Members.Members.addMember -> Members_Members_u_addMember (original)
+#          Members.addMember (import) -> Members_u_addMember (copy that gets called)
+#
+# The following patterns match the ORIGINAL definitions that are never called
+# because their imported copies are used instead.
+
+# Members module duplicates (Members_Members_u_* are originals, Members_u_* are used)
+TextDAO_Functions_Members_Members_u_*
+
+# Propose module duplicates (Propose_Propose_u_* are originals, used via other modules)
+TextDAO_Functions_Propose_Propose_u_*
+
+# Vote module duplicates
+TextDAO_Functions_Vote_Vote_u_*
+
+# NOTE: Tally, Fork, Execute, Text do NOT have import versions
+# They only have the original *_*_u_* versions, which MUST be tested
+
+# =============================================================================
+# Compiler-generated helper functions
+# =============================================================================
+# idris2-yul generates helper functions for pattern matching and closures.
+# These are internal implementation details, not user-facing functions.
+
+# Pattern: _m_functionName_N (closure/lambda implementations)
+# Use ContainsPattern (*foo*) to match these helpers
+*_m_getScore_*
+*_m_findTopScorer_*
+*_m_storeVote_*
+*_m_countPassed_*
+*_m_finishTests_*
+
+# Pattern: _n_*_*_u_* (nested function implementations)
+*_n_updateOrInsert*
+*_n_accumulateAll*
+*_n_checkRep*
+
+# =============================================================================
+# EVM primitives (FFI bindings, not testable in coverage)
+# =============================================================================
+
+*_prim__*
