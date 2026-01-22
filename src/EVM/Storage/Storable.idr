@@ -347,42 +347,74 @@ arrayPush {a} arr val = do
   sstoreSlot (arrayLenSlot arr) (cast (len + 1))
 
 -- =============================================================================
--- Proof-Carrying State Transitions (RQ-2.3 Preview)
+-- State Transitions (Runtime Validation)
 -- =============================================================================
+-- Note: Previously used type-level GADT + auto-implicit proof pattern which
+-- can cause OOM during compilation. Converted to safe runtime validation.
+-- See: idris2-icp-indexer/docs/idris2-memory-eater.md
 
 ||| State enumeration for proposals
 public export
 data ProposalState = Draft | Voting | Approved | Executed
 
-||| Valid state transitions (type-level constraint)
 public export
-data ValidTransition : ProposalState -> ProposalState -> Type where
-  DraftToVoting : ValidTransition Draft Voting
-  VotingToApproved : ValidTransition Voting Approved
-  VotingToDraft : ValidTransition Voting Draft  -- rejected
-  ApprovedToExecuted : ValidTransition Approved Executed
+Eq ProposalState where
+  Draft == Draft = True
+  Voting == Voting = True
+  Approved == Approved = True
+  Executed == Executed = True
+  _ == _ = False
 
-||| State-indexed proposal
-||| The state is part of the TYPE, not just runtime data.
 public export
-data Proposal : ProposalState -> Type where
-  MkProposal : (state : ProposalState) -> (pid : Bits256) -> Proposal state
+Show ProposalState where
+  show Draft = "Draft"
+  show Voting = "Voting"
+  show Approved = "Approved"
+  show Executed = "Executed"
 
-||| Transition requires PROOF of valid transition.
-||| Invalid transitions don't compile!
+||| Proposal record (not type-indexed)
+public export
+record Proposal where
+  constructor MkProposal
+  state : ProposalState
+  pid : Bits256
+
+||| Validate state transition at runtime
+||| Returns True if the transition is valid
+|||
+||| Valid transitions:
+||| - Draft -> Voting (start voting)
+||| - Voting -> Approved (accepted)
+||| - Voting -> Draft (rejected, back to draft)
+||| - Approved -> Executed (executed)
+public export
+validateTransition : ProposalState -> ProposalState -> Bool
+validateTransition Draft Voting = True
+validateTransition Voting Approved = True
+validateTransition Voting Draft = True  -- rejected
+validateTransition Approved Executed = True
+validateTransition _ _ = False
+
+||| Transition proposal to new state
+||| Returns Nothing if the transition is invalid
 |||
 ||| ```idris
 ||| -- OK: Draft -> Voting is valid
-||| p2 <- transition {prf = DraftToVoting} p1
+||| case transition p Voting of
+|||   Just p2 => ... -- success
+|||   Nothing => ... -- invalid transition
 |||
-||| -- Compile Error: no proof for Draft -> Executed
-||| bad <- transition {prf = ???} p1  -- impossible!
+||| -- Draft -> Executed is invalid, returns Nothing
+||| transition (MkProposal Draft 1) Executed == Nothing
 ||| ```
 export
-transition : {from, to : ProposalState}
-          -> Proposal from
-          -> {auto prf : ValidTransition from to}
-          -> IO (Proposal to)
-transition {to} (MkProposal _ pid) = do
-  -- In real impl: update storage to reflect new state
-  pure (MkProposal to pid)
+transition : Proposal -> ProposalState -> Maybe Proposal
+transition p newState =
+  if validateTransition p.state newState
+    then Just ({ state := newState } p)
+    else Nothing
+
+||| Transition with IO effect (for storage updates)
+export
+transitionIO : Proposal -> ProposalState -> IO (Maybe Proposal)
+transitionIO p newState = pure (transition p newState)
