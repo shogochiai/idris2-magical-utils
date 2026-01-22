@@ -9,6 +9,7 @@ depends = base, contrib
 
 modules = Coverage.Core.Types
         , Coverage.Core.Exclusions
+        , Coverage.Core.DependencyExclusion
         , Coverage.Core.Stats
         , Coverage.Core.Result
         , Coverage.Core.DumpcasesRunner
