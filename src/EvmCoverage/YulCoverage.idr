@@ -24,6 +24,7 @@ import EvmCoverage.YulMapper
 import EvmCoverage.AsmJsonParser
 import EvmCoverage.TraceParser
 import EvmCoverage.Exclusions
+import EvmCoverage.SourceMap
 
 %default covering
 
@@ -63,6 +64,20 @@ Show YulCoverageResult where
            show r.idrisFuncCount ++ " Idris functions (" ++
            show r.coveragePercent ++ "%)" ++
            "\n  Yul functions: " ++ show r.yulFuncCount
+
+||| Line-level coverage result (using SourceMap)
+public export
+record LineCoverageResult where
+  constructor MkLineCoverageResult
+  totalComments : Nat              -- Total Idris location comments found
+  hitLines : Nat                   -- Unique lines hit
+  lineHits : List (String, Nat)    -- (location string, hit count)
+  moduleBreakdown : SortedMap String Nat  -- module -> hit count
+
+public export
+Show LineCoverageResult where
+  show r = "LineCoverage: " ++ show r.hitLines ++ " lines hit" ++
+           " (from " ++ show r.totalComments ++ " source locations)"
 
 -- =============================================================================
 -- Coverage Calculation
@@ -137,6 +152,36 @@ calculateYulCoverage yulFuncs asmInstrs trace exclusions =
     filterExcludedFuncs [] funcs = funcs
     filterExcludedFuncs pats funcs =
       filter (\fc => not (isExcluded (fullFuncName fc) pats)) funcs
+
+-- =============================================================================
+-- Line-Level Coverage (using SourceMap)
+-- =============================================================================
+
+||| Calculate line-level coverage from Yul comments and trace
+export
+calculateLineCoverage : List YulComment -> List AsmInstr -> List TraceEntry -> LineCoverageResult
+calculateLineCoverage comments instrs trace =
+  let pcs = map (.pc) trace
+      hitLocs = getHitLocations comments instrs pcs
+      locCounts = countLocs hitLocs
+      modCounts = aggregateModules hitLocs
+  in MkLineCoverageResult (length comments) (length $ nub hitLocs) locCounts modCounts
+  where
+    countLocs : List IdrisLoc -> List (String, Nat)
+    countLocs locs =
+      let grouped = foldl addLoc empty locs
+      in SortedMap.toList grouped
+      where
+        addLoc : SortedMap String Nat -> IdrisLoc -> SortedMap String Nat
+        addLoc m loc =
+          let key = show loc
+          in insert key (S (fromMaybe 0 (lookup key m))) m
+
+    aggregateModules : List IdrisLoc -> SortedMap String Nat
+    aggregateModules locs = foldl addMod empty locs
+      where
+        addMod : SortedMap String Nat -> IdrisLoc -> SortedMap String Nat
+        addMod m loc = insert loc.moduleName (S (fromMaybe 0 (lookup loc.moduleName m))) m
 
 -- =============================================================================
 -- Module Filtering

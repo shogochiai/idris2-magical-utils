@@ -8,6 +8,7 @@ depends = base, contrib, idris2-coverage-core
 sourcedir = "src"
 
 modules = EvmCoverage.Types
+        , EvmCoverage.SourceMap
         , EvmCoverage.DumpcasesParser
         , EvmCoverage.ProfileParser
         , EvmCoverage.ProfileParserLinear
@@ -20,7 +21,9 @@ modules = EvmCoverage.Types
         , EvmCoverage.YulMapper
         , EvmCoverage.AsmJsonParser
         , EvmCoverage.YulCoverage
+        , EvmCoverage.FunctionCoverage
         , EvmCoverage.Exclusions
+        , EvmCoverage.YulInstrumentor
         , Main
 
 main = Main
