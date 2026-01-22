@@ -3,7 +3,7 @@ version = 0.1.0
 authors = "bob"
 brief = "EVM semantic coverage analysis using Chez Scheme profiler"
 
-depends = base, contrib, idris2-coverage-core
+depends = base, contrib, idris2-coverage-core, idris2-evm
 
 sourcedir = "src"
 
@@ -24,6 +24,7 @@ modules = EvmCoverage.Types
         , EvmCoverage.FunctionCoverage
         , EvmCoverage.Exclusions
         , EvmCoverage.YulInstrumentor
+        , EvmCoverage.Runtime
         , Main
 
 main = Main
