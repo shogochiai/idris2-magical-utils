@@ -16,3 +16,4 @@ modules = Coverage.Core.Types
         , Coverage.Core.HighImpact
         , Coverage.Classification.CrashReason
         , Coverage.Classification.BranchClass
+        , Tests.AllTests
