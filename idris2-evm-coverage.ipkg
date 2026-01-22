@@ -25,6 +25,7 @@ modules = EvmCoverage.Types
         , EvmCoverage.Exclusions
         , EvmCoverage.YulInstrumentor
         , EvmCoverage.Runtime
+        , EvmCoverage.Tests.AllTests
         , Main
 
 main = Main
