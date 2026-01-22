@@ -48,8 +48,6 @@ record Options where
   traceFile : Maybe String
   loadStorage : Maybe String
   saveStorage : Maybe String
-  labelsFile : Maybe String                         -- Labels CSV for coverage mapping
-  coverageJson : Maybe String                       -- Output JSON coverage report to file
   -- Multi-contract options
   contracts : List (String, String, Maybe String)  -- (address, bytecode file, optional storage file)
   callAddress : Maybe String                        -- Address to call in multi-contract mode
@@ -57,7 +55,7 @@ record Options where
   saveWorld : Maybe String                          -- Save world state to JSON
 
 defaultOptions : Options
-defaultOptions = MkOptions Nothing Nothing "" Nothing 1000000 False False False False False Nothing Nothing Nothing Nothing Nothing [] Nothing Nothing Nothing
+defaultOptions = MkOptions Nothing Nothing "" Nothing 1000000 False False False False False Nothing Nothing Nothing [] Nothing Nothing Nothing
 
 -- =============================================================================
 -- Argument Parsing
@@ -102,10 +100,6 @@ parseArgs ("--load-world" :: file :: rest) opts =
   parseArgs rest ({ loadWorld := Just file } opts)
 parseArgs ("--save-world" :: file :: rest) opts =
   parseArgs rest ({ saveWorld := Just file } opts)
-parseArgs ("--labels" :: file :: rest) opts =
-  parseArgs rest ({ labelsFile := Just file } opts)
-parseArgs ("--coverage-json" :: file :: rest) opts =
-  parseArgs rest ({ coverageJson := Just file } opts)
 parseArgs (arg :: rest) opts =
   if isPrefixOf "-" arg
     then parseArgs rest opts  -- Skip unknown flags
@@ -263,193 +257,6 @@ showHex256 w = padLeft 64 '0' (toHexString (toInteger w))
                     if len >= n then s
                     else replicate (n `minus` len) c ++ s
 
-||| ProfileFlush event topic (keccak256("ProfileFlush(uint256[])"))
-profileFlushTopic : Word256
-profileFlushTopic = fromInteger 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925
-
-||| Check if a log is a ProfileFlush event
-isProfileFlush : LogEntry -> Bool
-isProfileFlush entry = case entry.logTopics of
-  [t] => t == profileFlushTopic
-  _ => False
-
-||| Parse 32-byte words from log data as counter values
-parseCounters : List Bits8 -> List Integer
-parseCounters [] = []
-parseCounters bytes =
-  let (chunk, rest) = splitAt 32 bytes
-      val = bytesToInteger chunk
-  in if length chunk < 32 then []
-     else val :: parseCounters rest
-  where
-    bytesToInteger : List Bits8 -> Integer
-    bytesToInteger bs = foldl (\acc, b => acc * 256 + cast b) 0 bs
-
--- =============================================================================
--- Yul Name Demangling (from YulMapper.idr)
--- =============================================================================
-
-||| Demangled Idris function representation
-record IdrisFunc where
-  constructor MkIdrisFunc
-  modulePath : String
-  idrisFuncName : String
-
-Show IdrisFunc where
-  show f = f.modulePath ++ "." ++ f.idrisFuncName
-
-||| Skip numeric parts in list (for nested function markers like _n_1234_5678_u_)
-skipNumeric : List String -> (List String, List String)
-skipNumeric [] = ([], [])
-skipNumeric (x :: rest) =
-  case parsePositive {a=Nat} x of
-    Just _ => let (nums, rem) = skipNumeric rest in (x :: nums, rem)
-    Nothing => ([], x :: rest)
-
-||| Find function marker (_u_, _m_, _n_) in underscore-split parts
-findFuncMarker : List String -> List String -> Maybe (List String, String, List String)
-findFuncMarker _ [] = Nothing
-findFuncMarker acc ("u" :: rest) = Just (reverse acc, "u", rest)
-findFuncMarker acc ("m" :: rest) = Just (reverse acc, "m", rest)
-findFuncMarker acc ("n" :: rest) =
-  case skipNumeric rest of
-    (_, remaining) =>
-      if null remaining then Nothing
-      else Just (reverse acc, "n", remaining)
-findFuncMarker acc (x :: rest) = findFuncMarker (x :: acc) rest
-
-||| Demangle Yul function name to Idris module.function
-||| e.g., Main_Functions_Vote_u_castVote → IdrisFunc "Main.Functions.Vote" "castVote"
-demangleYulFunc : String -> Maybe IdrisFunc
-demangleYulFunc name =
-  let parts = forget $ split (== '_') name
-  in case findFuncMarker [] parts of
-       Just (modParts, marker, funcParts) =>
-         let modulePath = joinBy "." modParts
-             funcNm = joinBy "_" funcParts
-         in Just $ MkIdrisFunc modulePath funcNm
-       Nothing => Nothing
-
-||| Get full demangled name as "Module.funcName" string
-demangle : String -> String
-demangle mangledName =
-  case demangleYulFunc mangledName of
-    Just f => show f
-    Nothing => mangledName  -- Return original if can't demangle
-
--- =============================================================================
--- Label Entry with Demangled Name
--- =============================================================================
-
-||| Label entry from CSV: (index, function_name, has_switch)
-record LabelEntry where
-  constructor MkLabelEntry
-  labelIndex : Nat
-  mangledName : String    -- Original mangled name (e.g., Main_Functions_Vote_u_castVote)
-  demangledName : String  -- Demangled name (e.g., Main.Functions.Vote.castVote)
-  hasSwitch : Bool
-
-||| Parse a single CSV line (index,function_name,has_switch)
-parseLabel : String -> Maybe LabelEntry
-parseLabel line =
-  let parts = forget (split (== ',') line)  -- List1 -> List
-  in case parts of
-    (idx :: name :: sw :: _) =>
-      case parsePositive {a=Nat} idx of
-        Just i => Just (MkLabelEntry i name (demangle name) (trim sw == "True"))
-        Nothing => Nothing
-    _ => Nothing
-
-||| Load labels from CSV file
-loadLabels : String -> IO (Either String (List LabelEntry))
-loadLabels path = do
-  Right content <- readFile path
-    | Left err => pure (Left $ "Failed to read labels file: " ++ show err)
-  let ls = lines content
-  -- Skip header line
-  let dataLines = drop 1 ls
-  let labels = mapMaybe parseLabel dataLines
-  pure (Right labels)
-
-||| Look up demangled function name by index
-lookupLabel : Nat -> List LabelEntry -> Maybe String
-lookupLabel idx labels = map demangledName (find (\l => l.labelIndex == idx) labels)
-
-||| Look up full label entry by index
-lookupLabelEntry : Nat -> List LabelEntry -> Maybe LabelEntry
-lookupLabelEntry idx labels = find (\l => l.labelIndex == idx) labels
-
--- =============================================================================
--- FunctionRuntimeHit (from idris2-coverage-core/Coverage/Core/RuntimeHit.idr)
--- =============================================================================
-
-||| Per-function runtime coverage data
-record FunctionRuntimeHit where
-  constructor MkFunctionRuntimeHit
-  funcName       : String   -- Demangled Idris name (e.g., "Main.Functions.Vote.castVote")
-  mangledFunc    : String   -- Mangled name (e.g., "Main_Functions_Vote_u_castVote")
-  canonicalCount : Nat      -- Static branch count from dumpcases (0 if no branches)
-  executedCount  : Nat      -- Runtime hit count from ProfileFlush
-
-Show FunctionRuntimeHit where
-  show h = h.funcName ++ ": " ++ show h.executedCount ++
-           (if h.canonicalCount > 0 then "/" ++ show h.canonicalCount else "")
-
-||| Coverage percentage for a function
-functionCoveragePercent : FunctionRuntimeHit -> Double
-functionCoveragePercent h =
-  if h.canonicalCount == 0 then 100.0
-  else min 100.0 (cast h.executedCount / cast h.canonicalCount * 100.0)
-
-||| Function coverage result
-record CoverageResult where
-  constructor MkCoverageResult
-  totalFunctions : Nat
-  hitFunctions   : Nat
-  coveragePercent : Double
-  hits : List FunctionRuntimeHit
-
-||| Build FunctionRuntimeHit from label entry and hit count
-buildHit : LabelEntry -> Integer -> FunctionRuntimeHit
-buildHit lbl hitCount =
-  let canonical : Nat = if lbl.hasSwitch then 1 else 0  -- Simplified: 1 branch if has_switch
-  in MkFunctionRuntimeHit lbl.demangledName lbl.mangledName canonical (cast {to=Nat} hitCount)
-
-||| Make hit from label and count
-mkHit : List LabelEntry -> (Nat, Integer) -> Maybe FunctionRuntimeHit
-mkHit labels (idx, cnt) = case lookupLabelEntry idx labels of
-  Nothing => Nothing
-  Just lbl => Just (buildHit lbl cnt)
-
-||| Build coverage result from labels and counter data
-buildCoverageResult : List LabelEntry -> List (Nat, Integer) -> CoverageResult
-buildCoverageResult labels counters =
-  let hits = mapMaybe (mkHit labels) counters in
-  let nonZeroHits = filter (\h => h.executedCount > 0) hits in
-  let totalFuncs = length labels in
-  let hitFuncs = length nonZeroHits in
-  let pct = if totalFuncs == 0 then 100.0 else cast hitFuncs / cast totalFuncs * 100.0 in
-  MkCoverageResult totalFuncs hitFuncs pct hits
-
-||| Convert coverage result to JSON string
-coverageToJson : CoverageResult -> String
-coverageToJson r = unlines
-  [ "{"
-  , "  \"totalFunctions\": " ++ show r.totalFunctions ++ ","
-  , "  \"hitFunctions\": " ++ show r.hitFunctions ++ ","
-  , "  \"coveragePercent\": " ++ show r.coveragePercent ++ ","
-  , "  \"functions\": ["
-  , "    " ++ joinBy ",\n    " (map hitToJson r.hits)
-  , "  ]"
-  , "}"
-  ]
-  where
-    hitToJson : FunctionRuntimeHit -> String
-    hitToJson h = "{\"name\": \"" ++ h.funcName ++ "\", " ++
-                  "\"mangled\": \"" ++ h.mangledFunc ++ "\", " ++
-                  "\"canonical\": " ++ show h.canonicalCount ++ ", " ++
-                  "\"executed\": " ++ show h.executedCount ++ "}"
-
 executeWithStorage : Bytecode -> List Bits8 -> Nat -> Storage -> Maybe Word256 -> Result
 executeWithStorage code calldata gasLimit initialStore mCallValue =
   let callVal = fromMaybe Word256.zero mCallValue
@@ -493,20 +300,6 @@ runMain opts = do
           putStrLn $ showDisassembly code
         else if opts.trace
           then do
-            -- Load labels if specified
-            labels <- case opts.labelsFile of
-              Nothing => pure []
-              Just path => do
-                result <- loadLabels path
-                case result of
-                  Left err => do
-                    putStrLn $ "Warning: " ++ err
-                    pure []
-                  Right lbls => do
-                    when opts.verbose $
-                      putStrLn $ "Loaded " ++ show (length lbls) ++ " labels"
-                    pure lbls
-
             -- Trace mode: output opcode trace for coverage analysis
             let calldata = fromMaybe [] (fromHex opts.calldataHex)
             let mCallValue = opts.callValueHex >>= hexToWord256
@@ -523,57 +316,20 @@ runMain opts = do
                   | Left err => putStrLn $ "Error writing trace: " ++ show err
                 putStrLn $ "Trace written to: " ++ path ++ " (" ++ show (length traceEntries) ++ " steps)"
 
-            -- Output captured logs
+            -- Output captured logs (raw data only - use idris2-evm-coverage for analysis)
             when (not $ null logs) $ do
               putStrLn $ "\n=== Logs (" ++ show (length logs) ++ " events) ==="
-              let printLog : List LabelEntry -> Nat -> LogEntry -> IO ()
-                  printLog lbls i entry = do
-                    if isProfileFlush entry
-                      then do
-                        putStrLn $ "Log #" ++ show i ++ ": ProfileFlush"
-                        let counters = parseCounters entry.logData
-                        putStrLn $ "  Counters: " ++ show (length counters)
-                        -- Build indexed counter list
-                        let indexed = zip [0 .. length counters `minus` 1] counters
-                        let nonZero = filter (\(_, v) => v > 0) indexed
-                        putStrLn $ "  Non-zero: " ++ show (length nonZero)
-
-                        if null lbls
-                          then do
-                            -- No labels, just print indices
-                            for_ nonZero $ \(idx, val) =>
-                              putStrLn $ "    [" ++ show idx ++ "] = " ++ show val
-                          else do
-                            -- Build coverage result
-                            let coverageResult = buildCoverageResult lbls indexed
-                            -- Show summary
-                            putStrLn $ "\n  === Coverage Summary ==="
-                            putStrLn $ "  Total functions: " ++ show coverageResult.totalFunctions
-                            putStrLn $ "  Hit functions: " ++ show coverageResult.hitFunctions
-                            putStrLn $ "  Coverage: " ++ show coverageResult.coveragePercent ++ "%"
-                            -- Show function names
-                            putStrLn "\n  === Coverage Report ==="
-                            let nonZeroHits = filter (\h => h.executedCount > 0) coverageResult.hits
-                            for_ nonZeroHits $ \h =>
-                              putStrLn $ "    " ++ h.funcName ++ " : " ++ show h.executedCount
-                            -- Output JSON if requested
-                            case opts.coverageJson of
-                              Nothing => pure ()
-                              Just jsonPath => do
-                                let jsonContent = coverageToJson coverageResult
-                                Right _ <- writeFile jsonPath jsonContent
-                                  | Left err => putStrLn $ "Error writing JSON: " ++ show err
-                                putStrLn $ "\n  Coverage JSON written to: " ++ jsonPath
-                      else do
-                        putStrLn $ "Log #" ++ show i ++ ":"
-                        putStrLn $ "  Topics: " ++ show (length entry.logTopics)
-                        let printTopic : Nat -> Word256 -> IO ()
-                            printTopic j topic = putStrLn $ "    [" ++ show j ++ "] 0x" ++ showHex256 topic
-                        ignore $ foldlM (\j, t => printTopic j t >> pure (S j)) 0 entry.logTopics
-                        putStrLn $ "  Data: " ++ show (length entry.logData) ++ " bytes"
-                        when (not $ null entry.logData) $
-                          putStrLn $ "    " ++ toHex entry.logData
-              ignore $ foldlM (\i, e => printLog labels i e >> pure (S i)) 0 logs
+              let printLog : Nat -> LogEntry -> IO ()
+                  printLog i entry = do
+                    putStrLn $ "Log #" ++ show i ++ ":"
+                    putStrLn $ "  Topics: " ++ show (length entry.logTopics)
+                    let printTopic : Nat -> Word256 -> IO ()
+                        printTopic j topic = putStrLn $ "    [" ++ show j ++ "] 0x" ++ showHex256 topic
+                    ignore $ foldlM (\j, t => printTopic j t >> pure (S j)) 0 entry.logTopics
+                    putStrLn $ "  Data: " ++ show (length entry.logData) ++ " bytes"
+                    when (not $ null entry.logData) $
+                      putStrLn $ "    " ++ toHex entry.logData
+              ignore $ foldlM (\i, e => printLog i e >> pure (S i)) 0 logs
 
             -- Also show result summary
             case result of

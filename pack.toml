@@ -1,4 +1,1 @@
-[custom.all.idris2-coverage]
-type = "local"
-path = "/Users/bob/code/idris2-coverage"
-ipkg = "idris2-coverage.ipkg"
+# idris2-evm has no external local dependencies
