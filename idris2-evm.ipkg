@@ -17,6 +17,7 @@ modules = EVM.Word256
         , EVM.Interpreter
         , EVM.WorldState
         , EVM.MultiInterpreter
+        , EVM.Tests.AllTests
         , Main
 
 main = Main

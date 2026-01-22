@@ -576,3 +576,8 @@ Show Opcode where
   show INVALID = "INVALID"
   show SELFDESTRUCT = "SELFDESTRUCT"
   show (UNKNOWN b) = "UNKNOWN(" ++ show b ++ ")"
+
+||| Eq instance for Opcode (derived via Show)
+public export
+Eq Opcode where
+  op1 == op2 = show op1 == show op2

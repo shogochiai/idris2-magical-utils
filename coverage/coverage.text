@@ -1,0 +1,1693 @@
+================================================================================
+EVM Coverage Report
+================================================================================
+Target: /Users/bob/code/idris2-evm/coverage
+## Branch Classification
+
+| Category    | Count |
+|-------------|-------|
+| Canonical   | 1678 |
+| Hit         | 0 |
+| Bugs        | 0 |
+| Unknown     | 0 |
+
+Coverage: 0.0%
+## Uncovered Branches
+  - .Main.case block in case block in case block in case block in runMultiContract:0
+  - .Main.case block in case block in case block in case block in runMultiContract:1
+  - .Main.case block in case block in case block in case block in runMultiContract:2
+  - .Main.case block in case block in case block in case block in runMultiContract:3
+  - .Main.case block in case block in case block in case block in runMultiContract:4
+  - .Main.case block in case block in case block in case block in runMultiContract:5
+  - .Main.case block in case block in case block in runMultiContract:0
+  - .Main.case block in case block in case block in runMultiContract:1
+  - .Main.case block in case block in case block in runMultiContract:2
+  - .Main.case block in case block in case block in runMultiContract:3
+  - .Main.case block in case block in case block in runMultiContract:4
+  - .Main.case block in case block in case block in runMultiContract:5
+  - .Main.case block in case block in case block in runMultiContract:6
+  - .Main.case block in case block in case block in runMultiContract:7
+  - .Main.case block in case block in case block in runMultiContract:8
+  - .Main.case block in case block in case block in runMultiContract:9
+  - .Main.case block in case block in runMultiContract:0
+  - .Main.case block in case block in runMultiContract:1
+  - .Main.case block in runMultiContract:0
+  - .Main.case block in runMultiContract:1
+  - .Main.case block in runMultiContract:2
+  - .Main.case block in runMultiContract:3
+  - .Main.case block in runMultiContract:4
+  - .Main.case block in runMultiContract:5
+  - .Main.case block in runMultiContract:6
+  - .Main.case block in case block in case block in loadContract:0
+  - .Main.case block in case block in case block in loadContract:1
+  - .Main.case block in case block in case block in loadContract:2
+  - .Main.case block in case block in case block in loadContract:3
+  - .Main.case block in case block in case block in loadContract:4
+  - .Main.case block in case block in case block in loadContract:5
+  - .Main.case block in case block in runMain:0
+  - .Main.case block in case block in runMain:1
+  - .Main.case block in case block in runMain:2
+  - .Main.case block in case block in runMain:3
+  - .Main.case block in case block in runMain:4
+  - .Main.case block in case block in case block in case block in case block in runMain:0
+  - .Main.case block in case block in case block in case block in case block in runMain:1
+  - .Main.case block in case block in case block in case block in case block in runMain:2
+  - .Main.case block in case block in case block in case block in case block in runMain:3
+  - .Main.case block in case block in case block in case block in case block in runMain:4
+  - .Main.case block in case block in case block in case block in case block in runMain:0
+  - .Main.case block in case block in case block in case block in case block in runMain:1
+  - .Main.case block in case block in case block in case block in case block in runMain:2
+  - .Main.case block in case block in case block in case block in case block in runMain:3
+  - .Main.case block in case block in case block in case block in runMain:0
+  - .Main.case block in case block in case block in case block in runMain:1
+  - .Main.case block in case block in case block in case block in runMain:2
+  - .Main.case block in case block in case block in case block in runMain:3
+  - .Main.case block in case block in case block in case block in runMain:4
+  - .Main.case block in case block in case block in case block in runMain:5
+  - .Main.case block in case block in case block in case block in runMain:6
+  - .Main.case block in case block in case block in case block in runMain:7
+  - .Main.case block in case block in case block in case block in runMain:8
+  - .Main.case block in case block in case block in case block in runMain:9
+  - .Main.case block in case block in loadBytecode:0
+  - .Main.case block in case block in loadBytecode:1
+  - .Main.case block in case block in loadBytecode:2
+  - .Main.case block in case block in loadBytecode:3
+  - .Main.case block in case block in loadBytecode:4
+  - .Main.case block in case block in loadBytecode:5
+  - .Main.case block in loadBytecode:0
+  - .Main.case block in loadBytecode:1
+  - .Main.case block in loadBytecode:2
+  - .Main.case block in loadBytecode:3
+  - .Main.case block in loadBytecode:4
+  - .Main.5941:5885:parsed:0
+  - .Main.5941:5885:parsed:1
+  - .Main.5941:5885:parsed:2
+  - .Main.5941:5885:parsed:3
+  - .Main.5941:5885:parsed:4
+  - .Main.8363:7608:parseHexDigits:0
+  - .Main.8363:7608:parseHexDigits:1
+  - .Main.8363:7608:parseHexDigits:2
+  - .Main.8363:7608:parseHexDigits:3
+  - .Main.8363:7607:hexVal:0
+  - .Main.8363:7607:hexVal:1
+  - .Main.8363:7607:hexVal:2
+  - .Main.8363:7607:hexVal:3
+  - .Main.8363:7607:hexVal:4
+  - .Main.8363:7607:hexVal:5
+  - .Main.8363:7607:hexVal:6
+  - .Main.8363:7607:hexVal:7
+  - .Main.8363:7607:hexVal:8
+  - .Main.8363:7607:hexVal:9
+  - .Main.8363:7607:hexVal:10
+  - .Main.8363:7607:hexVal:11
+  - .Main.8907:8108:go:0
+  - .Main.8907:8108:go:1
+  - .Main.8907:8108:go:2
+  - .Main.8907:8108:go:3
+  - .Main.8907:8108:go:4
+  - .Main.versionText:0
+  - .Main.showMultiResult:0
+  - .Main.showMultiResult:1
+  - .Main.showMultiResult:2
+  - .Main.showMultiResult:3
+  - .Main.showMultiResult:4
+  - .Main.showMultiResult:5
+  - .Main.showMultiResult:6
+  - .Main.showMultiResult:7
+  - .Main.showMultiResult:8
+  - .Main.showMultiResult:9
+  - .Main.showMultiResult:10
+  - .Main.showMultiResult:11
+  - .Main.showMultiResult:12
+  - .Main.showMultiResult:13
+  - .Main.showMultiResult:14
+  - .Main.showMultiResult:15
+  - .Main.saveStorageFile:0
+  - .Main.saveStorageFile:1
+  - .Main.runMultiContract:0
+  - .Main.runMultiContract:1
+  - .Main.runMultiContract:2
+  - .Main.runMultiContract:3
+  - .Main.runMain:0
+  - .Main.runMain:1
+  - .Main.runMain:2
+  - .Main.runMain:3
+  - .Main.runMain:4
+  - .Main.runMain:5
+  - .Main.runMain:6
+  - .Main.runMain:7
+  - .Main.runMain:8
+  - .Main.runMain:9
+  - .Main.runMain:10
+  - .Main.runMain:11
+  - .Main.runMain:12
+  - .Main.runMain:13
+  - .Main.runMain:14
+  - .Main.runMain:15
+  - .Main.runMain:16
+  - .Main.runMain:17
+  - .Main.runMain:18
+  - .Main.runMain:19
+  - .Main.runMain:20
+  - .Main.runMain:21
+  - .Main.runMain:22
+  - .Main.runMain:23
+  - .Main.runMain:24
+  - .Main.runMain:25
+  - .Main.runMain:26
+  - .Main.runMain:27
+  - .Main.runMain:28
+  - .Main.runMain:29
+  - .Main.runMain:30
+  - .Main.runMain:31
+  - .Main.runMain:32
+  - .Main.runMain:33
+  - .Main.runMain:34
+  - .Main.runMain:35
+  - .Main.parseArgs:0
+  - .Main.parseArgs:1
+  - .Main.parseArgs:2
+  - .Main.parseArgs:3
+  - .Main.parseArgs:4
+  - .Main.parseArgs:5
+  - .Main.parseArgs:6
+  - .Main.parseArgs:7
+  - .Main.parseArgs:8
+  - .Main.parseArgs:9
+  - .Main.parseArgs:10
+  - .Main.parseArgs:11
+  - .Main.parseArgs:12
+  - .Main.parseArgs:13
+  - .Main.parseArgs:14
+  - .Main.parseArgs:15
+  - .Main.parseArgs:16
+  - .Main.parseArgs:17
+  - .Main.parseArgs:18
+  - .Main.parseArgs:19
+  - .Main.parseArgs:20
+  - .Main.parseArgs:21
+  - .Main.parseArgs:22
+  - .Main.parseArgs:23
+  - .Main.parseArgs:24
+  - .Main.parseArgs:25
+  - .Main.parseArgs:26
+  - .Main.parseArgs:27
+  - .Main.parseArgs:28
+  - .Main.parseArgs:29
+  - .Main.parseArgs:30
+  - .Main.parseArgs:31
+  - .Main.parseArgs:32
+  - .Main.parseArgs:33
+  - .Main.parseArgs:34
+  - .Main.parseArgs:35
+  - .Main.parseArgs:36
+  - .Main.parseArgs:37
+  - .Main.parseArgs:38
+  - .Main.parseArgs:39
+  - .Main.parseArgs:40
+  - .Main.parseArgs:41
+  - .Main.parseArgs:42
+  - .Main.parseArgs:43
+  - .Main.parseArgs:44
+  - .Main.parseArgs:45
+  - .Main.parseArgs:46
+  - .Main.parseArgs:47
+  - .Main.parseArgs:48
+  - .Main.parseArgs:49
+  - .Main.parseArgs:50
+  - .Main.parseArgs:51
+  - .Main.parseArgs:52
+  - .Main.parseArgs:53
+  - .Main.parseArgs:54
+  - .Main.parseArgs:55
+  - .Main.parseArgs:56
+  - .Main.parseArgs:57
+  - .Main.parseArgs:58
+  - .Main.parseArgs:59
+  - .Main.parseArgs:60
+  - .Main.parseArgs:61
+  - .Main.parseArgs:62
+  - .Main.parseArgs:63
+  - .Main.parseArgs:64
+  - .Main.parseArgs:65
+  - .Main.parseArgs:66
+  - .Main.parseArgs:67
+  - .Main.parseArgs:68
+  - .Main.parseArgs:69
+  - .Main.parseArgs:70
+  - .Main.parseArgs:71
+  - .Main.parseArgs:72
+  - .Main.parseArgs:73
+  - .Main.parseArgs:74
+  - .Main.parseArgs:75
+  - .Main.parseArgs:76
+  - .Main.parseArgs:77
+  - .Main.parseArgs:78
+  - .Main.parseArgs:79
+  - .Main.parseArgs:80
+  - .Main.parseArgs:81
+  - .Main.parseArgs:82
+  - .Main.main:0
+  - .Main.main:1
+  - .Main.main:2
+  - .Main.main:3
+  - .Main.main:4
+  - .Main.main:5
+  - .Main.main:6
+  - .Main.main:7
+  - .Main.loadWorldState:0
+  - .Main.loadStorageFile:0
+  - .Main.loadStorageFile:1
+  - .Main.loadStorageFile:2
+  - .Main.loadStorageFile:3
+  - .Main.loadContract:0
+  - .Main.loadContract:1
+  - .Main.loadContract:2
+  - .Main.loadContract:3
+  - .Main.loadContract:4
+  - .Main.loadContract:5
+  - .Main.loadBytecode:0
+  - .Main.isMultiContractMode:0
+  - .Main.isMultiContractMode:1
+  - .Main.isMultiContractMode:2
+  - .Main.isMultiContractMode:3
+  - .Main.isMultiContractMode:4
+  - .Main.isMultiContractMode:5
+  - .Main.isMultiContractMode:6
+  - .Main.hexToWord256:0
+  - .Main.hexToWord256:1
+  - .Main.hexToWord256:2
+  - .Main.hexToWord256:3
+  - .Main.hexToWord256:4
+  - .Main.helpText:0
+  - .Main.executeWithStorage:0
+  - .Main.defaultOptions:0
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:0
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:1
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:2
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:3
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:4
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:5
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:6
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:7
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:8
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:9
+  - .EVM.MultiInterpreter.case block in case block in case block in executeStaticCall:10
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:0
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:1
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:2
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:3
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:4
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:5
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:6
+  - .EVM.MultiInterpreter.case block in case block in case block in executeDelegateCall:7
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:0
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:1
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:2
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:3
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:4
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:5
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:6
+  - .EVM.MultiInterpreter.case block in case block in case block in executeCall:7
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in executeSimple:5
+  - .EVM.MultiInterpreter.case block in executeSimple:6
+  - .EVM.MultiInterpreter.case block in executeSimple:7
+  - .EVM.MultiInterpreter.case block in executeSimple:8
+  - .EVM.MultiInterpreter.case block in executeSimple:9
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in executeSimple:5
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in executeSimple:5
+  - .EVM.MultiInterpreter.case block in executeSimple:6
+  - .EVM.MultiInterpreter.case block in executeSimple:7
+  - .EVM.MultiInterpreter.case block in executeSimple:8
+  - .EVM.MultiInterpreter.case block in executeSimple:9
+  - .EVM.MultiInterpreter.case block in executeSimple:10
+  - .EVM.MultiInterpreter.case block in executeSimple:11
+  - .EVM.MultiInterpreter.case block in executeSimple:12
+  - .EVM.MultiInterpreter.case block in executeSimple:13
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in executeSimple:5
+  - .EVM.MultiInterpreter.case block in executeSimple:6
+  - .EVM.MultiInterpreter.case block in executeSimple:7
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in executeSimple:5
+  - .EVM.MultiInterpreter.case block in executeSimple:6
+  - .EVM.MultiInterpreter.case block in executeSimple:7
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in executeSimple:5
+  - .EVM.MultiInterpreter.case block in executeSimple:6
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in executeSimple:5
+  - .EVM.MultiInterpreter.case block in executeSimple:6
+  - .EVM.MultiInterpreter.case block in executeSimple:0
+  - .EVM.MultiInterpreter.case block in executeSimple:1
+  - .EVM.MultiInterpreter.case block in executeSimple:2
+  - .EVM.MultiInterpreter.case block in executeSimple:3
+  - .EVM.MultiInterpreter.case block in executeSimple:4
+  - .EVM.MultiInterpreter.case block in binaryOp:0
+  - .EVM.MultiInterpreter.case block in binaryOp:1
+  - .EVM.MultiInterpreter.case block in binaryOp:2
+  - .EVM.MultiInterpreter.case block in binaryOp:3
+  - .EVM.MultiInterpreter.case block in binaryOp:4
+  - .EVM.MultiInterpreter.case block in binaryOp:5
+  - .EVM.MultiInterpreter.case block in binaryOp:6
+  - .EVM.MultiInterpreter.case block in unaryOp:0
+  - .EVM.MultiInterpreter.case block in unaryOp:1
+  - .EVM.MultiInterpreter.case block in unaryOp:2
+  - .EVM.MultiInterpreter.case block in unaryOp:3
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:0
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:1
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:2
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:3
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:4
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:5
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:6
+  - .EVM.MultiInterpreter.case block in case block in executeSstore:7
+  - .EVM.MultiInterpreter.case block in executeSload:0
+  - .EVM.MultiInterpreter.case block in executeSload:1
+  - .EVM.MultiInterpreter.case block in executeSload:2
+  - .EVM.MultiInterpreter.case block in executeSload:3
+  - .EVM.MultiInterpreter.case block in executeSload:4
+  - .EVM.MultiInterpreter.case block in executeSload:5
+  - .EVM.MultiInterpreter.5645:8600:writeBytes:0
+  - .EVM.MultiInterpreter.5645:8600:writeBytes:1
+  - .EVM.MultiInterpreter.6303:5027:simpleHash:0
+  - .EVM.MultiInterpreter.6303:5026:hashWord:0
+  - .EVM.MultiInterpreter.6303:5025:hash256:0
+  - .EVM.MultiInterpreter.6303:5024:h4:0
+  - .EVM.MultiInterpreter.6303:5023:h3:0
+  - .EVM.MultiInterpreter.6303:5022:h2:0
+  - .EVM.MultiInterpreter.6303:5021:h1:0
+  - .EVM.MultiInterpreter.unaryOp:0
+  - .EVM.MultiInterpreter.toByteList:0
+  - .EVM.MultiInterpreter.swapOp:0
+  - .EVM.MultiInterpreter.swapOp:1
+  - .EVM.MultiInterpreter.swapOp:2
+  - .EVM.MultiInterpreter.stepOpcode:0
+  - .EVM.MultiInterpreter.stepOpcode:1
+  - .EVM.MultiInterpreter.runMultiLoop:0
+  - .EVM.MultiInterpreter.runMultiLoop:1
+  - .EVM.MultiInterpreter.runMultiLoop:2
+  - .EVM.MultiInterpreter.runMultiLoop:3
+  - .EVM.MultiInterpreter.runMultiLoop:4
+  - .EVM.MultiInterpreter.runMultiLoop:5
+  - .EVM.MultiInterpreter.runMultiLoop:6
+  - .EVM.MultiInterpreter.runMultiLoop:7
+  - .EVM.MultiInterpreter.runMultiLoop:8
+  - .EVM.MultiInterpreter.runMultiLoop:9
+  - .EVM.MultiInterpreter.runMultiLoop:10
+  - .EVM.MultiInterpreter.runMultiLoop:11
+  - .EVM.MultiInterpreter.runMultiLoop:12
+  - .EVM.MultiInterpreter.runMultiLoop:13
+  - .EVM.MultiInterpreter.runMultiLoop:14
+  - .EVM.MultiInterpreter.runMultiLoop:15
+  - .EVM.MultiInterpreter.runMultiLoop:16
+  - .EVM.MultiInterpreter.runMultiLoop:17
+  - .EVM.MultiInterpreter.runMulti:0
+  - .EVM.MultiInterpreter.readPushData:0
+  - .EVM.MultiInterpreter.pushValSimple:0
+  - .EVM.MultiInterpreter.pushValSimple:1
+  - .EVM.MultiInterpreter.pushValSimple:2
+  - .EVM.MultiInterpreter.logOp:0
+  - .EVM.MultiInterpreter.logOp:1
+  - .EVM.MultiInterpreter.logOp:2
+  - .EVM.MultiInterpreter.logOp:3
+  - .EVM.MultiInterpreter.initMultiVM:0
+  - .EVM.MultiInterpreter.executeStaticCall:0
+  - .EVM.MultiInterpreter.executeStaticCall:1
+  - .EVM.MultiInterpreter.executeStaticCall:2
+  - .EVM.MultiInterpreter.executeStaticCall:3
+  - .EVM.MultiInterpreter.executeStaticCall:4
+  - .EVM.MultiInterpreter.executeStaticCall:5
+  - .EVM.MultiInterpreter.executeStaticCall:6
+  - .EVM.MultiInterpreter.executeStaticCall:7
+  - .EVM.MultiInterpreter.executeStaticCall:8
+  - .EVM.MultiInterpreter.executeStaticCall:9
+  - .EVM.MultiInterpreter.executeStaticCall:10
+  - .EVM.MultiInterpreter.executeStaticCall:11
+  - .EVM.MultiInterpreter.executeStaticCall:12
+  - .EVM.MultiInterpreter.executeStaticCall:13
+  - .EVM.MultiInterpreter.executeStaticCall:14
+  - .EVM.MultiInterpreter.executeStaticCall:15
+  - .EVM.MultiInterpreter.executeStaticCall:16
+  - .EVM.MultiInterpreter.executeStaticCall:17
+  - .EVM.MultiInterpreter.executeStaticCall:18
+  - .EVM.MultiInterpreter.executeStaticCall:19
+  - .EVM.MultiInterpreter.executeStaticCall:20
+  - .EVM.MultiInterpreter.executeStaticCall:21
+  - .EVM.MultiInterpreter.executeStaticCall:22
+  - .EVM.MultiInterpreter.executeStaticCall:23
+  - .EVM.MultiInterpreter.executeStaticCall:24
+  - .EVM.MultiInterpreter.executeStaticCall:25
+  - .EVM.MultiInterpreter.executeStaticCall:26
+  - .EVM.MultiInterpreter.executeStaticCall:27
+  - .EVM.MultiInterpreter.executeStaticCall:28
+  - .EVM.MultiInterpreter.executeStaticCall:29
+  - .EVM.MultiInterpreter.executeStaticCall:30
+  - .EVM.MultiInterpreter.executeStaticCall:31
+  - .EVM.MultiInterpreter.executeStaticCall:32
+  - .EVM.MultiInterpreter.executeSstore:0
+  - .EVM.MultiInterpreter.executeSstore:1
+  - .EVM.MultiInterpreter.executeSstore:2
+  - .EVM.MultiInterpreter.executeSstore:3
+  - .EVM.MultiInterpreter.executeSstore:4
+  - .EVM.MultiInterpreter.executeSload:0
+  - .EVM.MultiInterpreter.executeSimple:0
+  - .EVM.MultiInterpreter.executeSimple:1
+  - .EVM.MultiInterpreter.executeSimple:2
+  - .EVM.MultiInterpreter.executeSimple:3
+  - .EVM.MultiInterpreter.executeSimple:4
+  - .EVM.MultiInterpreter.executeSimple:5
+  - .EVM.MultiInterpreter.executeSimple:6
+  - .EVM.MultiInterpreter.executeSimple:7
+  - .EVM.MultiInterpreter.executeSimple:8
+  - .EVM.MultiInterpreter.executeSimple:9
+  - .EVM.MultiInterpreter.executeSimple:10
+  - .EVM.MultiInterpreter.executeSimple:11
+  - .EVM.MultiInterpreter.executeSimple:12
+  - .EVM.MultiInterpreter.executeSimple:13
+  - .EVM.MultiInterpreter.executeSimple:14
+  - .EVM.MultiInterpreter.executeSimple:15
+  - .EVM.MultiInterpreter.executeSimple:16
+  - .EVM.MultiInterpreter.executeSimple:17
+  - .EVM.MultiInterpreter.executeSimple:18
+  - .EVM.MultiInterpreter.executeSimple:19
+  - .EVM.MultiInterpreter.executeSimple:20
+  - .EVM.MultiInterpreter.executeSimple:21
+  - .EVM.MultiInterpreter.executeSimple:22
+  - .EVM.MultiInterpreter.executeSimple:23
+  - .EVM.MultiInterpreter.executeSimple:24
+  - .EVM.MultiInterpreter.executeSimple:25
+  - .EVM.MultiInterpreter.executeSimple:26
+  - .EVM.MultiInterpreter.executeSimple:27
+  - .EVM.MultiInterpreter.executeSimple:28
+  - .EVM.MultiInterpreter.executeSimple:29
+  - .EVM.MultiInterpreter.executeSimple:30
+  - .EVM.MultiInterpreter.executeSimple:31
+  - .EVM.MultiInterpreter.executeSimple:32
+  - .EVM.MultiInterpreter.executeSimple:33
+  - .EVM.MultiInterpreter.executeSimple:34
+  - .EVM.MultiInterpreter.executeSimple:35
+  - .EVM.MultiInterpreter.executeSimple:36
+  - .EVM.MultiInterpreter.executeSimple:37
+  - .EVM.MultiInterpreter.executeSimple:38
+  - .EVM.MultiInterpreter.executeSimple:39
+  - .EVM.MultiInterpreter.executeSimple:40
+  - .EVM.MultiInterpreter.executeSimple:41
+  - .EVM.MultiInterpreter.executeSimple:42
+  - .EVM.MultiInterpreter.executeSimple:43
+  - .EVM.MultiInterpreter.executeSimple:44
+  - .EVM.MultiInterpreter.executeSimple:45
+  - .EVM.MultiInterpreter.executeSimple:46
+  - .EVM.MultiInterpreter.executeSimple:47
+  - .EVM.MultiInterpreter.executeSimple:48
+  - .EVM.MultiInterpreter.executeSimple:49
+  - .EVM.MultiInterpreter.executeSimple:50
+  - .EVM.MultiInterpreter.executeSimple:51
+  - .EVM.MultiInterpreter.executeSimple:52
+  - .EVM.MultiInterpreter.executeSimple:53
+  - .EVM.MultiInterpreter.executeSimple:54
+  - .EVM.MultiInterpreter.executeSimple:55
+  - .EVM.MultiInterpreter.executeSimple:56
+  - .EVM.MultiInterpreter.executeSimple:57
+  - .EVM.MultiInterpreter.executeSimple:58
+  - .EVM.MultiInterpreter.executeSimple:59
+  - .EVM.MultiInterpreter.executeSimple:60
+  - .EVM.MultiInterpreter.executeSimple:61
+  - .EVM.MultiInterpreter.executeSimple:62
+  - .EVM.MultiInterpreter.executeSimple:63
+  - .EVM.MultiInterpreter.executeSimple:64
+  - .EVM.MultiInterpreter.executeSimple:65
+  - .EVM.MultiInterpreter.executeSimple:66
+  - .EVM.MultiInterpreter.executeSimple:67
+  - .EVM.MultiInterpreter.executeSimple:68
+  - .EVM.MultiInterpreter.executeSimple:69
+  - .EVM.MultiInterpreter.executeSimple:70
+  - .EVM.MultiInterpreter.executeSimple:71
+  - .EVM.MultiInterpreter.executeSimple:72
+  - .EVM.MultiInterpreter.executeSimple:73
+  - .EVM.MultiInterpreter.executeSimple:74
+  - .EVM.MultiInterpreter.executeSimple:75
+  - .EVM.MultiInterpreter.executeSimple:76
+  - .EVM.MultiInterpreter.executeSimple:77
+  - .EVM.MultiInterpreter.executeSimple:78
+  - .EVM.MultiInterpreter.executeSimple:79
+  - .EVM.MultiInterpreter.executeSimple:80
+  - .EVM.MultiInterpreter.executeSimple:81
+  - .EVM.MultiInterpreter.executeSimple:82
+  - .EVM.MultiInterpreter.executeSimple:83
+  - .EVM.MultiInterpreter.executeSimple:84
+  - .EVM.MultiInterpreter.executeSimple:85
+  - .EVM.MultiInterpreter.executeSimple:86
+  - .EVM.MultiInterpreter.executeSimple:87
+  - .EVM.MultiInterpreter.executeSimple:88
+  - .EVM.MultiInterpreter.executeSimple:89
+  - .EVM.MultiInterpreter.executeSimple:90
+  - .EVM.MultiInterpreter.executeSimple:91
+  - .EVM.MultiInterpreter.executeSimple:92
+  - .EVM.MultiInterpreter.executeSimple:93
+  - .EVM.MultiInterpreter.executeSimple:94
+  - .EVM.MultiInterpreter.executeSimple:95
+  - .EVM.MultiInterpreter.executeSimple:96
+  - .EVM.MultiInterpreter.executeSimple:97
+  - .EVM.MultiInterpreter.executeSimple:98
+  - .EVM.MultiInterpreter.executeSimple:99
+  - .EVM.MultiInterpreter.executeSimple:100
+  - .EVM.MultiInterpreter.executeSimple:101
+  - .EVM.MultiInterpreter.executeSimple:102
+  - .EVM.MultiInterpreter.executeSimple:103
+  - .EVM.MultiInterpreter.executeSimple:104
+  - .EVM.MultiInterpreter.executeSimple:105
+  - .EVM.MultiInterpreter.executeSimple:106
+  - .EVM.MultiInterpreter.executeSimple:107
+  - .EVM.MultiInterpreter.executeSimple:108
+  - .EVM.MultiInterpreter.executeSimple:109
+  - .EVM.MultiInterpreter.executeSimple:110
+  - .EVM.MultiInterpreter.executeSimple:111
+  - .EVM.MultiInterpreter.executeSimple:112
+  - .EVM.MultiInterpreter.executeSimple:113
+  - .EVM.MultiInterpreter.executeSimple:114
+  - .EVM.MultiInterpreter.executeSimple:115
+  - .EVM.MultiInterpreter.executeSimple:116
+  - .EVM.MultiInterpreter.executeSimple:117
+  - .EVM.MultiInterpreter.executeSimple:118
+  - .EVM.MultiInterpreter.executeSimple:119
+  - .EVM.MultiInterpreter.executeSimple:120
+  - .EVM.MultiInterpreter.executeSimple:121
+  - .EVM.MultiInterpreter.executeSimple:122
+  - .EVM.MultiInterpreter.executeSimple:123
+  - .EVM.MultiInterpreter.executeSimple:124
+  - .EVM.MultiInterpreter.executeSimple:125
+  - .EVM.MultiInterpreter.executeSimple:126
+  - .EVM.MultiInterpreter.executeSimple:127
+  - .EVM.MultiInterpreter.executeSimple:128
+  - .EVM.MultiInterpreter.executeSimple:129
+  - .EVM.MultiInterpreter.executeSimple:130
+  - .EVM.MultiInterpreter.executeSimple:131
+  - .EVM.MultiInterpreter.executeSimple:132
+  - .EVM.MultiInterpreter.executeSimple:133
+  - .EVM.MultiInterpreter.executeSimple:134
+  - .EVM.MultiInterpreter.executeOp:0
+  - .EVM.MultiInterpreter.executeOp:1
+  - .EVM.MultiInterpreter.executeOp:2
+  - .EVM.MultiInterpreter.executeOp:3
+  - .EVM.MultiInterpreter.executeOp:4
+  - .EVM.MultiInterpreter.executeOp:5
+  - .EVM.MultiInterpreter.executeOp:6
+  - .EVM.MultiInterpreter.executeOp:7
+  - .EVM.MultiInterpreter.executeOp:8
+  - .EVM.MultiInterpreter.executeOp:9
+  - .EVM.MultiInterpreter.executeOp:10
+  - .EVM.MultiInterpreter.executeOp:11
+  - .EVM.MultiInterpreter.executeOp:12
+  - .EVM.MultiInterpreter.executeOp:13
+  - .EVM.MultiInterpreter.executeOp:14
+  - .EVM.MultiInterpreter.executeOp:15
+  - .EVM.MultiInterpreter.executeOp:16
+  - .EVM.MultiInterpreter.executeOp:17
+  - .EVM.MultiInterpreter.executeOp:18
+  - .EVM.MultiInterpreter.executeOp:19
+  - .EVM.MultiInterpreter.executeOp:20
+  - .EVM.MultiInterpreter.executeOp:21
+  - .EVM.MultiInterpreter.executeOp:22
+  - .EVM.MultiInterpreter.executeOp:23
+  - .EVM.MultiInterpreter.executeOp:24
+  - .EVM.MultiInterpreter.executeOp:25
+  - .EVM.MultiInterpreter.executeOp:26
+  - .EVM.MultiInterpreter.executeOp:27
+  - .EVM.MultiInterpreter.executeOp:28
+  - .EVM.MultiInterpreter.executeDelegateCall:0
+  - .EVM.MultiInterpreter.executeDelegateCall:1
+  - .EVM.MultiInterpreter.executeDelegateCall:2
+  - .EVM.MultiInterpreter.executeDelegateCall:3
+  - .EVM.MultiInterpreter.executeDelegateCall:4
+  - .EVM.MultiInterpreter.executeDelegateCall:5
+  - .EVM.MultiInterpreter.executeDelegateCall:6
+  - .EVM.MultiInterpreter.executeDelegateCall:7
+  - .EVM.MultiInterpreter.executeDelegateCall:8
+  - .EVM.MultiInterpreter.executeDelegateCall:9
+  - .EVM.MultiInterpreter.executeDelegateCall:10
+  - .EVM.MultiInterpreter.executeDelegateCall:11
+  - .EVM.MultiInterpreter.executeDelegateCall:12
+  - .EVM.MultiInterpreter.executeDelegateCall:13
+  - .EVM.MultiInterpreter.executeDelegateCall:14
+  - .EVM.MultiInterpreter.executeDelegateCall:15
+  - .EVM.MultiInterpreter.executeDelegateCall:16
+  - .EVM.MultiInterpreter.executeDelegateCall:17
+  - .EVM.MultiInterpreter.executeDelegateCall:18
+  - .EVM.MultiInterpreter.executeDelegateCall:19
+  - .EVM.MultiInterpreter.executeDelegateCall:20
+  - .EVM.MultiInterpreter.executeDelegateCall:21
+  - .EVM.MultiInterpreter.executeDelegateCall:22
+  - .EVM.MultiInterpreter.executeDelegateCall:23
+  - .EVM.MultiInterpreter.executeDelegateCall:24
+  - .EVM.MultiInterpreter.executeDelegateCall:25
+  - .EVM.MultiInterpreter.executeDelegateCall:26
+  - .EVM.MultiInterpreter.executeDelegateCall:27
+  - .EVM.MultiInterpreter.executeDelegateCall:28
+  - .EVM.MultiInterpreter.executeDelegateCall:29
+  - .EVM.MultiInterpreter.executeDelegateCall:30
+  - .EVM.MultiInterpreter.executeDelegateCall:31
+  - .EVM.MultiInterpreter.executeDelegateCall:32
+  - .EVM.MultiInterpreter.executeDelegateCall:33
+  - .EVM.MultiInterpreter.executeDelegateCall:34
+  - .EVM.MultiInterpreter.executeDelegateCall:35
+  - .EVM.MultiInterpreter.executeDelegateCall:36
+  - .EVM.MultiInterpreter.executeDelegateCall:37
+  - .EVM.MultiInterpreter.executeDelegateCall:38
+  - .EVM.MultiInterpreter.executeDelegateCall:39
+  - .EVM.MultiInterpreter.executeDelegateCall:40
+  - .EVM.MultiInterpreter.executeCall:0
+  - .EVM.MultiInterpreter.executeCall:1
+  - .EVM.MultiInterpreter.executeCall:2
+  - .EVM.MultiInterpreter.executeCall:3
+  - .EVM.MultiInterpreter.executeCall:4
+  - .EVM.MultiInterpreter.executeCall:5
+  - .EVM.MultiInterpreter.executeCall:6
+  - .EVM.MultiInterpreter.executeCall:7
+  - .EVM.MultiInterpreter.executeCall:8
+  - .EVM.MultiInterpreter.executeCall:9
+  - .EVM.MultiInterpreter.executeCall:10
+  - .EVM.MultiInterpreter.executeCall:11
+  - .EVM.MultiInterpreter.executeCall:12
+  - .EVM.MultiInterpreter.executeCall:13
+  - .EVM.MultiInterpreter.executeCall:14
+  - .EVM.MultiInterpreter.executeCall:15
+  - .EVM.MultiInterpreter.executeCall:16
+  - .EVM.MultiInterpreter.executeCall:17
+  - .EVM.MultiInterpreter.executeCall:18
+  - .EVM.MultiInterpreter.executeCall:19
+  - .EVM.MultiInterpreter.executeCall:20
+  - .EVM.MultiInterpreter.executeCall:21
+  - .EVM.MultiInterpreter.executeCall:22
+  - .EVM.MultiInterpreter.executeCall:23
+  - .EVM.MultiInterpreter.executeCall:24
+  - .EVM.MultiInterpreter.executeCall:25
+  - .EVM.MultiInterpreter.executeCall:26
+  - .EVM.MultiInterpreter.executeCall:27
+  - .EVM.MultiInterpreter.executeCall:28
+  - .EVM.MultiInterpreter.executeCall:29
+  - .EVM.MultiInterpreter.executeCall:30
+  - .EVM.MultiInterpreter.executeCall:31
+  - .EVM.MultiInterpreter.executeCall:32
+  - .EVM.MultiInterpreter.executeCall:33
+  - .EVM.MultiInterpreter.executeCall:34
+  - .EVM.MultiInterpreter.executeCall:35
+  - .EVM.MultiInterpreter.dupOp:0
+  - .EVM.MultiInterpreter.dupOp:1
+  - .EVM.MultiInterpreter.dupOp:2
+  - .EVM.MultiInterpreter.copyReturnData:0
+  - .EVM.MultiInterpreter.copyReturnData:1
+  - .EVM.MultiInterpreter.binaryOp:0
+  - .EVM.MultiInterpreter.MAX_CALL_DEPTH:0
+  - .EVM.WorldState.5147:7211:splitFirst:0
+  - .EVM.WorldState.5147:7211:splitFirst:1
+  - .EVM.WorldState.5147:7211:splitFirst:2
+  - .EVM.WorldState.5147:7210:parseLine:0
+  - .EVM.WorldState.5147:7210:parseLine:1
+  - .EVM.WorldState.5147:7210:parseLine:2
+  - .EVM.WorldState.5147:7210:parseLine:3
+  - .EVM.WorldState.4927:7001:parseHexDigits:0
+  - .EVM.WorldState.4927:7001:parseHexDigits:1
+  - .EVM.WorldState.4927:7001:parseHexDigits:2
+  - .EVM.WorldState.4927:7001:parseHexDigits:3
+  - .EVM.WorldState.4927:7000:hexVal:0
+  - .EVM.WorldState.4927:7000:hexVal:1
+  - .EVM.WorldState.4927:7000:hexVal:2
+  - .EVM.WorldState.4927:7000:hexVal:3
+  - .EVM.WorldState.4927:7000:hexVal:4
+  - .EVM.WorldState.4927:7000:hexVal:5
+  - .EVM.WorldState.4927:7000:hexVal:6
+  - .EVM.WorldState.4927:7000:hexVal:7
+  - .EVM.WorldState.4927:7000:hexVal:8
+  - .EVM.WorldState.4927:7000:hexVal:9
+  - .EVM.WorldState.4927:7000:hexVal:10
+  - .EVM.WorldState.4927:7000:hexVal:11
+  - .EVM.WorldState.4718:6802:hexDigit:0
+  - .EVM.WorldState.4718:6802:hexDigit:1
+  - .EVM.WorldState.4724:6859:goAcc:0
+  - .EVM.WorldState.4724:6859:goAcc:1
+  - .EVM.WorldState.4724:6859:goAcc:2
+  - .EVM.WorldState.4718:6801:go:0
+  - .EVM.WorldState.5393:7439:formatAccount:0
+  - .EVM.WorldState.5393:7439:formatAccount:1
+  - .EVM.WorldState.5393:7439:formatAccount:2
+  - .EVM.WorldState.toSimpleFormat:0
+  - .EVM.WorldState.setStorageAt:0
+  - .EVM.WorldState.setStorageAt:1
+  - .EVM.WorldState.setAccount:0
+  - .EVM.WorldState.intToHex:0
+  - .EVM.WorldState.hexToInt:0
+  - .EVM.WorldState.hexToInt:1
+  - .EVM.WorldState.getStorageAt:0
+  - .EVM.WorldState.getCode:0
+  - .EVM.WorldState.getAccount:0
+  - .EVM.WorldState.fromSimpleFormat:0
+  - .EVM.WorldState.emptyAccount:0
+  - .EVM.WorldState.empty:0
+  - .EVM.WorldState.deployContract:0
+  - .EVM.WorldState.addresses:0
+  - .EVM.WorldState.accountWithCode:0
+  - .EVM.Bytecode.4596:10002:showInstr:0
+  - .EVM.Bytecode.4596:10002:showInstr:1
+  - .EVM.Bytecode.4596:10002:showInstr:2
+  - .EVM.Bytecode.4096:9533:parseBytes:0
+  - .EVM.Bytecode.4096:9533:parseBytes:1
+  - .EVM.Bytecode.4096:9533:parseBytes:2
+  - .EVM.Bytecode.4096:9533:parseBytes:3
+  - .EVM.Bytecode.4455:9876:go:0
+  - .EVM.Bytecode.4455:9876:go:1
+  - .EVM.Bytecode.4455:9876:go:2
+  - .EVM.Bytecode.toHex:0
+  - .EVM.Bytecode.startsWith:0
+  - .EVM.Bytecode.startsWith:1
+  - .EVM.Bytecode.showHexByte:0
+  - .EVM.Bytecode.showDisassembly:0
+  - .EVM.Bytecode.readBytes:0
+  - .EVM.Bytecode.readAt:0
+  - .EVM.Bytecode.parseHexByte:0
+  - .EVM.Bytecode.padL:0
+  - .EVM.Bytecode.padL:1
+  - .EVM.Bytecode.nibbleToHex:0
+  - .EVM.Bytecode.nibbleToHex:1
+  - .EVM.Bytecode.isValidJumpDest:0
+  - .EVM.Bytecode.isValidJumpDest:1
+  - .EVM.Bytecode.indexAt:0
+  - .EVM.Bytecode.indexAt:1
+  - .EVM.Bytecode.indexAt:2
+  - .EVM.Bytecode.indexAt:3
+  - .EVM.Bytecode.hexNibble:0
+  - .EVM.Bytecode.hexNibble:1
+  - .EVM.Bytecode.hexNibble:2
+  - .EVM.Bytecode.hexNibble:3
+  - .EVM.Bytecode.hexNibble:4
+  - .EVM.Bytecode.hexNibble:5
+  - .EVM.Bytecode.hexNibble:6
+  - .EVM.Bytecode.hexNibble:7
+  - .EVM.Bytecode.hexNibble:8
+  - .EVM.Bytecode.hexNibble:9
+  - .EVM.Bytecode.hexNibble:10
+  - .EVM.Bytecode.hexNibble:11
+  - .EVM.Bytecode.fromHex:0
+  - .EVM.Bytecode.fromHex:1
+  - .EVM.Bytecode.disassemble:0
+  - .EVM.Bytecode.codeSize:0
+  - .EVM.Bytecode.byteToHex:0
+  - .EVM.Opcodes.show:0
+  - .EVM.Opcodes.show:1
+  - .EVM.Opcodes.show:2
+  - .EVM.Opcodes.show:3
+  - .EVM.Opcodes.show:4
+  - .EVM.Opcodes.show:5
+  - .EVM.Opcodes.show:6
+  - .EVM.Opcodes.show:7
+  - .EVM.Opcodes.show:8
+  - .EVM.Opcodes.show:9
+  - .EVM.Opcodes.show:10
+  - .EVM.Opcodes.show:11
+  - .EVM.Opcodes.show:12
+  - .EVM.Opcodes.show:13
+  - .EVM.Opcodes.show:14
+  - .EVM.Opcodes.show:15
+  - .EVM.Opcodes.show:16
+  - .EVM.Opcodes.show:17
+  - .EVM.Opcodes.show:18
+  - .EVM.Opcodes.show:19
+  - .EVM.Opcodes.show:20
+  - .EVM.Opcodes.show:21
+  - .EVM.Opcodes.show:22
+  - .EVM.Opcodes.show:23
+  - .EVM.Opcodes.show:24
+  - .EVM.Opcodes.show:25
+  - .EVM.Opcodes.show:26
+  - .EVM.Opcodes.show:27
+  - .EVM.Opcodes.show:28
+  - .EVM.Opcodes.show:29
+  - .EVM.Opcodes.show:30
+  - .EVM.Opcodes.show:31
+  - .EVM.Opcodes.show:32
+  - .EVM.Opcodes.show:33
+  - .EVM.Opcodes.show:34
+  - .EVM.Opcodes.show:35
+  - .EVM.Opcodes.show:36
+  - .EVM.Opcodes.show:37
+  - .EVM.Opcodes.show:38
+  - .EVM.Opcodes.show:39
+  - .EVM.Opcodes.show:40
+  - .EVM.Opcodes.show:41
+  - .EVM.Opcodes.show:42
+  - .EVM.Opcodes.show:43
+  - .EVM.Opcodes.show:44
+  - .EVM.Opcodes.show:45
+  - .EVM.Opcodes.show:46
+  - .EVM.Opcodes.show:47
+  - .EVM.Opcodes.show:48
+  - .EVM.Opcodes.show:49
+  - .EVM.Opcodes.show:50
+  - .EVM.Opcodes.show:51
+  - .EVM.Opcodes.show:52
+  - .EVM.Opcodes.show:53
+  - .EVM.Opcodes.show:54
+  - .EVM.Opcodes.show:55
+  - .EVM.Opcodes.show:56
+  - .EVM.Opcodes.show:57
+  - .EVM.Opcodes.show:58
+  - .EVM.Opcodes.show:59
+  - .EVM.Opcodes.show:60
+  - .EVM.Opcodes.show:61
+  - .EVM.Opcodes.show:62
+  - .EVM.Opcodes.show:63
+  - .EVM.Opcodes.show:64
+  - .EVM.Opcodes.show:65
+  - .EVM.Opcodes.show:66
+  - .EVM.Opcodes.show:67
+  - .EVM.Opcodes.show:68
+  - .EVM.Opcodes.show:69
+  - .EVM.Opcodes.show:70
+  - .EVM.Opcodes.show:71
+  - .EVM.Opcodes.show:72
+  - .EVM.Opcodes.show:73
+  - .EVM.Opcodes.show:74
+  - .EVM.Opcodes.show:75
+  - .EVM.Opcodes.show:76
+  - .EVM.Opcodes.show:77
+  - .EVM.Opcodes.show:78
+  - .EVM.Opcodes.show:79
+  - .EVM.Opcodes.show:80
+  - .EVM.Opcodes.show:81
+  - .EVM.Opcodes.show:82
+  - .EVM.Opcodes.show:83
+  - .EVM.Opcodes.show:84
+  - .EVM.Opcodes.show:85
+  - .EVM.Opcodes.show:86
+  - .EVM.Opcodes.show:87
+  - .EVM.Opcodes.show:88
+  - .EVM.Opcodes.show:89
+  - .EVM.Opcodes.show:90
+  - .EVM.Opcodes.show:91
+  - .EVM.Opcodes.show:92
+  - .EVM.Opcodes.show:93
+  - .EVM.Opcodes.show:94
+  - .EVM.Opcodes.show:95
+  - .EVM.Opcodes.show:96
+  - .EVM.Opcodes.show:97
+  - .EVM.Opcodes.show:98
+  - .EVM.Opcodes.show:99
+  - .EVM.Opcodes.show:100
+  - .EVM.Opcodes.show:101
+  - .EVM.Opcodes.show:102
+  - .EVM.Opcodes.show:103
+  - .EVM.Opcodes.show:104
+  - .EVM.Opcodes.show:105
+  - .EVM.Opcodes.show:106
+  - .EVM.Opcodes.show:107
+  - .EVM.Opcodes.show:108
+  - .EVM.Opcodes.show:109
+  - .EVM.Opcodes.show:110
+  - .EVM.Opcodes.show:111
+  - .EVM.Opcodes.show:112
+  - .EVM.Opcodes.show:113
+  - .EVM.Opcodes.show:114
+  - .EVM.Opcodes.show:115
+  - .EVM.Opcodes.show:116
+  - .EVM.Opcodes.show:117
+  - .EVM.Opcodes.show:118
+  - .EVM.Opcodes.show:119
+  - .EVM.Opcodes.show:120
+  - .EVM.Opcodes.show:121
+  - .EVM.Opcodes.show:122
+  - .EVM.Opcodes.show:123
+  - .EVM.Opcodes.show:124
+  - .EVM.Opcodes.show:125
+  - .EVM.Opcodes.show:126
+  - .EVM.Opcodes.show:127
+  - .EVM.Opcodes.show:128
+  - .EVM.Opcodes.show:129
+  - .EVM.Opcodes.show:130
+  - .EVM.Opcodes.show:131
+  - .EVM.Opcodes.show:132
+  - .EVM.Opcodes.show:133
+  - .EVM.Opcodes.show:134
+  - .EVM.Opcodes.show:135
+  - .EVM.Opcodes.show:136
+  - .EVM.Opcodes.show:137
+  - .EVM.Opcodes.show:138
+  - .EVM.Opcodes.show:139
+  - .EVM.Opcodes.show:140
+  - .EVM.Opcodes.show:141
+  - .EVM.Opcodes.show:142
+  - .EVM.Opcodes.show:143
+  - .EVM.Opcodes.show:144
+  - .EVM.Opcodes.show:145
+  - .EVM.Opcodes.show:146
+  - .EVM.Opcodes.show:147
+  - .EVM.Opcodes.show:148
+  - .EVM.Opcodes.show:149
+  - .EVM.Opcodes.pushSize:0
+  - .EVM.Opcodes.pushSize:1
+  - .EVM.Opcodes.pushSize:2
+  - .EVM.Opcodes.pushSize:3
+  - .EVM.Opcodes.pushSize:4
+  - .EVM.Opcodes.pushSize:5
+  - .EVM.Opcodes.pushSize:6
+  - .EVM.Opcodes.pushSize:7
+  - .EVM.Opcodes.pushSize:8
+  - .EVM.Opcodes.pushSize:9
+  - .EVM.Opcodes.pushSize:10
+  - .EVM.Opcodes.pushSize:11
+  - .EVM.Opcodes.pushSize:12
+  - .EVM.Opcodes.pushSize:13
+  - .EVM.Opcodes.pushSize:14
+  - .EVM.Opcodes.pushSize:15
+  - .EVM.Opcodes.pushSize:16
+  - .EVM.Opcodes.pushSize:17
+  - .EVM.Opcodes.pushSize:18
+  - .EVM.Opcodes.pushSize:19
+  - .EVM.Opcodes.pushSize:20
+  - .EVM.Opcodes.pushSize:21
+  - .EVM.Opcodes.pushSize:22
+  - .EVM.Opcodes.pushSize:23
+  - .EVM.Opcodes.pushSize:24
+  - .EVM.Opcodes.pushSize:25
+  - .EVM.Opcodes.pushSize:26
+  - .EVM.Opcodes.pushSize:27
+  - .EVM.Opcodes.pushSize:28
+  - .EVM.Opcodes.pushSize:29
+  - .EVM.Opcodes.pushSize:30
+  - .EVM.Opcodes.pushSize:31
+  - .EVM.Opcodes.pushSize:32
+  - .EVM.Opcodes.isPush:0
+  - .EVM.Opcodes.isPush:1
+  - .EVM.Opcodes.isPush:2
+  - .EVM.Opcodes.isPush:3
+  - .EVM.Opcodes.isPush:4
+  - .EVM.Opcodes.isPush:5
+  - .EVM.Opcodes.isPush:6
+  - .EVM.Opcodes.isPush:7
+  - .EVM.Opcodes.isPush:8
+  - .EVM.Opcodes.isPush:9
+  - .EVM.Opcodes.isPush:10
+  - .EVM.Opcodes.isPush:11
+  - .EVM.Opcodes.isPush:12
+  - .EVM.Opcodes.isPush:13
+  - .EVM.Opcodes.isPush:14
+  - .EVM.Opcodes.isPush:15
+  - .EVM.Opcodes.isPush:16
+  - .EVM.Opcodes.isPush:17
+  - .EVM.Opcodes.isPush:18
+  - .EVM.Opcodes.isPush:19
+  - .EVM.Opcodes.isPush:20
+  - .EVM.Opcodes.isPush:21
+  - .EVM.Opcodes.isPush:22
+  - .EVM.Opcodes.isPush:23
+  - .EVM.Opcodes.isPush:24
+  - .EVM.Opcodes.isPush:25
+  - .EVM.Opcodes.isPush:26
+  - .EVM.Opcodes.isPush:27
+  - .EVM.Opcodes.isPush:28
+  - .EVM.Opcodes.isPush:29
+  - .EVM.Opcodes.isPush:30
+  - .EVM.Opcodes.isPush:31
+  - .EVM.Opcodes.isPush:32
+  - .EVM.Opcodes.fromByte:0
+  - .EVM.Opcodes.fromByte:1
+  - .EVM.Opcodes.fromByte:2
+  - .EVM.Opcodes.fromByte:3
+  - .EVM.Opcodes.fromByte:4
+  - .EVM.Opcodes.fromByte:5
+  - .EVM.Opcodes.fromByte:6
+  - .EVM.Opcodes.fromByte:7
+  - .EVM.Opcodes.fromByte:8
+  - .EVM.Opcodes.fromByte:9
+  - .EVM.Opcodes.fromByte:10
+  - .EVM.Opcodes.fromByte:11
+  - .EVM.Opcodes.fromByte:12
+  - .EVM.Opcodes.fromByte:13
+  - .EVM.Opcodes.fromByte:14
+  - .EVM.Opcodes.fromByte:15
+  - .EVM.Opcodes.fromByte:16
+  - .EVM.Opcodes.fromByte:17
+  - .EVM.Opcodes.fromByte:18
+  - .EVM.Opcodes.fromByte:19
+  - .EVM.Opcodes.fromByte:20
+  - .EVM.Opcodes.fromByte:21
+  - .EVM.Opcodes.fromByte:22
+  - .EVM.Opcodes.fromByte:23
+  - .EVM.Opcodes.fromByte:24
+  - .EVM.Opcodes.fromByte:25
+  - .EVM.Opcodes.fromByte:26
+  - .EVM.Opcodes.fromByte:27
+  - .EVM.Opcodes.fromByte:28
+  - .EVM.Opcodes.fromByte:29
+  - .EVM.Opcodes.fromByte:30
+  - .EVM.Opcodes.fromByte:31
+  - .EVM.Opcodes.fromByte:32
+  - .EVM.Opcodes.fromByte:33
+  - .EVM.Opcodes.fromByte:34
+  - .EVM.Opcodes.fromByte:35
+  - .EVM.Opcodes.fromByte:36
+  - .EVM.Opcodes.fromByte:37
+  - .EVM.Opcodes.fromByte:38
+  - .EVM.Opcodes.fromByte:39
+  - .EVM.Opcodes.fromByte:40
+  - .EVM.Opcodes.fromByte:41
+  - .EVM.Opcodes.fromByte:42
+  - .EVM.Opcodes.fromByte:43
+  - .EVM.Opcodes.fromByte:44
+  - .EVM.Opcodes.fromByte:45
+  - .EVM.Opcodes.fromByte:46
+  - .EVM.Opcodes.fromByte:47
+  - .EVM.Opcodes.fromByte:48
+  - .EVM.Opcodes.fromByte:49
+  - .EVM.Opcodes.fromByte:50
+  - .EVM.Opcodes.fromByte:51
+  - .EVM.Opcodes.fromByte:52
+  - .EVM.Opcodes.fromByte:53
+  - .EVM.Opcodes.fromByte:54
+  - .EVM.Opcodes.fromByte:55
+  - .EVM.Opcodes.fromByte:56
+  - .EVM.Opcodes.fromByte:57
+  - .EVM.Opcodes.fromByte:58
+  - .EVM.Opcodes.fromByte:59
+  - .EVM.Opcodes.fromByte:60
+  - .EVM.Opcodes.fromByte:61
+  - .EVM.Opcodes.fromByte:62
+  - .EVM.Opcodes.fromByte:63
+  - .EVM.Opcodes.fromByte:64
+  - .EVM.Opcodes.fromByte:65
+  - .EVM.Opcodes.fromByte:66
+  - .EVM.Opcodes.fromByte:67
+  - .EVM.Opcodes.fromByte:68
+  - .EVM.Opcodes.fromByte:69
+  - .EVM.Opcodes.fromByte:70
+  - .EVM.Opcodes.fromByte:71
+  - .EVM.Opcodes.fromByte:72
+  - .EVM.Opcodes.fromByte:73
+  - .EVM.Opcodes.fromByte:74
+  - .EVM.Opcodes.fromByte:75
+  - .EVM.Opcodes.fromByte:76
+  - .EVM.Opcodes.fromByte:77
+  - .EVM.Opcodes.fromByte:78
+  - .EVM.Opcodes.fromByte:79
+  - .EVM.Opcodes.fromByte:80
+  - .EVM.Opcodes.fromByte:81
+  - .EVM.Opcodes.fromByte:82
+  - .EVM.Opcodes.fromByte:83
+  - .EVM.Opcodes.fromByte:84
+  - .EVM.Opcodes.fromByte:85
+  - .EVM.Opcodes.fromByte:86
+  - .EVM.Opcodes.fromByte:87
+  - .EVM.Opcodes.fromByte:88
+  - .EVM.Opcodes.fromByte:89
+  - .EVM.Opcodes.fromByte:90
+  - .EVM.Opcodes.fromByte:91
+  - .EVM.Opcodes.fromByte:92
+  - .EVM.Opcodes.fromByte:93
+  - .EVM.Opcodes.fromByte:94
+  - .EVM.Opcodes.fromByte:95
+  - .EVM.Opcodes.fromByte:96
+  - .EVM.Opcodes.fromByte:97
+  - .EVM.Opcodes.fromByte:98
+  - .EVM.Opcodes.fromByte:99
+  - .EVM.Opcodes.fromByte:100
+  - .EVM.Opcodes.fromByte:101
+  - .EVM.Opcodes.fromByte:102
+  - .EVM.Opcodes.fromByte:103
+  - .EVM.Opcodes.fromByte:104
+  - .EVM.Opcodes.fromByte:105
+  - .EVM.Opcodes.fromByte:106
+  - .EVM.Opcodes.fromByte:107
+  - .EVM.Opcodes.fromByte:108
+  - .EVM.Opcodes.fromByte:109
+  - .EVM.Opcodes.fromByte:110
+  - .EVM.Opcodes.fromByte:111
+  - .EVM.Opcodes.fromByte:112
+  - .EVM.Opcodes.fromByte:113
+  - .EVM.Opcodes.fromByte:114
+  - .EVM.Opcodes.fromByte:115
+  - .EVM.Opcodes.fromByte:116
+  - .EVM.Opcodes.fromByte:117
+  - .EVM.Opcodes.fromByte:118
+  - .EVM.Opcodes.fromByte:119
+  - .EVM.Opcodes.fromByte:120
+  - .EVM.Opcodes.fromByte:121
+  - .EVM.Opcodes.fromByte:122
+  - .EVM.Opcodes.fromByte:123
+  - .EVM.Opcodes.fromByte:124
+  - .EVM.Opcodes.fromByte:125
+  - .EVM.Opcodes.fromByte:126
+  - .EVM.Opcodes.fromByte:127
+  - .EVM.Opcodes.fromByte:128
+  - .EVM.Opcodes.fromByte:129
+  - .EVM.Opcodes.fromByte:130
+  - .EVM.Opcodes.fromByte:131
+  - .EVM.Opcodes.fromByte:132
+  - .EVM.Opcodes.fromByte:133
+  - .EVM.Opcodes.fromByte:134
+  - .EVM.Opcodes.fromByte:135
+  - .EVM.Opcodes.fromByte:136
+  - .EVM.Opcodes.fromByte:137
+  - .EVM.Opcodes.fromByte:138
+  - .EVM.Opcodes.fromByte:139
+  - .EVM.Opcodes.fromByte:140
+  - .EVM.Opcodes.fromByte:141
+  - .EVM.Opcodes.fromByte:142
+  - .EVM.Opcodes.fromByte:143
+  - .EVM.Opcodes.fromByte:144
+  - .EVM.Opcodes.fromByte:145
+  - .EVM.Opcodes.fromByte:146
+  - .EVM.Opcodes.fromByte:147
+  - .EVM.Opcodes.fromByte:148
+  - .EVM.Storage.case block in parseJSONPairs,parsePair:0
+  - .EVM.Storage.case block in parseJSONPairs,parsePair:1
+  - .EVM.Storage.4880:7050:splitOnColon:0
+  - .EVM.Storage.5064:7225:parsePairToSlot:0
+  - .EVM.Storage.4880:7049:parsePair:0
+  - .EVM.Storage.4601:6785:parseHexDigits:0
+  - .EVM.Storage.4601:6785:parseHexDigits:1
+  - .EVM.Storage.4601:6785:parseHexDigits:2
+  - .EVM.Storage.4601:6785:parseHexDigits:3
+  - .EVM.Storage.4601:6784:hexVal:0
+  - .EVM.Storage.4601:6784:hexVal:1
+  - .EVM.Storage.4601:6784:hexVal:2
+  - .EVM.Storage.4601:6784:hexVal:3
+  - .EVM.Storage.4601:6784:hexVal:4
+  - .EVM.Storage.4601:6784:hexVal:5
+  - .EVM.Storage.4601:6784:hexVal:6
+  - .EVM.Storage.4601:6784:hexVal:7
+  - .EVM.Storage.4601:6784:hexVal:8
+  - .EVM.Storage.4601:6784:hexVal:9
+  - .EVM.Storage.4601:6784:hexVal:10
+  - .EVM.Storage.4601:6784:hexVal:11
+  - .EVM.Storage.4476:6664:hexDigit:0
+  - .EVM.Storage.4476:6664:hexDigit:1
+  - .EVM.Storage.4482:6721:goAcc:0
+  - .EVM.Storage.4482:6721:goAcc:1
+  - .EVM.Storage.4482:6721:goAcc:2
+  - .EVM.Storage.4888:7056:go:0
+  - .EVM.Storage.4888:7056:go:1
+  - .EVM.Storage.4888:7056:go:2
+  - .EVM.Storage.4476:6663:go:0
+  - .EVM.Storage.toList:0
+  - .EVM.Storage.toJSON:0
+  - .EVM.Storage.sstore:0
+  - .EVM.Storage.sload:0
+  - .EVM.Storage.parseJSONPairs:0
+  - .EVM.Storage.parseJSONPairs:1
+  - .EVM.Storage.parseJSONPairs:2
+  - .EVM.Storage.parseJSONPairs:3
+  - .EVM.Storage.intToHex:0
+  - .EVM.Storage.hexToInt:0
+  - .EVM.Storage.hexToInt:1
+  - .EVM.Storage.fromJSON:0
+  - .EVM.Storage.empty:0
+  - .EVM.Word256.case block in compare:0
+  - .EVM.Word256.case block in compare:1
+  - .EVM.Word256.case block in compare:2
+  - .EVM.Word256.5521:4213:toSigned:0
+  - .EVM.Word256.5521:4213:toSigned:1
+  - .EVM.Word256.show:0
+  - .EVM.Word256.compare:0
+  - .EVM.Word256.compare:1
+  - .EVM.Word256.>:0
+  - .EVM.Word256.:0
+  - .EVM.Word256.:1
+  - .EVM.Word256.:2
+  - .EVM.Word256.:3
+  - .EVM.Word256.:4
+  - .EVM.Word256.:5
+  - .EVM.Word256.<:0
+  - .EVM.Word256./:0
+  - .EVM.Word256./:1
+  - .EVM.Word256.zero:0
+  - .EVM.Word256.xor:0
+  - .EVM.Word256.xor:1
+  - .EVM.Word256.xor:2
+  - .EVM.Word256.xor:3
+  - .EVM.Word256.toInteger:0
+  - .EVM.Word256.toInteger:1
+  - .EVM.Word256.toHexStr:0
+  - .EVM.Word256.toHexStr:1
+  - .EVM.Word256.toHexGo:0
+  - .EVM.Word256.sub:0
+  - .EVM.Word256.shr:0
+  - .EVM.Word256.shr:1
+  - .EVM.Word256.shl:0
+  - .EVM.Word256.shl:1
+  - .EVM.Word256.sdiv:0
+  - .EVM.Word256.sdiv:1
+  - .EVM.Word256.or:0
+  - .EVM.Word256.or:1
+  - .EVM.Word256.or:2
+  - .EVM.Word256.or:3
+  - .EVM.Word256.one:0
+  - .EVM.Word256.not:0
+  - .EVM.Word256.not:1
+  - .EVM.Word256.mul:0
+  - .EVM.Word256.mod:0
+  - .EVM.Word256.mod:1
+  - .EVM.Word256.mask256:0
+  - .EVM.Word256.mask128:0
+  - .EVM.Word256.lt:0
+  - .EVM.Word256.lt:1
+  - .EVM.Word256.iszero:0
+  - .EVM.Word256.iszero:1
+  - .EVM.Word256.intPow:0
+  - .EVM.Word256.hexDigit:0
+  - .EVM.Word256.hexDigit:1
+  - .EVM.Word256.gt:0
+  - .EVM.Word256.gt:1
+  - .EVM.Word256.fromInteger:0
+  - .EVM.Word256.eq:0
+  - .EVM.Word256.eq:1
+  - .EVM.Word256.div:0
+  - .EVM.Word256.div:1
+  - .EVM.Word256.byte:0
+  - .EVM.Word256.byte:1
+  - .EVM.Word256.and:0
+  - .EVM.Word256.and:1
+  - .EVM.Word256.and:2
+  - .EVM.Word256.and:3
+  - .EVM.Word256.add:0
+  - .EVM.Memory.writeWordGo:0
+  - .EVM.Memory.writeWord:0
+  - .EVM.Memory.writeBytes:0
+  - .EVM.Memory.writeBytes:1
+  - .EVM.Memory.writeByte:0
+  - .EVM.Memory.writeByte:1
+  - .EVM.Memory.readWord:0
+  - .EVM.Memory.readByte:0
+  - .EVM.Memory.natDiv:0
+  - .EVM.Memory.natDiv:1
+  - .EVM.Memory.mstore:0
+  - .EVM.Memory.mload:0
+  - .EVM.Memory.memorySize:0
+  - .EVM.Memory.expand:0
+  - .EVM.Memory.expand:1
+  - .EVM.Memory.expand:2
+  - .EVM.Memory.expand:3
+  - .EVM.Memory.empty:0
+  - .EVM.Stack.>>:0
+  - .EVM.Stack.>>:1
+  - .EVM.Stack.>>:2
+  - .EVM.Stack.swap:0
+  - .EVM.Stack.swap:1
+  - .EVM.Stack.swap:2
+  - .EVM.Stack.swap:3
+  - .EVM.Stack.swap:4
+  - .EVM.Stack.replaceAt:0
+  - .EVM.Stack.replaceAt:1
+  - .EVM.Stack.replaceAt:2
+  - .EVM.Stack.replaceAt:3
+  - .EVM.Stack.push:0
+  - .EVM.Stack.push:1
+  - .EVM.Stack.popN:0
+  - .EVM.Stack.popN:1
+  - .EVM.Stack.popN:2
+  - .EVM.Stack.pop:0
+  - .EVM.Stack.pop:1
+  - .EVM.Stack.peekN:0
+  - .EVM.Stack.peekN:1
+  - .EVM.Stack.indexAt:0
+  - .EVM.Stack.indexAt:1
+  - .EVM.Stack.indexAt:2
+  - .EVM.Stack.indexAt:3
+  - .EVM.Stack.dup:0
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in executeOp:6
+  - .EVM.Interpreter.case block in executeOp:7
+  - .EVM.Interpreter.case block in executeOp:8
+  - .EVM.Interpreter.case block in executeOp:9
+  - .EVM.Interpreter.case block in executeOp:10
+  - .EVM.Interpreter.case block in executeOp:11
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in executeOp:6
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in executeOp:6
+  - .EVM.Interpreter.case block in executeOp:7
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in executeOp:6
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in executeOp:6
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in executeOp:6
+  - .EVM.Interpreter.case block in executeOp:7
+  - .EVM.Interpreter.case block in executeOp:8
+  - .EVM.Interpreter.case block in executeOp:9
+  - .EVM.Interpreter.case block in executeOp:0
+  - .EVM.Interpreter.case block in executeOp:1
+  - .EVM.Interpreter.case block in executeOp:2
+  - .EVM.Interpreter.case block in executeOp:3
+  - .EVM.Interpreter.case block in executeOp:4
+  - .EVM.Interpreter.case block in executeOp:5
+  - .EVM.Interpreter.case block in case block in callStub:0
+  - .EVM.Interpreter.case block in case block in callStub:1
+  - .EVM.Interpreter.case block in case block in callStub:2
+  - .EVM.Interpreter.case block in case block in callStub:3
+  - .EVM.Interpreter.case block in callStub:0
+  - .EVM.Interpreter.case block in callStub:1
+  - .EVM.Interpreter.case block in callStub:2
+  - .EVM.Interpreter.case block in callStub:3
+  - .EVM.Interpreter.case block in callStub:4
+  - .EVM.Interpreter.case block in callStub:5
+  - .EVM.Interpreter.case block in createStub:0
+  - .EVM.Interpreter.case block in createStub:1
+  - .EVM.Interpreter.case block in createStub:2
+  - .EVM.Interpreter.case block in createStub:3
+  - .EVM.Interpreter.case block in revertOp:0
+  - .EVM.Interpreter.case block in revertOp:1
+  - .EVM.Interpreter.case block in revertOp:2
+  - .EVM.Interpreter.case block in revertOp:3
+  - .EVM.Interpreter.case block in revertOp:4
+  - .EVM.Interpreter.case block in revertOp:5
+  - .EVM.Interpreter.case block in revertOp:6
+  - .EVM.Interpreter.case block in returnOp:0
+  - .EVM.Interpreter.case block in returnOp:1
+  - .EVM.Interpreter.case block in returnOp:2
+  - .EVM.Interpreter.case block in returnOp:3
+  - .EVM.Interpreter.case block in returnOp:4
+  - .EVM.Interpreter.case block in returnOp:5
+  - .EVM.Interpreter.case block in returnOp:6
+  - .EVM.Interpreter.case block in binaryOp:0
+  - .EVM.Interpreter.case block in binaryOp:1
+  - .EVM.Interpreter.case block in binaryOp:2
+  - .EVM.Interpreter.case block in binaryOp:3
+  - .EVM.Interpreter.case block in binaryOp:4
+  - .EVM.Interpreter.case block in binaryOp:5
+  - .EVM.Interpreter.case block in binaryOp:6
+  - .EVM.Interpreter.case block in unaryOp:0
+  - .EVM.Interpreter.case block in unaryOp:1
+  - .EVM.Interpreter.case block in unaryOp:2
+  - .EVM.Interpreter.case block in unaryOp:3
+  - .EVM.Interpreter.6690:5457:simpleHash:0
+  - .EVM.Interpreter.6690:5456:hashWord:0
+  - .EVM.Interpreter.6690:5455:hash256:0
+  - .EVM.Interpreter.6690:5454:h4:0
+  - .EVM.Interpreter.6690:5453:h3:0
+  - .EVM.Interpreter.6690:5452:h2:0
+  - .EVM.Interpreter.6690:5451:h1:0
+  - .EVM.Interpreter.8033:6683:go:0
+  - .EVM.Interpreter.8033:6683:go:1
+  - .EVM.Interpreter.8033:6683:go:2
+  - .EVM.Interpreter.8033:6683:go:3
+  - .EVM.Interpreter.8033:6683:go:4
+  - .EVM.Interpreter.8033:6683:go:5
+  - .EVM.Interpreter.8033:6683:go:6
+  - .EVM.Interpreter.8033:6683:go:7
+  - .EVM.Interpreter.8033:6683:go:8
+  - .EVM.Interpreter.8033:6683:go:9
+  - .EVM.Interpreter.8033:6683:go:10
+  - .EVM.Interpreter.8033:6683:go:11
+  - .EVM.Interpreter.8033:6683:go:12
+  - .EVM.Interpreter.8033:6683:go:13
+  - .EVM.Interpreter.8033:6683:go:14
+  - .EVM.Interpreter.8033:6683:go:15
+  - .EVM.Interpreter.8033:6683:go:16
+  - .EVM.Interpreter.8033:6683:go:17
+  - .EVM.Interpreter.8033:6683:go:18
+  - .EVM.Interpreter.8033:6683:go:19
+  - .EVM.Interpreter.8033:6683:go:20
+  - .EVM.Interpreter.8033:6683:go:21
+  - .EVM.Interpreter.8033:6683:go:22
+  - .EVM.Interpreter.8033:6683:go:23
+  - .EVM.Interpreter.show:0
+  - .EVM.Interpreter.show:1
+  - .EVM.Interpreter.show:2
+  - .EVM.Interpreter.show:3
+  - .EVM.Interpreter.show:4
+  - .EVM.Interpreter.unaryOp:0
+  - .EVM.Interpreter.toByteList:0
+  - .EVM.Interpreter.swapOp:0
+  - .EVM.Interpreter.swapOp:1
+  - .EVM.Interpreter.swapOp:2
+  - .EVM.Interpreter.step:0
+  - .EVM.Interpreter.step:1
+  - .EVM.Interpreter.step:2
+  - .EVM.Interpreter.step:3
+  - .EVM.Interpreter.step:4
+  - .EVM.Interpreter.step:5
+  - .EVM.Interpreter.step:6
+  - .EVM.Interpreter.step:7
+  - .EVM.Interpreter.step:8
+  - .EVM.Interpreter.step:9
+  - .EVM.Interpreter.step:10
+  - .EVM.Interpreter.step:11
+  - .EVM.Interpreter.step:12
+  - .EVM.Interpreter.step:13
+  - .EVM.Interpreter.step:14
+  - .EVM.Interpreter.step:15
+  - .EVM.Interpreter.step:16
+  - .EVM.Interpreter.step:17
+  - .EVM.Interpreter.step:18
+  - .EVM.Interpreter.runWithTrace:0
+  - .EVM.Interpreter.run:0
+  - .EVM.Interpreter.run:1
+  - .EVM.Interpreter.run:2
+  - .EVM.Interpreter.revertOp:0
+  - .EVM.Interpreter.returnOp:0
+  - .EVM.Interpreter.readPushData:0
+  - .EVM.Interpreter.pushVal:0
+  - .EVM.Interpreter.pushVal:1
+  - .EVM.Interpreter.pushVal:2
+  - .EVM.Interpreter.logOp:0
+  - .EVM.Interpreter.logOp:1
+  - .EVM.Interpreter.logOp:2
+  - .EVM.Interpreter.logOp:3
+  - .EVM.Interpreter.initVMWithStorage:0
+  - .EVM.Interpreter.executeWithTrace:0
+  - .EVM.Interpreter.executeOp:0
+  - .EVM.Interpreter.executeOp:1
+  - .EVM.Interpreter.executeOp:2
+  - .EVM.Interpreter.executeOp:3
+  - .EVM.Interpreter.executeOp:4
+  - .EVM.Interpreter.executeOp:5
+  - .EVM.Interpreter.executeOp:6
+  - .EVM.Interpreter.executeOp:7
+  - .EVM.Interpreter.executeOp:8
+  - .EVM.Interpreter.executeOp:9
+  - .EVM.Interpreter.executeOp:10
+  - .EVM.Interpreter.executeOp:11
+  - .EVM.Interpreter.executeOp:12
+  - .EVM.Interpreter.executeOp:13
+  - .EVM.Interpreter.executeOp:14
+  - .EVM.Interpreter.executeOp:15
+  - .EVM.Interpreter.executeOp:16
+  - .EVM.Interpreter.executeOp:17
+  - .EVM.Interpreter.executeOp:18
+  - .EVM.Interpreter.executeOp:19
+  - .EVM.Interpreter.executeOp:20
+  - .EVM.Interpreter.executeOp:21
+  - .EVM.Interpreter.executeOp:22
+  - .EVM.Interpreter.executeOp:23
+  - .EVM.Interpreter.executeOp:24
+  - .EVM.Interpreter.executeOp:25
+  - .EVM.Interpreter.executeOp:26
+  - .EVM.Interpreter.executeOp:27
+  - .EVM.Interpreter.executeOp:28
+  - .EVM.Interpreter.executeOp:29
+  - .EVM.Interpreter.executeOp:30
+  - .EVM.Interpreter.executeOp:31
+  - .EVM.Interpreter.executeOp:32
+  - .EVM.Interpreter.executeOp:33
+  - .EVM.Interpreter.executeOp:34
+  - .EVM.Interpreter.executeOp:35
+  - .EVM.Interpreter.executeOp:36
+  - .EVM.Interpreter.executeOp:37
+  - .EVM.Interpreter.executeOp:38
+  - .EVM.Interpreter.executeOp:39
+  - .EVM.Interpreter.executeOp:40
+  - .EVM.Interpreter.executeOp:41
+  - .EVM.Interpreter.executeOp:42
+  - .EVM.Interpreter.executeOp:43
+  - .EVM.Interpreter.executeOp:44
+  - .EVM.Interpreter.executeOp:45
+  - .EVM.Interpreter.executeOp:46
+  - .EVM.Interpreter.executeOp:47
+  - .EVM.Interpreter.executeOp:48
+  - .EVM.Interpreter.executeOp:49
+  - .EVM.Interpreter.executeOp:50
+  - .EVM.Interpreter.executeOp:51
+  - .EVM.Interpreter.executeOp:52
+  - .EVM.Interpreter.executeOp:53
+  - .EVM.Interpreter.executeOp:54
+  - .EVM.Interpreter.executeOp:55
+  - .EVM.Interpreter.executeOp:56
+  - .EVM.Interpreter.executeOp:57
+  - .EVM.Interpreter.executeOp:58
+  - .EVM.Interpreter.executeOp:59
+  - .EVM.Interpreter.executeOp:60
+  - .EVM.Interpreter.executeOp:61
+  - .EVM.Interpreter.executeOp:62
+  - .EVM.Interpreter.executeOp:63
+  - .EVM.Interpreter.executeOp:64
+  - .EVM.Interpreter.executeOp:65
+  - .EVM.Interpreter.executeOp:66
+  - .EVM.Interpreter.executeOp:67
+  - .EVM.Interpreter.executeOp:68
+  - .EVM.Interpreter.executeOp:69
+  - .EVM.Interpreter.executeOp:70
+  - .EVM.Interpreter.executeOp:71
+  - .EVM.Interpreter.executeOp:72
+  - .EVM.Interpreter.executeOp:73
+  - .EVM.Interpreter.executeOp:74
+  - .EVM.Interpreter.executeOp:75
+  - .EVM.Interpreter.executeOp:76
+  - .EVM.Interpreter.executeOp:77
+  - .EVM.Interpreter.executeOp:78
+  - .EVM.Interpreter.executeOp:79
+  - .EVM.Interpreter.executeOp:80
+  - .EVM.Interpreter.executeOp:81
+  - .EVM.Interpreter.executeOp:82
+  - .EVM.Interpreter.executeOp:83
+  - .EVM.Interpreter.executeOp:84
+  - .EVM.Interpreter.executeOp:85
+  - .EVM.Interpreter.executeOp:86
+  - .EVM.Interpreter.executeOp:87
+  - .EVM.Interpreter.executeOp:88
+  - .EVM.Interpreter.executeOp:89
+  - .EVM.Interpreter.executeOp:90
+  - .EVM.Interpreter.executeOp:91
+  - .EVM.Interpreter.executeOp:92
+  - .EVM.Interpreter.executeOp:93
+  - .EVM.Interpreter.executeOp:94
+  - .EVM.Interpreter.executeOp:95
+  - .EVM.Interpreter.executeOp:96
+  - .EVM.Interpreter.executeOp:97
+  - .EVM.Interpreter.executeOp:98
+  - .EVM.Interpreter.executeOp:99
+  - .EVM.Interpreter.executeOp:100
+  - .EVM.Interpreter.executeOp:101
+  - .EVM.Interpreter.executeOp:102
+  - .EVM.Interpreter.executeDupSwap:0
+  - .EVM.Interpreter.executeDupSwap:1
+  - .EVM.Interpreter.executeDupSwap:2
+  - .EVM.Interpreter.executeDupSwap:3
+  - .EVM.Interpreter.executeDupSwap:4
+  - .EVM.Interpreter.executeDupSwap:5
+  - .EVM.Interpreter.executeDupSwap:6
+  - .EVM.Interpreter.executeDupSwap:7
+  - .EVM.Interpreter.executeDupSwap:8
+  - .EVM.Interpreter.executeDupSwap:9
+  - .EVM.Interpreter.executeDupSwap:10
+  - .EVM.Interpreter.executeDupSwap:11
+  - .EVM.Interpreter.executeDupSwap:12
+  - .EVM.Interpreter.executeDupSwap:13
+  - .EVM.Interpreter.executeDupSwap:14
+  - .EVM.Interpreter.executeDupSwap:15
+  - .EVM.Interpreter.executeDupSwap:16
+  - .EVM.Interpreter.executeDupSwap:17
+  - .EVM.Interpreter.executeDupSwap:18
+  - .EVM.Interpreter.executeDupSwap:19
+  - .EVM.Interpreter.executeDupSwap:20
+  - .EVM.Interpreter.executeDupSwap:21
+  - .EVM.Interpreter.executeDupSwap:22
+  - .EVM.Interpreter.executeDupSwap:23
+  - .EVM.Interpreter.executeDupSwap:24
+  - .EVM.Interpreter.executeDupSwap:25
+  - .EVM.Interpreter.executeDupSwap:26
+  - .EVM.Interpreter.executeDupSwap:27
+  - .EVM.Interpreter.executeDupSwap:28
+  - .EVM.Interpreter.executeDupSwap:29
+  - .EVM.Interpreter.executeDupSwap:30
+  - .EVM.Interpreter.executeDupSwap:31
+  - .EVM.Interpreter.executeDupSwap:32
+  - .EVM.Interpreter.executeDupSwap:33
+  - .EVM.Interpreter.executeDupSwap:34
+  - .EVM.Interpreter.executeDupSwap:35
+  - .EVM.Interpreter.executeDupSwap:36
+  - .EVM.Interpreter.executeDupSwap:37
+  - .EVM.Interpreter.executeDupSwap:38
+  - .EVM.Interpreter.executeDupSwap:39
+  - .EVM.Interpreter.executeDupSwap:40
+  - .EVM.Interpreter.executeDupSwap:41
+  - .EVM.Interpreter.executeDupSwap:42
+  - .EVM.Interpreter.executeDupSwap:43
+  - .EVM.Interpreter.executeDupSwap:44
+  - .EVM.Interpreter.executeDupSwap:45
+  - .EVM.Interpreter.executeDupSwap:46
+  - .EVM.Interpreter.executeDupSwap:47
+  - .EVM.Interpreter.executeDupSwap:48
+  - .EVM.Interpreter.executeDupSwap:49
+  - .EVM.Interpreter.dupOp:0
+  - .EVM.Interpreter.dupOp:1
+  - .EVM.Interpreter.dupOp:2
+  - .EVM.Interpreter.defaultContext:0
+  - .EVM.Interpreter.createStub:0
+  - .EVM.Interpreter.callStub:0
+  - .EVM.Interpreter.binaryOp:0
