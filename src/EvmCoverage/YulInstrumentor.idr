@@ -24,6 +24,8 @@ import Data.String
 import System.File
 import System
 
+import EvmCoverage.Runtime
+
 %default covering
 
 -- =============================================================================
@@ -134,6 +136,29 @@ parseYul content =
            _ => (0, length indexed)
 
 -- =============================================================================
+-- String Replacement Helpers
+-- =============================================================================
+
+||| Match prefix of character lists
+matchPfx : List Char -> List Char -> Bool
+matchPfx [] _ = True
+matchPfx _ [] = False
+matchPfx (n :: ns) (h :: hs) = n == h && matchPfx ns hs
+
+||| Replace first occurrence of needle with replacement in character list
+replaceCharsOnce : List Char -> List Char -> List Char -> List Char
+replaceCharsOnce _ _ [] = []
+replaceCharsOnce needle repl hs@(h :: rest) =
+  if matchPfx needle hs
+    then repl ++ drop (length needle) hs  -- Replace and keep the rest unchanged
+    else h :: replaceCharsOnce needle repl rest
+
+||| Replace first occurrence of needle with replacement in string
+replaceOnce : String -> String -> String -> String
+replaceOnce needle repl haystack =
+  pack $ replaceCharsOnce (unpack needle) (unpack repl) (unpack haystack)
+
+-- =============================================================================
 -- Counter Increment Generation
 -- =============================================================================
 
@@ -203,17 +228,21 @@ instrumentYul content =
       funcs = parseResult.functions
       numFuncs = length funcs
       ls = lines content
-      -- Create function index map
-      funcLines = map (\f => f.startLine) funcs
-      -- Instrument each line
-      instrumentedLines = instrumentLines ls funcLines 0 0
+      -- FIRST: Add flush call before revert() (must be done before counter instrumentation
+      -- to preserve line structure for pattern matching)
+      withRevertFlush = insertFlushBeforeRevert ls
+      -- Re-split to flatten any embedded newlines from flush insertion
+      flattenedLines = lines (unlines withRevertFlush)
+      -- Re-parse after modification (line numbers may have shifted)
+      parseResult2 = parseYul (unlines flattenedLines)
+      funcLines = map (\f => f.startLine) parseResult2.functions
+      -- Instrument each line with counter increments
+      instrumentedLines = instrumentLines flattenedLines funcLines 0 0
       -- Add flush function before the closing of runtime
-      withFlush = insertFlushFunction instrumentedLines parseResult.runtimeEnd numFuncs
+      withFlush = insertFlushFunction instrumentedLines parseResult2.runtimeEnd numFuncs
       -- Add flush call in runtime entry block after main
       withFlushCall = insertFlushCall withFlush
-      -- Add flush call before revert() to capture coverage even on revert
-      withRevertFlush = insertFlushBeforeRevert withFlushCall
-  in unlines withRevertFlush
+  in unlines withFlushCall
   where
     instrumentLines : List String -> List Nat -> Nat -> Nat -> List String
     instrumentLines [] _ _ _ = []
@@ -243,18 +272,14 @@ instrumentYul content =
 
     -- Insert flush call before revert() inside EVM_Primitives_u_prim__revert
     insertFlushBeforeRevert : List String -> List String
-    insertFlushBeforeRevert ls = go ls False
+    insertFlushBeforeRevert ls = map addFlushIfRevert ls
       where
-        go : List String -> Bool -> List String
-        go [] _ = []
-        go (l :: rest) inRevertFunc =
-          -- Check if we're entering the revert wrapper function
-          let enteringRevert = isInfixOf "EVM_Primitives_u_prim__revert" l && isFunctionDef l
-              -- Check if this is the actual revert(arg0, arg1) call inside the wrapper
-              isRevertCall = inRevertFunc && isInfixOf "revert(" l && not (isInfixOf "prim__revert" l)
-          in if isRevertCall
-               then ("        pop(__profile_flush(0))" :: l :: go rest inRevertFunc)
-               else (l :: go rest (enteringRevert || (inRevertFunc && not (trim l == "}"))))
+        addFlushIfRevert : String -> String
+        addFlushIfRevert l =
+          let trimmed = ltrim l
+          in if isPrefixOf "revert(" trimmed
+               then "        pop(__profile_flush(0))\n" ++ l
+               else l
 
 -- =============================================================================
 -- Function Label Mapping
@@ -525,12 +550,23 @@ runFullPipeline ipkgPath outputDir staticFuncs = do
 
   -- Step 4: Parse events and analyze gaps
   case testResult of
-    Left _ => do
+    Left err => do
       -- No test execution, return static-only analysis
       let uncovered = map fst staticFuncs
       pure $ Right $ MkCoverageAnalysis (length staticFuncs) 0 (length staticFuncs) 0 uncovered
     Right tracePath => do
-      -- TODO: Parse trace and extract ProfileFlush events
-      -- For now, return placeholder with 0% coverage
-      let uncovered = map fst staticFuncs
-      pure $ Right $ MkCoverageAnalysis (length staticFuncs) 0 (length staticFuncs) 0 uncovered
+      -- Parse ProfileFlush events from trace output
+      coverageResult <- analyzeCoverageFromFile tracePath labelPath
+      case coverageResult of
+        Left err => do
+          putStrLn $ "Coverage analysis error: " ++ err
+          let uncovered = map fst staticFuncs
+          pure $ Right $ MkCoverageAnalysis (length staticFuncs) 0 (length staticFuncs) 0 uncovered
+        Right result => do
+          -- Convert CoverageResult to CoverageAnalysis
+          let hitFuncs = result.hitFunctions
+          let totalFuncs = result.totalFunctions
+          let pct = cast {to=Nat} (floor result.coveragePercent)
+          -- Find uncovered functions (hit count = 0)
+          let uncovered = map (.funcName) $ filter (\h => h.executedCount == 0) result.hits
+          pure $ Right $ MkCoverageAnalysis (length staticFuncs) hitFuncs totalFuncs pct uncovered

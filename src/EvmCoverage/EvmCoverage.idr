@@ -8,6 +8,7 @@ import EvmCoverage.ProfileParser
 import EvmCoverage.SchemeMapper
 import EvmCoverage.Aggregator
 import EvmCoverage.Report
+import EvmCoverage.Runtime
 
 import Data.List
 import Data.List1
@@ -195,6 +196,34 @@ analyzeFromDumpcases dumpcasesPath = do
               0.0
               (filter (\b => isCanonical b.branchClass) static.allBranches)
   pure $ Right cov
+
+-- =============================================================================
+-- Runtime Analysis (ProfileFlush events from trace)
+-- =============================================================================
+
+||| Analyze function-level coverage from trace output and labels
+||| This uses the ProfileFlush event parsing for runtime coverage
+export
+analyzeRuntimeCoverage : String -> String -> IO (Either String EvmCoverageResult)
+analyzeRuntimeCoverage tracePath labelPath = analyzeCoverageFromFile tracePath labelPath
+
+||| Print runtime coverage report
+export
+printRuntimeCoverage : EvmCoverageResult -> IO ()
+printRuntimeCoverage result = do
+  putStrLn $ "=== Function Coverage (Runtime) ==="
+  putStrLn $ "Total functions: " ++ show (totalFunctions result)
+  putStrLn $ "Hit functions: " ++ show (hitFunctions result)
+  putStrLn $ "Coverage: " ++ show (coveragePercent result) ++ "%"
+  putStrLn ""
+  putStrLn "Function hits:"
+  traverse_ showHit (hits result)
+  where
+    showHit : EvmFunctionHit -> IO ()
+    showHit h =
+      if executedCount h > 0
+        then putStrLn $ "  [HIT] " ++ funcName h ++ ": " ++ show (executedCount h)
+        else putStrLn $ "  [   ] " ++ funcName h
 
 -- =============================================================================
 -- Top K Targets (for CLI display)

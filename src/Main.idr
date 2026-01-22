@@ -9,6 +9,7 @@ import EvmCoverage.SchemeMapper
 import EvmCoverage.Aggregator
 import EvmCoverage.Report
 import EvmCoverage.EvmCoverage
+import EvmCoverage.Runtime as Runtime
 import EvmCoverage.ProfileParserLinear
 import EvmCoverage.ProfileParserFSM
 
@@ -40,9 +41,11 @@ record Options where
   benchMode    : Bool    -- Benchmark extractSpans (V0)
   benchV1Mode  : Bool    -- Benchmark extractSpansLinear (V1)
   benchV2Mode  : Bool    -- Benchmark extractHitsFSM (V2)
+  runtimeTrace : Maybe String  -- Path to trace.csv for runtime analysis
+  runtimeLabels : Maybe String -- Path to labels.csv for runtime analysis
 
 defaultOptions : Options
-defaultOptions = MkOptions Nothing Nothing Nothing Text 80.0 False False False False False False False False
+defaultOptions = MkOptions Nothing Nothing Nothing Text 80.0 False False False False False False False False Nothing Nothing
 
 -- =============================================================================
 -- Argument Parsing
@@ -64,6 +67,8 @@ parseArgs ("--evm-interpreter" :: rest) opts = parseArgs rest ({ evmInterpreter 
 parseArgs ("--bench" :: rest) opts = parseArgs rest ({ benchMode := True } opts)
 parseArgs ("--bench-v1" :: rest) opts = parseArgs rest ({ benchV1Mode := True } opts)
 parseArgs ("--bench-v2" :: rest) opts = parseArgs rest ({ benchV2Mode := True } opts)
+parseArgs ("--runtime-trace" :: t :: rest) opts = parseArgs rest ({ runtimeTrace := Just t } opts)
+parseArgs ("--runtime-labels" :: l :: rest) opts = parseArgs rest ({ runtimeLabels := Just l } opts)
 parseArgs ("--threshold" :: t :: rest) opts =
   let th = fromMaybe 80.0 (parseDouble t)
   in parseArgs rest ({ threshold := th } opts)
@@ -106,6 +111,8 @@ OPTIONS:
   --threshold <N>     Coverage threshold percentage (default: 80)
   -o, --output <dir>  Output directory for reports
   --ipkg <path>       Path to .ipkg file
+  --runtime-trace <file>   Path to trace.csv for runtime analysis
+  --runtime-labels <file>  Path to labels.csv for runtime analysis
 
 EXAMPLES:
   # Analyze a project
@@ -202,53 +209,79 @@ runBenchV2 inputPath = do
   go 3
 
 -- =============================================================================
+-- Runtime Analysis Mode (ProfileFlush)
+-- =============================================================================
+
+runRuntimeAnalysis : String -> String -> Options -> IO ()
+runRuntimeAnalysis tracePath labelPath opts = do
+    when opts.verbose $ putStrLn $ "Runtime analysis mode"
+    when opts.verbose $ putStrLn $ "  Trace: " ++ tracePath
+    when opts.verbose $ putStrLn $ "  Labels: " ++ labelPath
+    res <- analyzeRuntimeCoverage tracePath labelPath
+    case res of
+        Left err => do putStrLn $ "Error: " ++ err
+                       exitWith (ExitFailure 1)
+        Right cov => do printRuntimeCoverage cov
+                        putStrLn $ "Done"
+
+-- =============================================================================
 -- Main Execution
 -- =============================================================================
 
 runMain : Options -> IO ()
 runMain opts =
-  case opts.targetPath of
-    Nothing => do
-      putStrLn "Error: No target path specified"
-      putStrLn "Use --help for usage information"
+  -- Check if runtime analysis mode
+  case (opts.runtimeTrace, opts.runtimeLabels) of
+    (Just trace, Just labels) => runRuntimeAnalysis trace labels opts
+    (Just _, Nothing) => do
+      putStrLn "Error: --runtime-trace requires --runtime-labels"
       exitWith (ExitFailure 1)
-    Just target => do
-      when opts.verbose $ putStrLn $ "Analyzing: " ++ target
-
-      -- EVM interpreter coverage mode (not yet implemented)
-      when opts.evmInterpreter $ do
-        putStrLn "Error: --evm-interpreter mode not yet implemented"
-        exitWith (ExitFailure 1)
-
-      let outputDir = fromMaybe (target ++ "/coverage") opts.outputDir
-      let config = MkEvmCoverageConfig
-                     target
-                     opts.ipkgPath
-                     outputDir
-                     opts.threshold
-                     opts.verbose
-
-      result <- analyzeCoverage config
-
-      case result of
-        Left err => do
-          putStrLn $ "Error: " ++ err
+    (Nothing, Just _) => do
+      putStrLn "Error: --runtime-labels requires --runtime-trace"
+      exitWith (ExitFailure 1)
+    (Nothing, Nothing) =>
+      case opts.targetPath of
+        Nothing => do
+          putStrLn "Error: No target path specified"
+          putStrLn "Use --help for usage information"
           exitWith (ExitFailure 1)
-        Right cov => do
-          -- Output report
-          case opts.format of
-            OneLine => putStrLn $ toOneLine cov
-            JSON => putStrLn $ toJson "now" target cov
-            _ => do
-              writeReport opts.format outputDir cov
-              putStrLn $ toOneLine cov
+        Just target => do
+          when opts.verbose $ putStrLn $ "Analyzing: " ++ target
 
-          -- Check threshold
-          if meetsThreshold opts.threshold cov
-            then when opts.verbose $ putStrLn "✓ Coverage threshold met"
-            else do
-              putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
+          -- EVM interpreter coverage mode (not yet implemented)
+          when opts.evmInterpreter $ do
+            putStrLn "Error: --evm-interpreter mode not yet implemented"
+            exitWith (ExitFailure 1)
+
+          let outputDir = fromMaybe (target ++ "/coverage") opts.outputDir
+          let config = MkEvmCoverageConfig
+                         target
+                         opts.ipkgPath
+                         outputDir
+                         opts.threshold
+                         opts.verbose
+
+          result <- analyzeCoverage config
+
+          case result of
+            Left err => do
+              putStrLn $ "Error: " ++ err
               exitWith (ExitFailure 1)
+            Right cov => do
+              -- Output report
+              case opts.format of
+                OneLine => putStrLn $ toOneLine cov
+                JSON => putStrLn $ toJson "now" target cov
+                _ => do
+                  writeReport opts.format outputDir cov
+                  putStrLn $ toOneLine cov
+
+              -- Check threshold
+              if meetsThreshold opts.threshold cov
+                then when opts.verbose $ putStrLn "✓ Coverage threshold met"
+                else do
+                  putStrLn $ "✗ Coverage below threshold (" ++ show opts.threshold ++ "%)"
+                  exitWith (ExitFailure 1)
 
 -- =============================================================================
 -- Entry Point

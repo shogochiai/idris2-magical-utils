@@ -668,6 +668,8 @@ funcToTarget (fn, branches) =
 ||| Get top K high-impact targets from branches, sorted by severity
 ||| @k - Maximum number of targets to return
 ||| @branches - All classified branches
+||| NOTE: Returns raw List for backward compatibility. Consider using
+||| filteredTargetsFromBranches for type-safe exclusion enforcement.
 export
 topKTargetsFromBranches : Nat -> List ClassifiedBranch -> List HighImpactTarget
 topKTargetsFromBranches k branches =
@@ -676,3 +678,16 @@ topKTargetsFromBranches k branches =
       -- Filter out functions with 0 canonical branches
       nonEmpty = filter (\t => t.branchCount > 0) targets
   in Coverage.Core.HighImpact.topKTargets k nonEmpty
+
+||| Get filtered high-impact targets from branches with exclusions applied
+||| This is the RECOMMENDED API - uses FilteredTargets for type-safe exclusion
+||| @k - Maximum number of targets to return
+||| @branches - All classified branches
+export
+filteredTargetsFromBranches : Nat -> List ClassifiedBranch -> FilteredTargets
+filteredTargetsFromBranches k branches =
+  let grouped = groupByFunc branches
+      targets = map funcToTarget grouped
+      nonEmpty = filter (\t => t.branchCount > 0) targets
+      filtered = mkFilteredTargets nonEmpty
+  in filtered
