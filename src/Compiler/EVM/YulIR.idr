@@ -46,6 +46,7 @@ mutual
   public export
   data YulStmt
     = YBlock (List YulStmt)                  -- { stmt1 stmt2 ... }
+    | YComment String                        -- /* comment */ for sourcemap
     | YLet (List YulId) YulExpr              -- let x, y := expr
     | YAssign (List YulId) YulExpr           -- x, y := expr
     | YIf YulExpr YulStmt                    -- if cond { body }
@@ -66,10 +67,20 @@ record SourceLoc where
   constructor MkSourceLoc
   moduleName : String    -- e.g., "TextDAO.Functions.Propose"
   functionName : String  -- e.g., "propose"
+  startLine : Int
+  startCol : Int
+  endLine : Int
+  endCol : Int
 
 public export
 Show SourceLoc where
-  show loc = loc.moduleName ++ "." ++ loc.functionName
+  show loc = loc.moduleName ++ ":" ++ show loc.startLine ++ ":" ++ show loc.startCol
+          ++ "--" ++ show loc.endLine ++ ":" ++ show loc.endCol
+
+||| Format as Yul comment for sourcemap
+export
+sourceLocComment : SourceLoc -> String
+sourceLocComment loc = "/* " ++ show loc ++ " */"
 
 ||| Yul function definition
 public export
@@ -123,6 +134,7 @@ mutual
   collectCallsStmt YContinue = empty
   collectCallsStmt YLeave = empty
   collectCallsStmt (YExprStmt e) = collectCallsExpr e
+  collectCallsStmt (YComment _) = empty
 
   collectCallsCase : YulCase -> SortedSet String
   collectCallsCase (MkCase _ body) = collectCallsStmt body
@@ -194,6 +206,7 @@ mutual
   showStmt ind YContinue = indent ind ++ "continue"
   showStmt ind YLeave = indent ind ++ "leave"
   showStmt ind (YExprStmt e) = indent ind ++ showExpr e
+  showStmt ind (YComment c) = indent ind ++ "/* " ++ c ++ " */"
 
   showCase : Nat -> YulCase -> String
   showCase ind (MkCase lit body) =

@@ -13,6 +13,7 @@ import Core.Context
 import Core.Core
 import Core.Name
 import Core.TT
+import Core.FC
 
 import Compiler.ANF
 import Compiler.Common
@@ -83,6 +84,7 @@ findFuncPart acc (p :: rest) = findFuncPart (p :: acc) rest
 
 ||| Extract source location from Idris name for coverage mapping
 ||| Always returns a SourceLoc - falls back to mangled name
+||| Note: Line/col info is 0 when derived from Name only (no FC)
 nameToSourceLoc : Name -> Maybe SourceLoc
 nameToSourceLoc n =
   let mangled = mangleName n
@@ -90,8 +92,28 @@ nameToSourceLoc n =
   in case findFuncPart [] parts of
        Just (modParts, funcName) =>
          let modName = if null modParts then "<generated>" else joinBy "." modParts
-         in Just $ MkSourceLoc modName funcName
-       Nothing => Just $ MkSourceLoc "<unknown>" mangled  -- Fallback: always return something
+         in Just $ MkSourceLoc modName funcName 0 0 0 0
+       Nothing => Just $ MkSourceLoc "<unknown>" mangled 0 0 0 0  -- Fallback
+
+||| Extract module name from OriginDesc
+originToModule : OriginDesc -> String
+originToModule (PhysicalIdrSrc ident) = show ident
+originToModule (PhysicalPkgSrc fname) = fname
+originToModule (Virtual ident) = show ident
+
+||| Convert FC to SourceLoc with line/col info
+||| Returns Nothing for EmptyFC
+fcToSourceLoc : FC -> Maybe SourceLoc
+fcToSourceLoc EmptyFC = Nothing
+fcToSourceLoc (MkFC origin (sl, sc) (el, ec)) =
+  Just $ MkSourceLoc (originToModule origin) "" sl sc el ec
+fcToSourceLoc (MkVirtualFC origin (sl, sc) (el, ec)) =
+  Just $ MkSourceLoc (originToModule origin) "" sl sc el ec
+
+||| Generate a YComment from FC for sourcemap
+||| Format: /* Module:startLine:startCol--endLine:endCol */
+fcToComment : FC -> Maybe YulStmt
+fcToComment fc = map (\loc => YComment (show loc)) (fcToSourceLoc fc)
 
 ||| Convert AVar to Yul expression
 compileAVar : AVar -> YulExpr
@@ -312,7 +334,7 @@ mutual
   -- Let binding - THIS IS THE KEY FIX
   -- Generate the assignment statement, then compile the body
   -- This handles nested lets by hoisting inner assignments before the outer one
-  compileANFExprWithStmts ctx (ALet _ var val body) = do
+  compileANFExprWithStmts ctx (ALet fc var val body) = do
     (ctx1, valStmts, valExpr) <- compileANFExprWithStmts ctx val
     (ctx2, bodyStmts, bodyExpr) <- compileANFExprWithStmts ctx1 body
     -- The assignment for this let binding
@@ -322,7 +344,12 @@ mutual
                              then YExprStmt valExpr
                              else yulAssign (varName var) valExpr
           _ => yulAssign (varName var) valExpr
-    pure (ctx2, valStmts ++ [assignStmt] ++ bodyStmts, bodyExpr)
+    -- Add source location comment before assignment
+    let comment = fcToComment fc
+    let stmtsWithComment = case comment of
+          Just c  => valStmts ++ [c, assignStmt] ++ bodyStmts
+          Nothing => valStmts ++ [assignStmt] ++ bodyStmts
+    pure (ctx2, stmtsWithComment, bodyExpr)
     where
       isVoidOpcode : String -> Bool
       isVoidOpcode "revert" = True
@@ -341,7 +368,7 @@ mutual
 
   -- Case expression: generate switch with result assignment in each branch
   -- Uses unique case_result variable name to avoid nested case collisions
-  compileANFExprWithStmts ctx (AConCase _ sc alts mdef) = do
+  compileANFExprWithStmts ctx (AConCase fc sc alts mdef) = do
     let scExpr = compileAVar sc
     let (ctx1, resultVar) = nextCaseVar ctx  -- Get unique variable name
     (ctx2, cases) <- compileConAltsExpr ctx1 scExpr resultVar alts
@@ -352,7 +379,12 @@ mutual
       Nothing => pure (ctx2, Nothing)
     let declStmt = yulLet resultVar (YLit (YulNum 0))  -- declare variable before switch
     let switchStmt = YSwitch (readTag scExpr) cases defStmt
-    pure (ctx3, [declStmt, switchStmt], YVar resultVar)
+    -- Add source location comment before switch
+    let comment = fcToComment fc
+    let stmts = case comment of
+          Just c  => [c, declStmt, switchStmt]
+          Nothing => [declStmt, switchStmt]
+    pure (ctx3, stmts, YVar resultVar)
     where
       -- Generate field extraction for constructor arguments
       extractFields : YulExpr -> List Int -> List YulStmt
@@ -378,7 +410,7 @@ mutual
         (ctx'', cs) <- compileConAltsExpr ctx' scPtr resVar alts
         pure (ctx'', c :: cs)
 
-  compileANFExprWithStmts ctx (AConstCase _ sc alts mdef) = do
+  compileANFExprWithStmts ctx (AConstCase fc sc alts mdef) = do
     let scExpr = compileAVar sc
     let (ctx1, resultVar) = nextCaseVar ctx  -- Get unique variable name
     (ctx2, cases) <- compileConstAltsExpr ctx1 resultVar alts
@@ -389,7 +421,12 @@ mutual
       Nothing => pure (ctx2, Nothing)
     let declStmt = yulLet resultVar (YLit (YulNum 0))  -- declare variable before switch
     let switchStmt = YSwitch scExpr cases defStmt
-    pure (ctx3, [declStmt, switchStmt], YVar resultVar)
+    -- Add source location comment before switch
+    let comment = fcToComment fc
+    let stmts = case comment of
+          Just c  => [c, declStmt, switchStmt]
+          Nothing => [declStmt, switchStmt]
+    pure (ctx3, stmts, YVar resultVar)
     where
       constToLit : Constant -> YulLiteral
       constToLit (I x) = YulNum (cast x)

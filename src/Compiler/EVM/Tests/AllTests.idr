@@ -4,10 +4,17 @@ module Compiler.EVM.Tests.AllTests
 
 import Data.List
 import Data.String
+import Data.SortedSet
+import Data.Vect
 import System
 import System.File
 
-%default total
+import Compiler.EVM.YulIR
+import EVM.ABI.Types
+import EVM.Storage.Storable
+import EVM.Storage.Namespace
+
+%default covering
 
 -- =============================================================================
 -- REQ_EVM_*: EVM Opcode Compatibility Tests (Convention: DocCommentReq)
@@ -1680,6 +1687,410 @@ test_REQ_EVM_158_selfdestruct : IO Bool
 test_REQ_EVM_158_selfdestruct = pure (SELFDESTRUCT == "ff")
 
 -- =============================================================================
+-- REQ_YUL_*: YulIR Tests
+-- =============================================================================
+
+||| REQ_YUL_001: showExpr YLit number
+export
+test_REQ_YUL_001_showExprLitNum : IO Bool
+test_REQ_YUL_001_showExprLitNum = pure $ showExpr (YLit (YulNum 42)) == "42"
+
+||| REQ_YUL_002: showExpr YLit hex
+export
+test_REQ_YUL_002_showExprLitHex : IO Bool
+test_REQ_YUL_002_showExprLitHex = pure $ showExpr (YLit (YulHex "ff")) == "0xff"
+
+||| REQ_YUL_003: showExpr YLit bool true
+export
+test_REQ_YUL_003_showExprLitBoolTrue : IO Bool
+test_REQ_YUL_003_showExprLitBoolTrue = pure $ showExpr (YLit (YulBool True)) == "true"
+
+||| REQ_YUL_004: showExpr YLit bool false
+export
+test_REQ_YUL_004_showExprLitBoolFalse : IO Bool
+test_REQ_YUL_004_showExprLitBoolFalse = pure $ showExpr (YLit (YulBool False)) == "false"
+
+||| REQ_YUL_005: showExpr YVar
+export
+test_REQ_YUL_005_showExprVar : IO Bool
+test_REQ_YUL_005_showExprVar = pure $ showExpr (YVar "x") == "x"
+
+||| REQ_YUL_006: showExpr YCall no args
+export
+test_REQ_YUL_006_showExprCallNoArgs : IO Bool
+test_REQ_YUL_006_showExprCallNoArgs = pure $ showExpr (YCall "foo" []) == "foo()"
+
+||| REQ_YUL_007: showExpr YCall with args
+export
+test_REQ_YUL_007_showExprCallWithArgs : IO Bool
+test_REQ_YUL_007_showExprCallWithArgs =
+  pure $ showExpr (YCall "add" [YVar "a", YVar "b"]) == "add(a, b)"
+
+||| REQ_YUL_008: yulNum builder
+export
+test_REQ_YUL_008_yulNum : IO Bool
+test_REQ_YUL_008_yulNum = pure $ showExpr (yulNum 100) == "100"
+
+||| REQ_YUL_009: yulVar builder
+export
+test_REQ_YUL_009_yulVar : IO Bool
+test_REQ_YUL_009_yulVar = pure $ showExpr (yulVar "myVar") == "myVar"
+
+||| REQ_YUL_010: yulCall builder
+export
+test_REQ_YUL_010_yulCall : IO Bool
+test_REQ_YUL_010_yulCall = pure $ showExpr (yulCall "mstore" [yulNum 0, yulNum 64]) == "mstore(0, 64)"
+
+||| REQ_YUL_011: sload builder
+export
+test_REQ_YUL_011_sloadBuilder : IO Bool
+test_REQ_YUL_011_sloadBuilder = pure $ showExpr (YulIR.sload (yulNum 5)) == "sload(5)"
+
+||| REQ_YUL_012: sstore builder
+export
+test_REQ_YUL_012_sstoreBuilder : IO Bool
+test_REQ_YUL_012_sstoreBuilder = pure $ showExpr (YulIR.sstore (yulNum 0) (yulNum 42)) == "sstore(0, 42)"
+
+||| REQ_YUL_013: mload builder
+export
+test_REQ_YUL_013_mloadBuilder : IO Bool
+test_REQ_YUL_013_mloadBuilder = pure $ showExpr (YulIR.mload (yulNum 32)) == "mload(32)"
+
+||| REQ_YUL_014: mstore builder
+export
+test_REQ_YUL_014_mstoreBuilder : IO Bool
+test_REQ_YUL_014_mstoreBuilder = pure $ showExpr (YulIR.mstore (yulNum 0) (yulNum 1)) == "mstore(0, 1)"
+
+||| REQ_YUL_015: calldataload builder
+export
+test_REQ_YUL_015_calldataloadBuilder : IO Bool
+test_REQ_YUL_015_calldataloadBuilder = pure $ showExpr (YulIR.calldataload (yulNum 4)) == "calldataload(4)"
+
+||| REQ_YUL_016: revert builder
+export
+test_REQ_YUL_016_revertBuilder : IO Bool
+test_REQ_YUL_016_revertBuilder = pure $ showExpr (YulIR.revert (yulNum 0) (yulNum 0)) == "revert(0, 0)"
+
+||| REQ_YUL_017: yulReturn builder
+export
+test_REQ_YUL_017_yulReturnBuilder : IO Bool
+test_REQ_YUL_017_yulReturnBuilder = pure $ showExpr (YulIR.yulReturn (yulNum 0) (yulNum 32)) == "return(0, 32)"
+
+||| REQ_YUL_018: collectCallsExpr YLit
+export
+test_REQ_YUL_018_collectCallsExprLit : IO Bool
+test_REQ_YUL_018_collectCallsExprLit = pure $ null (SortedSet.toList (collectCallsExpr (YLit (YulNum 1))))
+
+||| REQ_YUL_019: collectCallsExpr YVar
+export
+test_REQ_YUL_019_collectCallsExprVar : IO Bool
+test_REQ_YUL_019_collectCallsExprVar = pure $ null (SortedSet.toList (collectCallsExpr (YVar "x")))
+
+||| REQ_YUL_020: collectCallsExpr YCall
+export
+test_REQ_YUL_020_collectCallsExprCall : IO Bool
+test_REQ_YUL_020_collectCallsExprCall =
+  let calls = collectCallsExpr (YCall "foo" [YCall "bar" []])
+  in pure $ SortedSet.contains "foo" calls && SortedSet.contains "bar" calls
+
+||| REQ_YUL_021: SourceLoc show format
+export
+test_REQ_YUL_021_sourceLocShow : IO Bool
+test_REQ_YUL_021_sourceLocShow =
+  let loc = MkSourceLoc "Main" "test" 10 5 10 15
+  in pure $ show loc == "Main:10:5--10:15"
+
+||| REQ_YUL_022: sourceLocComment format
+export
+test_REQ_YUL_022_sourceLocComment : IO Bool
+test_REQ_YUL_022_sourceLocComment =
+  let loc = MkSourceLoc "Mod" "fn" 1 1 1 5
+  in pure $ sourceLocComment loc == "/* Mod:1:1--1:5 */"
+
+-- =============================================================================
+-- REQ_ABI_*: ABI Types Tests
+-- =============================================================================
+
+||| REQ_ABI_001: abiTypeToString uint256
+export
+test_REQ_ABI_001_uint256 : IO Bool
+test_REQ_ABI_001_uint256 = pure $ abiTypeToString ABI_Uint256 == "uint256"
+
+||| REQ_ABI_002: abiTypeToString address
+export
+test_REQ_ABI_002_address : IO Bool
+test_REQ_ABI_002_address = pure $ abiTypeToString ABI_Address == "address"
+
+||| REQ_ABI_003: abiTypeToString bool
+export
+test_REQ_ABI_003_bool : IO Bool
+test_REQ_ABI_003_bool = pure $ abiTypeToString ABI_Bool == "bool"
+
+||| REQ_ABI_004: abiTypeToString bytes32
+export
+test_REQ_ABI_004_bytes32 : IO Bool
+test_REQ_ABI_004_bytes32 = pure $ abiTypeToString ABI_Bytes32 == "bytes32"
+
+||| REQ_ABI_005: abiTypeToString string
+export
+test_REQ_ABI_005_string : IO Bool
+test_REQ_ABI_005_string = pure $ abiTypeToString ABI_String == "string"
+
+||| REQ_ABI_006: abiTypeToString bytes
+export
+test_REQ_ABI_006_bytes : IO Bool
+test_REQ_ABI_006_bytes = pure $ abiTypeToString ABI_Bytes == "bytes"
+
+||| REQ_ABI_007: abiTypeToString array
+export
+test_REQ_ABI_007_array : IO Bool
+test_REQ_ABI_007_array = pure $ abiTypeToString (ABI_Array ABI_Uint256) == "uint256[]"
+
+||| REQ_ABI_008: abiTypeToString fixed array
+export
+test_REQ_ABI_008_fixedArray : IO Bool
+test_REQ_ABI_008_fixedArray = pure $ abiTypeToString (ABI_FixedArray 3 ABI_Address) == "address[3]"
+
+||| REQ_ABI_009: abiTypeToString tuple
+export
+test_REQ_ABI_009_tuple : IO Bool
+test_REQ_ABI_009_tuple = pure $ abiTypeToString (ABI_Tuple [ABI_Uint256, ABI_Address]) == "(uint256,address)"
+
+||| REQ_ABI_021: abiTypeToString uint128
+export
+test_REQ_ABI_021_uint128 : IO Bool
+test_REQ_ABI_021_uint128 = pure $ abiTypeToString ABI_Uint128 == "uint128"
+
+||| REQ_ABI_022: abiTypeToString uint64
+export
+test_REQ_ABI_022_uint64 : IO Bool
+test_REQ_ABI_022_uint64 = pure $ abiTypeToString ABI_Uint64 == "uint64"
+
+||| REQ_ABI_023: abiTypeToString uint32
+export
+test_REQ_ABI_023_uint32 : IO Bool
+test_REQ_ABI_023_uint32 = pure $ abiTypeToString ABI_Uint32 == "uint32"
+
+||| REQ_ABI_024: abiTypeToString uint16
+export
+test_REQ_ABI_024_uint16 : IO Bool
+test_REQ_ABI_024_uint16 = pure $ abiTypeToString ABI_Uint16 == "uint16"
+
+||| REQ_ABI_025: abiTypeToString uint8
+export
+test_REQ_ABI_025_uint8 : IO Bool
+test_REQ_ABI_025_uint8 = pure $ abiTypeToString ABI_Uint8 == "uint8"
+
+||| REQ_ABI_026: abiTypeToString int256
+export
+test_REQ_ABI_026_int256 : IO Bool
+test_REQ_ABI_026_int256 = pure $ abiTypeToString ABI_Int256 == "int256"
+
+||| REQ_ABI_027: abiTypeToString int128
+export
+test_REQ_ABI_027_int128 : IO Bool
+test_REQ_ABI_027_int128 = pure $ abiTypeToString ABI_Int128 == "int128"
+
+||| REQ_ABI_028: abiTypeToString int64
+export
+test_REQ_ABI_028_int64 : IO Bool
+test_REQ_ABI_028_int64 = pure $ abiTypeToString ABI_Int64 == "int64"
+
+||| REQ_ABI_029: abiTypeToString int32
+export
+test_REQ_ABI_029_int32 : IO Bool
+test_REQ_ABI_029_int32 = pure $ abiTypeToString ABI_Int32 == "int32"
+
+||| REQ_ABI_030: abiTypeToString int16
+export
+test_REQ_ABI_030_int16 : IO Bool
+test_REQ_ABI_030_int16 = pure $ abiTypeToString ABI_Int16 == "int16"
+
+||| REQ_ABI_031: abiTypeToString int8
+export
+test_REQ_ABI_031_int8 : IO Bool
+test_REQ_ABI_031_int8 = pure $ abiTypeToString ABI_Int8 == "int8"
+
+||| REQ_ABI_032: abiTypeToString bytes20
+export
+test_REQ_ABI_032_bytes20 : IO Bool
+test_REQ_ABI_032_bytes20 = pure $ abiTypeToString ABI_Bytes20 == "bytes20"
+
+||| REQ_ABI_033: abiTypeToString bytes4
+export
+test_REQ_ABI_033_bytes4 : IO Bool
+test_REQ_ABI_033_bytes4 = pure $ abiTypeToString ABI_Bytes4 == "bytes4"
+
+||| REQ_ABI_034: eventSignature
+export
+test_REQ_ABI_034_eventSig : IO Bool
+test_REQ_ABI_034_eventSig =
+  let e = mkEvent "Transfer" 0 [indexed "from" ABI_Address, indexed "to" ABI_Address, param "value" ABI_Uint256]
+  in pure $ eventSignature e == "Transfer(address,address,uint256)"
+
+||| REQ_ABI_035: addEvent
+export
+test_REQ_ABI_035_addEvent : IO Bool
+test_REQ_ABI_035_addEvent =
+  let e = mkEvent "Test" 0 []
+      abi = addEvent e (emptyABI "Test")
+  in pure $ length abi.events == 1
+
+||| REQ_ABI_036: addError
+export
+test_REQ_ABI_036_addError : IO Bool
+test_REQ_ABI_036_addError =
+  let err = MkError "TestError" 0 []
+      abi = addError err (emptyABI "Test")
+  in pure $ length abi.errors == 1
+
+||| REQ_ABI_037: tuple empty
+export
+test_REQ_ABI_037_tupleEmpty : IO Bool
+test_REQ_ABI_037_tupleEmpty = pure $ abiTypeToString (ABI_Tuple []) == "()"
+
+||| REQ_ABI_038: tuple single
+export
+test_REQ_ABI_038_tupleSingle : IO Bool
+test_REQ_ABI_038_tupleSingle = pure $ abiTypeToString (ABI_Tuple [ABI_Bool]) == "(bool)"
+
+||| REQ_ABI_010: mutabilityToString pure
+export
+test_REQ_ABI_010_mutPure : IO Bool
+test_REQ_ABI_010_mutPure = pure $ mutabilityToString Pure == "pure"
+
+||| REQ_ABI_011: mutabilityToString view
+export
+test_REQ_ABI_011_mutView : IO Bool
+test_REQ_ABI_011_mutView = pure $ mutabilityToString View == "view"
+
+||| REQ_ABI_012: mutabilityToString nonpayable
+export
+test_REQ_ABI_012_mutNonpayable : IO Bool
+test_REQ_ABI_012_mutNonpayable = pure $ mutabilityToString Nonpayable == "nonpayable"
+
+||| REQ_ABI_013: mutabilityToString payable
+export
+test_REQ_ABI_013_mutPayable : IO Bool
+test_REQ_ABI_013_mutPayable = pure $ mutabilityToString Payable == "payable"
+
+||| REQ_ABI_014: functionSignature simple
+export
+test_REQ_ABI_014_funcSig : IO Bool
+test_REQ_ABI_014_funcSig =
+  let f = mkFunc "transfer" 0 [ABI_Address, ABI_Uint256] [ABI_Bool] Nonpayable
+  in pure $ functionSignature f == "transfer(address,uint256)"
+
+||| REQ_ABI_015: functionSignature no params
+export
+test_REQ_ABI_015_funcSigNoParams : IO Bool
+test_REQ_ABI_015_funcSigNoParams =
+  let f = mkFunc "totalSupply" 0 [] [ABI_Uint256] View
+  in pure $ functionSignature f == "totalSupply()"
+
+||| REQ_ABI_016: param constructor
+export
+test_REQ_ABI_016_param : IO Bool
+test_REQ_ABI_016_param =
+  let p = param "amount" ABI_Uint256
+  in pure $ p.paramName == "amount" && not p.indexed
+
+||| REQ_ABI_017: anon constructor
+export
+test_REQ_ABI_017_anon : IO Bool
+test_REQ_ABI_017_anon =
+  let p = anon ABI_Address
+  in pure $ p.paramName == "" && not p.indexed
+
+||| REQ_ABI_018: indexed constructor
+export
+test_REQ_ABI_018_indexed : IO Bool
+test_REQ_ABI_018_indexed =
+  let p = indexed "from" ABI_Address
+  in pure $ p.paramName == "from" && p.indexed
+
+||| REQ_ABI_019: emptyABI
+export
+test_REQ_ABI_019_emptyABI : IO Bool
+test_REQ_ABI_019_emptyABI =
+  let abi = emptyABI "Test"
+  in pure $ abi.contractName == "Test" && null abi.functions
+
+||| REQ_ABI_020: addFunction
+export
+test_REQ_ABI_020_addFunction : IO Bool
+test_REQ_ABI_020_addFunction =
+  let f = mkFunc "test" 0 [] [] Pure
+      abi = addFunction f (emptyABI "Test")
+  in pure $ length abi.functions == 1
+
+-- =============================================================================
+-- REQ_STOR_*: Storage Tests
+-- =============================================================================
+
+||| REQ_STOR_001: Bits256 Storable slotCount
+export
+test_REQ_STOR_001_bits256SlotCount : IO Bool
+test_REQ_STOR_001_bits256SlotCount = pure $ slotCount {a=Bits256} == 1
+
+||| REQ_STOR_002: Bool Storable slotCount
+export
+test_REQ_STOR_002_boolSlotCount : IO Bool
+test_REQ_STOR_002_boolSlotCount = pure $ slotCount {a=Bool} == 1
+
+||| REQ_STOR_003: Member Storable slotCount
+export
+test_REQ_STOR_003_memberSlotCount : IO Bool
+test_REQ_STOR_003_memberSlotCount = pure $ slotCount {a=Member} == 2
+
+||| REQ_STOR_004: Bits256 toSlots
+export
+test_REQ_STOR_004_bits256ToSlots : IO Bool
+test_REQ_STOR_004_bits256ToSlots =
+  let v : Bits256 = 42
+      [x] = toSlots v
+  in pure $ x == 42
+
+||| REQ_STOR_005: Bool toSlots True
+export
+test_REQ_STOR_005_boolToSlotsTrue : IO Bool
+test_REQ_STOR_005_boolToSlotsTrue =
+  let [x] = toSlots True
+  in pure $ x == 1
+
+||| REQ_STOR_006: Bool toSlots False
+export
+test_REQ_STOR_006_boolToSlotsFalse : IO Bool
+test_REQ_STOR_006_boolToSlotsFalse =
+  let [x] = toSlots False
+  in pure $ x == 0
+
+||| REQ_STOR_007: refSlot extracts slot
+export
+test_REQ_STOR_007_refSlot : IO Bool
+test_REQ_STOR_007_refSlot =
+  let r : Ref Bits256 = MkRef 100
+  in pure $ refSlot r == 100
+
+||| REQ_STOR_008: offsetRef adds offset
+export
+test_REQ_STOR_008_offsetRef : IO Bool
+test_REQ_STOR_008_offsetRef =
+  let r : Ref Bits256 = MkRef 10
+      r2 = offsetRef 5 r
+  in pure $ refSlot r2 == 15
+
+||| REQ_STOR_009: Pair Storable slotCount
+export
+test_REQ_STOR_009_pairSlotCount : IO Bool
+test_REQ_STOR_009_pairSlotCount = pure $ slotCount {a=(Bits256, Bits256)} == 2
+
+||| REQ_STOR_010: structFieldSlot calculation
+export
+test_REQ_STOR_010_structFieldSlot : IO Bool
+test_REQ_STOR_010_structFieldSlot = pure $ structFieldSlot 100 2 == 102
+
+-- =============================================================================
 -- Test Infrastructure
 -- =============================================================================
 
@@ -1896,6 +2307,79 @@ allTests =
   , test "REQ_EVM_156" "REVERT (0xfd)" test_REQ_EVM_156_revert
   , test "REQ_EVM_157" "INVALID (0xfe)" test_REQ_EVM_157_invalid
   , test "REQ_EVM_158" "SELFDESTRUCT (0xff)" test_REQ_EVM_158_selfdestruct
+  -- YulIR tests
+  , test "REQ_YUL_001" "showExpr YLit number" test_REQ_YUL_001_showExprLitNum
+  , test "REQ_YUL_002" "showExpr YLit hex" test_REQ_YUL_002_showExprLitHex
+  , test "REQ_YUL_003" "showExpr YLit bool true" test_REQ_YUL_003_showExprLitBoolTrue
+  , test "REQ_YUL_004" "showExpr YLit bool false" test_REQ_YUL_004_showExprLitBoolFalse
+  , test "REQ_YUL_005" "showExpr YVar" test_REQ_YUL_005_showExprVar
+  , test "REQ_YUL_006" "showExpr YCall no args" test_REQ_YUL_006_showExprCallNoArgs
+  , test "REQ_YUL_007" "showExpr YCall with args" test_REQ_YUL_007_showExprCallWithArgs
+  , test "REQ_YUL_008" "yulNum builder" test_REQ_YUL_008_yulNum
+  , test "REQ_YUL_009" "yulVar builder" test_REQ_YUL_009_yulVar
+  , test "REQ_YUL_010" "yulCall builder" test_REQ_YUL_010_yulCall
+  , test "REQ_YUL_011" "sload builder" test_REQ_YUL_011_sloadBuilder
+  , test "REQ_YUL_012" "sstore builder" test_REQ_YUL_012_sstoreBuilder
+  , test "REQ_YUL_013" "mload builder" test_REQ_YUL_013_mloadBuilder
+  , test "REQ_YUL_014" "mstore builder" test_REQ_YUL_014_mstoreBuilder
+  , test "REQ_YUL_015" "calldataload builder" test_REQ_YUL_015_calldataloadBuilder
+  , test "REQ_YUL_016" "revert builder" test_REQ_YUL_016_revertBuilder
+  , test "REQ_YUL_017" "yulReturn builder" test_REQ_YUL_017_yulReturnBuilder
+  , test "REQ_YUL_018" "collectCallsExpr YLit" test_REQ_YUL_018_collectCallsExprLit
+  , test "REQ_YUL_019" "collectCallsExpr YVar" test_REQ_YUL_019_collectCallsExprVar
+  , test "REQ_YUL_020" "collectCallsExpr YCall" test_REQ_YUL_020_collectCallsExprCall
+  , test "REQ_YUL_021" "SourceLoc show format" test_REQ_YUL_021_sourceLocShow
+  , test "REQ_YUL_022" "sourceLocComment format" test_REQ_YUL_022_sourceLocComment
+  -- ABI Types tests
+  , test "REQ_ABI_001" "abiTypeToString uint256" test_REQ_ABI_001_uint256
+  , test "REQ_ABI_002" "abiTypeToString address" test_REQ_ABI_002_address
+  , test "REQ_ABI_003" "abiTypeToString bool" test_REQ_ABI_003_bool
+  , test "REQ_ABI_004" "abiTypeToString bytes32" test_REQ_ABI_004_bytes32
+  , test "REQ_ABI_005" "abiTypeToString string" test_REQ_ABI_005_string
+  , test "REQ_ABI_006" "abiTypeToString bytes" test_REQ_ABI_006_bytes
+  , test "REQ_ABI_007" "abiTypeToString array" test_REQ_ABI_007_array
+  , test "REQ_ABI_008" "abiTypeToString fixed array" test_REQ_ABI_008_fixedArray
+  , test "REQ_ABI_009" "abiTypeToString tuple" test_REQ_ABI_009_tuple
+  , test "REQ_ABI_010" "mutabilityToString pure" test_REQ_ABI_010_mutPure
+  , test "REQ_ABI_011" "mutabilityToString view" test_REQ_ABI_011_mutView
+  , test "REQ_ABI_012" "mutabilityToString nonpayable" test_REQ_ABI_012_mutNonpayable
+  , test "REQ_ABI_013" "mutabilityToString payable" test_REQ_ABI_013_mutPayable
+  , test "REQ_ABI_014" "functionSignature simple" test_REQ_ABI_014_funcSig
+  , test "REQ_ABI_015" "functionSignature no params" test_REQ_ABI_015_funcSigNoParams
+  , test "REQ_ABI_016" "param constructor" test_REQ_ABI_016_param
+  , test "REQ_ABI_017" "anon constructor" test_REQ_ABI_017_anon
+  , test "REQ_ABI_018" "indexed constructor" test_REQ_ABI_018_indexed
+  , test "REQ_ABI_019" "emptyABI" test_REQ_ABI_019_emptyABI
+  , test "REQ_ABI_020" "addFunction" test_REQ_ABI_020_addFunction
+  , test "REQ_ABI_021" "uint128" test_REQ_ABI_021_uint128
+  , test "REQ_ABI_022" "uint64" test_REQ_ABI_022_uint64
+  , test "REQ_ABI_023" "uint32" test_REQ_ABI_023_uint32
+  , test "REQ_ABI_024" "uint16" test_REQ_ABI_024_uint16
+  , test "REQ_ABI_025" "uint8" test_REQ_ABI_025_uint8
+  , test "REQ_ABI_026" "int256" test_REQ_ABI_026_int256
+  , test "REQ_ABI_027" "int128" test_REQ_ABI_027_int128
+  , test "REQ_ABI_028" "int64" test_REQ_ABI_028_int64
+  , test "REQ_ABI_029" "int32" test_REQ_ABI_029_int32
+  , test "REQ_ABI_030" "int16" test_REQ_ABI_030_int16
+  , test "REQ_ABI_031" "int8" test_REQ_ABI_031_int8
+  , test "REQ_ABI_032" "bytes20" test_REQ_ABI_032_bytes20
+  , test "REQ_ABI_033" "bytes4" test_REQ_ABI_033_bytes4
+  , test "REQ_ABI_034" "eventSignature" test_REQ_ABI_034_eventSig
+  , test "REQ_ABI_035" "addEvent" test_REQ_ABI_035_addEvent
+  , test "REQ_ABI_036" "addError" test_REQ_ABI_036_addError
+  , test "REQ_ABI_037" "tuple empty" test_REQ_ABI_037_tupleEmpty
+  , test "REQ_ABI_038" "tuple single" test_REQ_ABI_038_tupleSingle
+  -- Storage tests
+  , test "REQ_STOR_001" "Bits256 slotCount" test_REQ_STOR_001_bits256SlotCount
+  , test "REQ_STOR_002" "Bool slotCount" test_REQ_STOR_002_boolSlotCount
+  , test "REQ_STOR_003" "Member slotCount" test_REQ_STOR_003_memberSlotCount
+  , test "REQ_STOR_004" "Bits256 toSlots" test_REQ_STOR_004_bits256ToSlots
+  , test "REQ_STOR_005" "Bool toSlots True" test_REQ_STOR_005_boolToSlotsTrue
+  , test "REQ_STOR_006" "Bool toSlots False" test_REQ_STOR_006_boolToSlotsFalse
+  , test "REQ_STOR_007" "refSlot extracts slot" test_REQ_STOR_007_refSlot
+  , test "REQ_STOR_008" "offsetRef adds offset" test_REQ_STOR_008_offsetRef
+  , test "REQ_STOR_009" "Pair slotCount" test_REQ_STOR_009_pairSlotCount
+  , test "REQ_STOR_010" "structFieldSlot" test_REQ_STOR_010_structFieldSlot
   ]
 
 -- =============================================================================
