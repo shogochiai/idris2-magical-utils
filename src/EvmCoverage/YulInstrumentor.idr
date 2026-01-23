@@ -382,19 +382,64 @@ getProjectDir path =
       dirParts = fromMaybe [] (init' parts)
   in if null dirParts then "." else joinBy "/" dirParts
 
-||| Discover package paths from idris2 --list-packages
-||| Writes to temp file and reads back (simpler than popen)
+||| Find pack install base directory
+||| Pack installs to ~/.local/state/pack/install/<hash>/
+findPackInstallBase : IO (Maybe String)
+findPackInstallBase = do
+  let tmpFile = "/tmp/pack-install-base.txt"
+  -- Find the most recent pack install directory
+  let cmd = "ls -td ~/.local/state/pack/install/*/ 2>/dev/null | head -1 > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure Nothing
+  let path = trim content
+  if null path
+    then pure Nothing
+    else pure $ Just path
+
+||| Build IDRIS2_PACKAGE_PATH from pack install directory
+||| Collects all package directories under the install base
+buildPackagePath : String -> IO String
+buildPackagePath basePath = do
+  let tmpFile = "/tmp/pack-pkg-paths.txt"
+  -- Find all package directories (they contain ipkg metadata)
+  let cmd = "find " ++ basePath ++ " -type d -name 'idris2-*' 2>/dev/null > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure ""
+  let paths = filter (not . null) $ map trim $ lines content
+  pure $ joinBy ":" paths
+
+||| Discover package paths from pack install directory
+||| Falls back to idris2 --list-packages if pack not found
 discoverPackagePaths : IO (List String)
 discoverPackagePaths = do
-  let tmpFile = "/tmp/idris2-pkg-paths.txt"
-  -- Run idris2 --list-packages and extract paths to temp file
-  let cmd = "idris2 --list-packages 2>/dev/null | grep '└' | sed 's/.*└ //' > " ++ tmpFile
-  _ <- system cmd
-  -- Read the temp file
-  Right content <- readFile tmpFile
-    | Left _ => pure []
-  let paths = filter (not . null) $ map trim $ lines content
-  pure paths
+  -- First try pack install directory
+  mBase <- findPackInstallBase
+  case mBase of
+    Just basePath => do
+      let tmpFile = "/tmp/pack-pkg-paths.txt"
+      -- Find all package directories under pack install
+      let cmd = "find " ++ basePath ++ " -type d -name 'idris2-0.8.0' 2>/dev/null | head -20 > " ++ tmpFile
+      _ <- system cmd
+      Right content <- readFile tmpFile
+        | Left _ => fallbackDiscovery
+      let paths = filter (not . null) $ map trim $ lines content
+      if null paths
+        then fallbackDiscovery
+        else pure paths
+    Nothing => fallbackDiscovery
+  where
+    fallbackDiscovery : IO (List String)
+    fallbackDiscovery = do
+      let tmpFile = "/tmp/idris2-pkg-paths.txt"
+      -- Run idris2 --list-packages and extract paths to temp file
+      let cmd = "idris2 --list-packages 2>/dev/null | grep '└' | sed 's/.*└ //' > " ++ tmpFile
+      _ <- system cmd
+      Right content <- readFile tmpFile
+        | Left _ => pure []
+      let paths = filter (not . null) $ map trim $ lines content
+      pure paths
 
 ||| Find the latest dumpcases-temp-*.ipkg file in project directory
 ||| This is created by Phase 1 (static analysis) and contains the main wrapper
