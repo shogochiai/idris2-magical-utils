@@ -1,37 +1,25 @@
 ||| Load exclusion patterns from exclusions/ directory
 ||| Patterns are version-specific and loaded at runtime
+|||
+||| Re-exports shared types from Coverage.Core.Exclusions and provides
+||| file-based loading with version-specific pattern files.
 module Coverage.Exclusions
 
 import Data.List
 import Data.List1
+import Data.Maybe
 import Data.Nat
 import Data.String
 import System.File
 
--- Import core exclusion types (ExclPattern with Prefix/Suffix/Contains/Exact)
--- Note: This module also defines its own ExclusionPattern for backward compatibility
--- with the existing version-specific exclusion file format
-import public Coverage.Core.Exclusions as CoreExcl
+-- Re-export core exclusion types
+import public Coverage.Core.Exclusions
 
 %default partial
 
 -- =============================================================================
--- Pattern Types
+-- File Pattern Parsing
 -- =============================================================================
-
-||| A loaded exclusion pattern
-||| Format: "prefix*" for prefix match, exact match otherwise
-public export
-record ExclusionPattern where
-  constructor MkExclusionPattern
-  pattern : String
-  isPrefix : Bool  -- True if ends with *
-
-public export
-Show ExclusionPattern where
-  show p = if p.isPrefix
-           then p.pattern ++ "*"
-           else p.pattern
 
 ||| Remove trailing asterisk from pattern
 removeTrailingStar : String -> String
@@ -46,32 +34,24 @@ removeTrailingStar s =
 ||| "{csegen:*}" -> prefix match "{csegen:"
 ||| "exact" -> exact match "exact"
 export
-parsePattern : String -> Maybe ExclusionPattern
-parsePattern s =
+parsePatternFromFile : String -> Maybe ExclPattern
+parsePatternFromFile s =
   let trimmed = trim s
   in if trimmed == "" || isPrefixOf "#" trimmed
      then Nothing
      else if isSuffixOf "*" trimmed
-          then Just $ MkExclusionPattern (removeTrailingStar trimmed) True
-          else Just $ MkExclusionPattern trimmed False
-
-||| Check if a name matches a pattern
-export
-matchesPattern : ExclusionPattern -> String -> Bool
-matchesPattern p name =
-  if p.isPrefix
-  then isPrefixOf p.pattern name
-  else p.pattern == name
+          then Just $ MkExclPattern (removeTrailingStar trimmed) Prefix "file pattern"
+          else Just $ MkExclPattern trimmed Exact "file pattern"
 
 -- =============================================================================
--- Loaded Exclusions
+-- Loaded Exclusions (version-specific wrapper)
 -- =============================================================================
 
-||| All loaded exclusion patterns
+||| All loaded exclusion patterns with version info
 public export
 record LoadedExclusions where
   constructor MkLoadedExclusions
-  patterns : List ExclusionPattern
+  patterns : List ExclPattern
   idris2Version : String
 
 public export
@@ -81,7 +61,7 @@ emptyExclusions = MkLoadedExclusions [] "unknown"
 ||| Check if a function name should be excluded
 export
 shouldExclude : LoadedExclusions -> String -> Bool
-shouldExclude excl name = any (\p => matchesPattern p name) excl.patterns
+shouldExclude excl name = isJust (isMethodExcluded excl.patterns name)
 
 -- =============================================================================
 -- File Loading
@@ -89,13 +69,13 @@ shouldExclude excl name = any (\p => matchesPattern p name) excl.patterns
 
 ||| Parse file content into patterns
 export
-parsePatternFile : String -> List ExclusionPattern
+parsePatternFile : String -> List ExclPattern
 parsePatternFile content =
-  mapMaybe parsePattern (lines content)
+  mapMaybe parsePatternFromFile (lines content)
 
 ||| Load patterns from a file
 export
-loadPatternFile : String -> IO (List ExclusionPattern)
+loadPatternFile : String -> IO (List ExclPattern)
 loadPatternFile path = do
   Right content <- readFile path
     | Left _ => pure []
@@ -133,3 +113,31 @@ export
 loadExclusionsFromPackage : String -> String -> IO LoadedExclusions
 loadExclusionsFromPackage packageDir idris2Version =
   loadExclusions (packageDir ++ "/exclusions") idris2Version
+
+-- =============================================================================
+-- Idris2-Specific Default Exclusions
+-- =============================================================================
+
+||| Default exclusions for Idris2 coverage analysis
+public export
+idris2DefaultExclusions : List ExclPattern
+idris2DefaultExclusions =
+  [ -- Compiler-generated
+    prefixPattern "{csegen:" "Code generator"
+  , prefixPattern "{arg:" "Argument handling"
+  , prefixPattern "{lazyarg:" "Lazy argument"
+  , prefixPattern "Builtin." "Builtin module"
+  , prefixPattern "PrimIO." "Primitive IO"
+    -- Standard library internals
+  , prefixPattern "Prelude.Basics." "Basic prelude"
+  , prefixPattern "Prelude.Types." "Type machinery"
+  , prefixPattern "Prelude.IO." "IO primitives"
+    -- Test infrastructure
+  , prefixPattern "Test." "Test module"
+  , prefixPattern "Tests." "Tests module"
+  ]
+
+||| Combine core defaults with Idris2-specific exclusions
+public export
+idris2FullExclusions : List ExclPattern
+idris2FullExclusions = defaultExclusions ++ idris2DefaultExclusions
