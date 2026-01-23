@@ -1,9 +1,9 @@
 ||| Exclusion Pattern Matching for EVM Coverage
 |||
-||| Loads exclusion patterns from text files and filters out
-||| functions that should not count toward production coverage.
+||| Re-exports shared types from Coverage.Core.Exclusions and provides
+||| EVM-specific default exclusion patterns.
 |||
-||| Pattern format:
+||| Pattern format (from text files):
 |||   - prefix matching: pattern*
 |||   - suffix matching: *pattern
 |||   - contains matching: *pattern*
@@ -12,37 +12,23 @@
 module EvmCoverage.Exclusions
 
 import Data.List
+import Data.Maybe
 import Data.String
 import System.File
+
+-- Re-export core exclusion types
+import public Coverage.Core.Exclusions
 
 %default covering
 
 -- =============================================================================
--- Types
+-- File Pattern Parsing (for text-based exclusion files)
 -- =============================================================================
 
-||| Exclusion pattern type
-public export
-data ExclPattern
-  = ExactMatch String       -- exact string match
-  | PrefixMatch String      -- pattern*
-  | SuffixMatch String      -- *pattern
-  | ContainsMatch String    -- *pattern*
-
-public export
-Show ExclPattern where
-  show (ExactMatch s) = "exact:" ++ s
-  show (PrefixMatch s) = "prefix:" ++ s ++ "*"
-  show (SuffixMatch s) = "suffix:*" ++ s
-  show (ContainsMatch s) = "contains:*" ++ s ++ "*"
-
--- =============================================================================
--- Pattern Parsing
--- =============================================================================
-
-||| Parse a single pattern line
-parsePattern : String -> Maybe ExclPattern
-parsePattern s =
+||| Parse a single pattern line from exclusion file
+||| Converts wildcard syntax to ExclPattern
+parsePatternLine : String -> Maybe ExclPattern
+parsePatternLine s =
   let trimmed = trim s
   in if null trimmed || isPrefixOf "#" trimmed
        then Nothing  -- Empty or comment
@@ -59,35 +45,30 @@ parsePattern s =
                      else if endsWithStar
                        then substr 0 (minus (length p) 1) p
                      else p
-      in if startsWithStar && endsWithStar
-           then ContainsMatch stripped
-         else if startsWithStar
-           then SuffixMatch stripped
-         else if endsWithStar
-           then PrefixMatch stripped
-         else ExactMatch stripped
+          ptype = if startsWithStar && endsWithStar
+                    then Contains
+                  else if startsWithStar
+                    then Suffix
+                  else if endsWithStar
+                    then Prefix
+                  else Exact
+      in MkExclPattern stripped ptype "file pattern"
 
 ||| Parse exclusion patterns from file content
 export
 parseExclusions : String -> List ExclPattern
 parseExclusions content =
-  mapMaybe parsePattern (lines content)
+  mapMaybe parsePatternLine (lines content)
 
 -- =============================================================================
--- Pattern Matching
+-- Compatibility Layer (maps to core functions)
 -- =============================================================================
-
-||| Check if a function name matches an exclusion pattern
-matchesPattern : String -> ExclPattern -> Bool
-matchesPattern name (ExactMatch p) = name == p
-matchesPattern name (PrefixMatch p) = isPrefixOf p name
-matchesPattern name (SuffixMatch p) = isSuffixOf p name
-matchesPattern name (ContainsMatch p) = isInfixOf p name
 
 ||| Check if a function name should be excluded
+||| (Wrapper for core isMethodExcluded, returns Bool instead of Maybe String)
 export
 isExcluded : String -> List ExclPattern -> Bool
-isExcluded name patterns = any (matchesPattern name) patterns
+isExcluded name patterns = isJust (isMethodExcluded patterns name)
 
 ||| Filter out excluded functions from a list
 export
@@ -128,3 +109,32 @@ versionExclusionsPath : String -> String -> String -> String
 versionExclusionsPath pkgDir toolName version =
   pkgDir ++ "/exclusions/" ++ toolName ++ "-" ++ version ++ ".txt"
 
+-- =============================================================================
+-- EVM-Specific Default Exclusions
+-- =============================================================================
+
+||| Default exclusions for EVM/Yul coverage
+public export
+evmDefaultExclusions : List ExclPattern
+evmDefaultExclusions =
+  [ -- Yul runtime functions
+    prefixPattern "abi_" "ABI encoding/decoding"
+  , prefixPattern "cleanup_" "Type cleanup functions"
+  , prefixPattern "validator_" "Input validation"
+  , prefixPattern "panic_" "Panic handlers"
+  , prefixPattern "revert_" "Revert handlers"
+  , containsPattern "checked_" "Overflow checks"
+    -- Memory management
+  , exactPattern "allocate_memory" "Memory allocation"
+  , exactPattern "allocate_unbounded" "Unbounded allocation"
+  , exactPattern "finalize_allocation" "Allocation finalization"
+  , exactPattern "round_up_to_mul_of_32" "Memory alignment"
+    -- Internal helpers
+  , prefixPattern "__" "Internal function"
+  , prefixPattern "{" "Compiler-generated"
+  ]
+
+||| Combine core defaults with EVM-specific exclusions
+public export
+evmFullExclusions : List ExclPattern
+evmFullExclusions = defaultExclusions ++ evmDefaultExclusions
