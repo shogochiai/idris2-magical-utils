@@ -1,0 +1,49 @@
+[custom.all.idris2-coverage-core]
+type = "local"
+path = "pkgs/Idris2CoverageCore"
+ipkg = "idris2-coverage-core.ipkg"
+
+[custom.all.idris2-evm]
+type = "local"
+path = "pkgs/Idris2Evm"
+ipkg = "idris2-evm.ipkg"
+
+[custom.all.idris2-wasm]
+type = "local"
+path = "pkgs/Idris2Wasm"
+ipkg = "idris2-wasm.ipkg"
+
+[custom.all.idris2-coverage]
+type = "local"
+path = "pkgs/Idris2Coverage"
+ipkg = "idris2-coverage.ipkg"
+
+[custom.all.idris2-evm-coverage]
+type = "local"
+path = "pkgs/Idris2EvmCoverage"
+ipkg = "idris2-evm-coverage.ipkg"
+
+[custom.all.idris2-dfx-coverage]
+type = "local"
+path = "pkgs/Idris2DfxCoverage"
+ipkg = "idris2-dfx-coverage.ipkg"
+
+[custom.all.idris2-web-coverage]
+type = "local"
+path = "pkgs/Idris2WebCoverage"
+ipkg = "idris2-web-coverage.ipkg"
+
+[custom.all.idris2-cdk]
+type = "local"
+path = "pkgs/Idris2Cdk"
+ipkg = "idris2-cdk.ipkg"
+
+[custom.all.idris2-yul]
+type = "local"
+path = "pkgs/Idris2Yul"
+ipkg = "idris2-yul.ipkg"
+
+[custom.all.idris2-subcontract]
+type = "local"
+path = "pkgs/Idris2Subcontract"
+ipkg = "idris2-subcontract.ipkg"
