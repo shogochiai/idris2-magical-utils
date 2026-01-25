@@ -1,0 +1,1 @@
+(parameterize ([optimize-level 3] [compile-file-message #f]) (compile-program "/Users/bob/code/idris2-yul/build-pkg/exec/idris2-yul_app/idris2-yul.ss"))

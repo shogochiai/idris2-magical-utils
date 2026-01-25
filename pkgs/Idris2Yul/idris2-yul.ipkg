@@ -1,0 +1,30 @@
+package idris2-yul
+version = 0.1.0
+
+authors = "LazyEvm Project"
+
+brief = "Idris2 to EVM (Yul) backend"
+
+sourcedir = "src"
+
+depends = base
+        , contrib
+        , idris2
+
+modules = Compiler.EVM.Yul
+        , Compiler.EVM.YulIR
+        , Compiler.EVM.Codegen
+        , Compiler.EVM.Primitives
+        , Compiler.EVM.Foreign
+        , Compiler.EVM.Memory
+        , Compiler.EVM.ABI
+        , Compiler.EVM.Solc
+        , Compiler.EVM.Tests.AllTests
+        , EVM.Primitives
+        , EVM.Storage.Namespace
+        , EVM.Storage.Storable
+        , EVM.ABI.Types
+        , EVM.ABI.JSON
+
+main = Main
+executable = idris2-yul
