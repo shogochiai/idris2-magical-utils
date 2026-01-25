@@ -1,0 +1,25 @@
+package idris2-evm
+
+version = "0.1.0"
+
+authors = "LazyEvm Team"
+
+sourcedir = "src"
+
+depends = base, contrib
+
+modules = EVM.Word256
+        , EVM.Stack
+        , EVM.Memory
+        , EVM.Storage
+        , EVM.Opcodes
+        , EVM.Bytecode
+        , EVM.Interpreter
+        , EVM.WorldState
+        , EVM.MultiInterpreter
+        , EVM.Tests.AllTests
+        , Main
+
+main = Main
+
+executable = idris2-evm-run
