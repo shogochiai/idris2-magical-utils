@@ -4,7 +4,7 @@ module EVM.Interpreter
 import EVM.Word256
 import EVM.Stack
 import EVM.Memory
-import EVM.Storage
+import EVM.Storage.Model as Storage
 import EVM.Opcodes
 import EVM.Bytecode
 import Data.List

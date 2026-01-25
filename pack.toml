@@ -38,11 +38,6 @@ type = "local"
 path = "pkgs/Idris2Cdk"
 ipkg = "idris2-cdk.ipkg"
 
-[custom.all.idris2-yul]
-type = "local"
-path = "pkgs/Idris2Yul"
-ipkg = "idris2-yul.ipkg"
-
 [custom.all.idris2-subcontract]
 type = "local"
 path = "pkgs/Idris2Subcontract"

@@ -5,7 +5,7 @@
 module EVM.WorldState
 
 import EVM.Word256
-import EVM.Storage
+import EVM.Storage.Model as Storage
 import EVM.Bytecode
 import Data.Maybe
 import Data.List

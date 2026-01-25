@@ -1,25 +1,42 @@
 package idris2-evm
 
-version = "0.1.0"
+version = "0.2.0"
 
 authors = "LazyEvm Team"
 
+brief = "Idris2 EVM: interpreter, Yul codegen backend, FFI primitives, and ABI"
+
 sourcedir = "src"
 
-depends = base, contrib
+depends = base, contrib, idris2
 
 modules = EVM.Word256
         , EVM.Stack
         , EVM.Memory
-        , EVM.Storage
+        , EVM.Storage.Model
         , EVM.Opcodes
         , EVM.Bytecode
         , EVM.Interpreter
         , EVM.WorldState
         , EVM.MultiInterpreter
         , EVM.Tests.AllTests
+        , EVM.Primitives
+        , EVM.Storage.Namespace
+        , EVM.Storage.Storable
+        , EVM.ABI.Types
+        , EVM.ABI.JSON
+        , Compiler.EVM.Yul
+        , Compiler.EVM.YulIR
+        , Compiler.EVM.Codegen
+        , Compiler.EVM.Primitives
+        , Compiler.EVM.Foreign
+        , Compiler.EVM.Memory
+        , Compiler.EVM.ABI
+        , Compiler.EVM.Solc
+        , Compiler.EVM.Tests.AllTests
         , Main
+        , YulMain
 
-main = Main
+main = YulMain
 
-executable = idris2-evm-run
+executable = idris2-yul

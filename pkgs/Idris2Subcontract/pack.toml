@@ -1,10 +1,10 @@
 # idris2-subcontract pack.toml
-# Subcontract framework depends on idris2-yul
+# Subcontract framework depends on idris2-evm
 
-[custom.all.idris2-yul]
+[custom.all.idris2-evm]
 type   = "local"
-path   = "../Idris2Yul"
-ipkg   = "idris2-yul.ipkg"
+path   = "../Idris2Evm"
+ipkg   = "idris2-evm.ipkg"
 
 [custom.all.idris2-subcontract]
 type   = "local"

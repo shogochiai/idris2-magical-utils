@@ -1,13 +1,12 @@
 ---
 name: idris2-dev
-description: Idris2 development guidelines including OOM avoidance, project conventions, and idris2-yul/idris2-evm EVM compilation
+description: Idris2 development guidelines including OOM avoidance, project conventions, and idris2-evm EVM compilation
 triggers:
   - Idris2
   - idris2
   - .idr file
   - .ipkg file
   - pack.toml
-  - idris2-yul
   - idris2-evm
   - Yul compilation
   - EVM bytecode
@@ -19,54 +18,56 @@ triggers:
 
 ## Project Policy
 
-**idris2-icwasm / idris2-yul projects are Idris2-complete**
+**idris2-icwasm / idris2-evm projects are Idris2-complete**
 
 - **IC WASM:** No Rust or C. Use idris2-icwasm only.
-- **EVM:** No Solidity, Foundry, Hardhat. Use idris2-yul only.
+- **EVM:** No Solidity, Foundry, Hardhat. Use idris2-evm only (includes Yul codegen).
 
 Minimize external toolchain dependencies. Maximize Idris2 type safety.
 
 ## Compilation Targets
 
-Idris2 パッケージは4つのバックエンドターゲットがある:
+Idris2 packages have 4 backend targets:
 
 | Target | Backend | Build | `%foreign` prefix |
 |--------|---------|-------|-------------------|
 | Native | Chez Scheme | `pack build <pkg>` | (standard) |
-| EVM | idris2-yul codegen | `idris2-yul` 経由 | `evm:*` |
-| IC WASM | idris2-icwasm codegen | `idris2-icwasm` 経由 | `wasm:*`, `ic0:*` |
+| EVM | idris2-evm codegen | `idris2-yul` executable (from idris2-evm package) | `evm:*` |
+| IC WASM | idris2-icwasm codegen | `idris2-icwasm` executable | `wasm:*`, `ic0:*` |
 | JavaScript | Idris2 built-in | `--cg javascript` / `--cg node` | `javascript:*` |
 
-### ターゲット判定方法
+### Target Detection
 
-ソース内の `%foreign` 宣言で判定:
-- `"evm:*"` → EVM ターゲット。`pack build` は **必ず失敗**（正常動作）
-- `"javascript:*"` → JS ターゲット。ipkg に `--cg javascript` が必要
-- `"wasm:*"` / `"ic0:*"` → IC WASM ターゲット
-- 上記なし → Native (Chez) ターゲット
+Detect target via `%foreign` declarations in source:
+- `"evm:*"` -> EVM target. `pack build` will **always fail** (expected behavior)
+- `"javascript:*"` -> JS target. ipkg needs `--cg javascript`
+- `"wasm:*"` / `"ic0:*"` -> IC WASM target
+- none of above -> Native (Chez) target
 
-### パッケージ別ターゲット一覧
+### Per-Package Build Table
 
-| Package | Target | `pack build` | 正しいビルド |
-|---------|--------|--------------|-------------|
-| idris2-textdao | EVM | ❌ expected fail | `idris2-yul` 経由 |
-| idris2-ouf | EVM | ❌ expected fail | `idris2-yul` 経由 |
-| idris2-subcontract | EVM (lib) | ✅ lib のみ | `idris2-yul` 経由 |
-| oucdashboard | JS | ✅ (`--cg javascript` in ipkg) | `pack build` / ipkg opts |
-| ouc | IC WASM | ✅ tests のみ | `idris2-icwasm` 経由 |
-| icp-indexer | IC WASM | ✅ tests のみ | `idris2-icwasm` 経由 |
-| lazyweb | Native | ✅ | `pack build` |
-| (その他 magical-utils) | Native | ✅ | `pack build` |
+| Package | Target | `pack build` | Correct Build |
+|---------|--------|--------------|---------------|
+| idris2-textdao | EVM | expected fail | `idris2-yul` executable |
+| idris2-ouf | EVM | expected fail | `idris2-yul` executable |
+| idris2-subcontract | EVM (lib) | lib only | `idris2-yul` executable |
+| oucdashboard | JS | (`--cg javascript` in ipkg) | `pack build` / ipkg opts |
+| ouc | IC WASM | tests only | `idris2-icwasm` executable |
+| icp-indexer | IC WASM | tests only | `idris2-icwasm` executable |
+| lazyweb | Native | OK | `pack build` |
+| (other magical-utils) | Native | OK | `pack build` |
 
-### アーキテクチャ対応表
+### Architecture Table
 
-EVM 系と IC 系は対称的な3層構造:
+EVM and IC have symmetric 3-layer structure:
 
 | Layer | EVM | IC |
 |-------|-----|-----|
-| 低レベル型・生成 | idris2-evm (型・解釈器) + idris2-yul (codegen) | idris2-icwasm (生成+IC0 FFI、1パッケージで両方) |
-| アプリFW | idris2-subcontract (UCS/ERC-7546) | idris2-cdk (StableMemory/FR Monad/ICP API) |
-| カバレッジ | idris2-evm-coverage | idris2-dfx-coverage |
+| Low-level types + codegen | idris2-evm (interpreter + Yul codegen, single package) | idris2-icwasm (codegen + IC0 FFI, single package) |
+| App framework | idris2-subcontract (UCS/ERC-7546) | idris2-cdk (StableMemory/FR Monad/ICP API) |
+| Coverage | idris2-evm-coverage | idris2-dfx-coverage |
+
+**Note:** idris2-yul was merged into idris2-evm. The `idris2-yul` executable is now built from the idris2-evm package (entry point: `YulMain.idr`).
 
 ## Memory Explosion Patterns (OOM Avoidance)
 
@@ -86,14 +87,14 @@ Details: `docs/idris2-memory-eater.md`
 
 Same type name in multiple modules causes compiler backtracking during type inference. Keep packages cleanly separated. Don't duplicate types across packages. If RAM explodes, check for type name collisions first.
 
-## idris2-yul Known Bugs
+## idris2-evm Yul Codegen Known Bugs
 
 ### `/=` Operator Reverses Branch Logic
 `if x /= 0 then A else B` compiles as `if x == 0 then A else B`.
 **Workaround:** Always use `== 0` with swapped branches.
 
 ### Closure Parameter Ordering
-When idris2-yul creates closures across many let bindings, parameter order can get shuffled.
+When the Yul codegen creates closures across many let bindings, parameter order can get shuffled.
 **Workaround:** Restructure code to minimize deep closure nesting. Read calldata after state changes.
 
 ### Missing EVM.Primitives

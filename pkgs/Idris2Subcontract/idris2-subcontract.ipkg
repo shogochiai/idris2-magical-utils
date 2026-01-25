@@ -3,13 +3,13 @@ version = 0.1.0
 
 authors = "shogochiai"
 
-brief = "Subcontract framework for Idris2 - UCS patterns on idris2-yul"
+brief = "Subcontract framework for Idris2 - UCS patterns on idris2-evm"
 
 sourcedir = "src"
 
 depends = base
         , contrib
-        , idris2-yul
+        , idris2-evm
 
 modules = Subcontract.Standards.ERC7546.Slots
         , Subcontract.Standards.ERC7546.Forward
