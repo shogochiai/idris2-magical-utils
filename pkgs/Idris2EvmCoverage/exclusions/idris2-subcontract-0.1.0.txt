@@ -1,0 +1,16 @@
+# Exclusion patterns for idris2-subcontract v0.1.0
+# These patterns are specific to how idris2-subcontract generates Yul code
+
+# Subcontract infrastructure functions
+Subcontract.*
+SubcontractCore.*
+
+# Entry point dispatchers (auto-generated)
+*_dispatch
+*_selector
+
+# Memory management helpers
+*_alloc
+*_free
+*_copy
+

@@ -1,0 +1,61 @@
+# Base exclusion patterns for EVM/Yul source coverage
+# Format: one pattern per line
+#   - prefix matching: pattern*
+#   - suffix matching: *pattern
+#   - contains matching: *pattern*
+#   - exact matching: pattern (no wildcards)
+# Lines starting with # are comments
+
+# =============================================================================
+# Test-related modules and functions (should not count as production coverage)
+# =============================================================================
+
+# Test module patterns (exclude entire test modules)
+*.Tests.*
+*.Test.*
+
+# Common test function naming patterns
+*test_*
+*Test
+*Tests
+*runTest*
+*runAllTests*
+*main
+
+# Spec/specification functions (separate from implementation)
+*.Spec.*
+
+# =============================================================================
+# Compiler-generated patterns
+# =============================================================================
+
+# Numbered suffix variants (compiler-generated)
+*#0
+*#1
+*#2
+*#3
+*#4
+*#5
+*#6
+*#7
+*#8
+*#9
+
+# =============================================================================
+# Helper/utility functions (implementation details)
+# =============================================================================
+
+# Internal helper prefixes
+u_*
+n_*
+
+# =============================================================================
+# Standard library and prelude (already covered by base libraries)
+# =============================================================================
+
+Prelude.*
+Data.*
+System.*
+Control.*
+Decidable.*
+

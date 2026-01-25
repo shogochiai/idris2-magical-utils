@@ -1,0 +1,15 @@
+# Exclusion patterns for idris2-yul v0.1.0
+# These patterns are specific to how idris2-yul generates Yul code
+
+# Yul runtime support functions
+YulRuntime.*
+Yul.*
+
+# ABI encoding/decoding helpers (auto-generated)
+*_abi_encode*
+*_abi_decode*
+
+# Storage layout functions
+*_slot
+*_offset
+

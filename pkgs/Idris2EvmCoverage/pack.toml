@@ -1,0 +1,9 @@
+[custom.all.idris2-coverage-core]
+type = "local"
+path = "/Users/bob/code/idris2-coverage-core"
+ipkg = "idris2-coverage-core.ipkg"
+
+[custom.all.idris2-evm]
+type = "local"
+path = "/Users/bob/code/idris2-evm"
+ipkg = "idris2-evm.ipkg"

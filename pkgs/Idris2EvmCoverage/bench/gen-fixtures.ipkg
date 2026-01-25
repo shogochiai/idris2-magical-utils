@@ -1,0 +1,12 @@
+package gen-fixtures
+version = 0.1.0
+brief = "Synthetic HTML fixture generator"
+
+depends = base, contrib
+
+sourcedir = "."
+
+modules = GenFixtures
+
+main = GenFixtures
+executable = gen-fixtures
