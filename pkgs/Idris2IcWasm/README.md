@@ -1,4 +1,4 @@
-# idris2-wasm
+# idris2-icwasm
 
 Idris2 to WebAssembly compilation pipeline with Source Map support for ICP canisters.
 

@@ -1,4 +1,4 @@
-# idris2-wasm
+# idris2-icwasm
 
 Idris2 → WebAssembly compilation pipeline for ICP canisters.
 
