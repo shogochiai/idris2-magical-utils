@@ -1,6 +1,6 @@
 [custom.all.idris2-coverage-core]
 type = "local"
-path = "/Users/bob/code/idris2-coverage-core"
+path = "../Idris2CoverageCore"
 ipkg = "idris2-coverage-core.ipkg"
 
 [install]

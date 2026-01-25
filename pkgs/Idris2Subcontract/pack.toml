@@ -3,7 +3,7 @@
 
 [custom.all.idris2-yul]
 type   = "local"
-path   = "/Users/bob/code/idris2-yul"
+path   = "../Idris2Yul"
 ipkg   = "idris2-yul.ipkg"
 
 [custom.all.idris2-subcontract]

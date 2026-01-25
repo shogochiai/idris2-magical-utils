@@ -1,11 +1,11 @@
 [custom.all.idris2-coverage-core]
 type = "local"
-path = "/Users/bob/code/idris2-coverage-core"
+path = "../Idris2CoverageCore"
 ipkg = "idris2-coverage-core.ipkg"
 
 [custom.all.idris2-wasm]
 type = "local"
-path = "/Users/bob/code/idris2-wasm"
+path = "../Idris2Wasm"
 ipkg = "idris2-wasm.ipkg"
 
 [custom.all.idris2-dfx-coverage]
