@@ -1,0 +1,67 @@
+package idris2-subcontract
+version = 0.1.0
+
+authors = "shogochiai"
+
+brief = "Subcontract framework for Idris2 - UCS patterns on idris2-yul"
+
+sourcedir = "src"
+
+depends = base
+        , contrib
+        , idris2-yul
+
+modules = Subcontract.Standards.ERC7546.Slots
+        , Subcontract.Standards.ERC7546.Forward
+        , Subcontract.Standards.ERC7546.Proxy
+        , Subcontract.Standards.ERC7546.Dictionary
+        , Subcontract.Standards.ERC7546.Analysis
+        , Subcontract.Standards.ERC7546.UpgradeDetection
+        , Subcontract.Standards.ERC7546.UpgradeValidation
+        , Subcontract.Core.Proxy
+        , Subcontract.Core.Dictionary
+        , Subcontract.Core.Entry
+        , Subcontract.Core.Process
+        , Subcontract.Core.Script
+        , Subcontract.Core.Capability
+        , Subcontract.Core.Bundle
+        , Subcontract.Core.StorageCap
+        , Subcontract.Core.Storable
+        , Subcontract.Core.Schema
+        , Subcontract.Core.SchemaCompat
+        , Subcontract.Core.SchemaCheck
+        , Subcontract.Core.Derived
+        , Subcontract.Core.Invariants
+        , Subcontract.Core.AccessControl
+        , Subcontract.Core.Reentrancy
+        , Subcontract.Core.Conflict
+        , Subcontract.Core.Evidence
+        , Subcontract.Core.Outcome
+        , Subcontract.Core.Resolve
+        , Subcontract.Core.EntryCtx
+        , Subcontract.Core.EvmM
+        , Subcontract.Core.Idempotent
+        , Subcontract.Core.FR
+        , Subcontract.Core.Tests.AllTests
+        , Subcontract.Core.Lifecycle
+        , Subcontract.Core.Call
+        , Subcontract.Core.Gas
+        , Subcontract.Core.Effects
+        , Subcontract.Core.Epoch
+        , Subcontract.Core.LinearAsset
+        , Subcontract.Core.ABI.Sig
+        , Subcontract.Core.ABI.Decoder
+        , Subcontract.Std.Functions.FeatureToggle
+        , Subcontract.Std.Functions.Clone
+        , Subcontract.Std.Functions.Receive
+        , Subcontract.Standards.ERC7546.OptimisticUpgrader.Storages.Slots
+        , Subcontract.Standards.ERC7546.OptimisticUpgrader.Storages.Schema
+        , Subcontract.Standards.ERC7546.OptimisticUpgrader.Functions.Core
+        , Subcontract.Standards.ERC7546.OptimisticUpgrader.Tests.AllTests
+        , Subcontract.Std.Functions.ProxyFactory
+        , Subcontract.Standards.ERC7546.Inception.Storages.Schema
+        , Subcontract.Standards.ERC7546.Inception.Functions.Propose
+        , Subcontract.Standards.ERC7546.Inception.Functions.Fork
+        , Subcontract.Standards.ERC7546.Inception.Functions.Vote
+        , Subcontract.Standards.ERC7546.Inception.Functions.Resolve
+        , Subcontract.Standards.ERC7546.Inception.Tests.AllTests

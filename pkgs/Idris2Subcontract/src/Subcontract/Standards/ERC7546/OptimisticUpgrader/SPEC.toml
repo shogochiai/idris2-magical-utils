@@ -1,0 +1,133 @@
+# OptimisticUpgrader (OU) Specification
+# n-of-n Multisig Admin for ERC-7546 Dictionary
+
+[definitions]
+prefix = "OU"
+
+[[spec_area]]
+name = "Proposal Creation"
+
+[[spec]]
+id = "${prefix}_PROP_001"
+title = "Only proposer can create proposals"
+invariant = "createProposal reverts if caller != proposer"
+
+[[spec]]
+id = "${prefix}_PROP_002"
+title = "Proposal requires auditors"
+invariant = "createProposal reverts if auditorCount == 0"
+
+[[spec]]
+id = "${prefix}_PROP_003"
+title = "Threshold equals auditor count (n-of-n)"
+invariant = "New proposal threshold == getAuditorCount()"
+
+[[spec]]
+id = "${prefix}_PROP_004"
+title = "Proposal starts with zero votes"
+invariant = "New proposal has voteCount == 0 and executed == 0"
+
+[[spec_area]]
+name = "Vote Casting"
+
+[[spec]]
+id = "${prefix}_VOTE_001"
+title = "Only auditors can vote"
+invariant = "castVote reverts if caller not in auditor list"
+
+[[spec]]
+id = "${prefix}_VOTE_002"
+title = "Double voting prevented"
+invariant = "castVote reverts if caller already has decision != 0"
+
+[[spec]]
+id = "${prefix}_VOTE_003"
+title = "Expired voting rejected"
+invariant = "castVote reverts if block.timestamp > deadline"
+
+[[spec]]
+id = "${prefix}_VOTE_004"
+title = "Executed proposal cannot receive votes"
+invariant = "castVote reverts if executed == 1"
+
+[[spec]]
+id = "${prefix}_VOTE_005"
+title = "Approval increments vote count"
+invariant = "castVote with decision==1 increments voteCount by 1"
+
+[[spec]]
+id = "${prefix}_VOTE_006"
+title = "VoteCast event emitted"
+invariant = "castVote emits VoteCast(proposalId, auditor, decision)"
+
+[[spec_area]]
+name = "Proposer Signature"
+
+[[spec]]
+id = "${prefix}_SIG_001"
+title = "Only proposer can submit signature"
+invariant = "submitProposerSignature reverts if caller != proposer"
+
+[[spec]]
+id = "${prefix}_SIG_002"
+title = "Signature submitted once"
+invariant = "submitProposerSignature reverts if proposerSig != 0"
+
+[[spec]]
+id = "${prefix}_SIG_003"
+title = "Executed proposal cannot receive signature"
+invariant = "submitProposerSignature reverts if executed == 1"
+
+[[spec_area]]
+name = "Automatic Execution"
+
+[[spec]]
+id = "${prefix}_EXEC_001"
+title = "Execute when threshold met with proposer sig"
+invariant = "tryExecuteUpgrade calls executeUpgrade iff voteCount >= threshold AND proposerSig != 0"
+
+[[spec]]
+id = "${prefix}_EXEC_002"
+title = "Reentrancy protection via executed flag"
+invariant = "executeUpgrade sets executed = 1 before external call"
+
+[[spec]]
+id = "${prefix}_EXEC_003"
+title = "Dictionary.setImplementation called"
+invariant = "executeUpgrade calls dictionary.setImplementation(selector, newImpl)"
+
+[[spec]]
+id = "${prefix}_EXEC_004"
+title = "UpgradeExecuted event on success"
+invariant = "executeUpgrade emits UpgradeExecuted(proposalId, targetProxy, newImpl)"
+
+[[spec]]
+id = "${prefix}_EXEC_005"
+title = "Revert on Dictionary call failure"
+invariant = "executeUpgrade reverts if Dictionary call returns 0"
+
+[[spec_area]]
+name = "View Functions"
+
+[[spec]]
+id = "${prefix}_VIEW_001"
+title = "getVotingStatus returns correct values"
+invariant = "getVotingStatus returns (currentVotes, threshold, isComplete)"
+
+[[spec]]
+id = "${prefix}_VIEW_002"
+title = "isComplete true iff threshold met with proposer sig"
+invariant = "isComplete == 1 iff voteCount >= threshold AND proposerSig != 0 AND executed == 0"
+
+[[spec_area]]
+name = "Access Control"
+
+[[spec]]
+id = "${prefix}_ACL_001"
+title = "isAuditor iterates auditor list"
+invariant = "isAuditor returns true iff addr in auditors[0..auditorCount]"
+
+[[spec]]
+id = "${prefix}_ACL_002"
+title = "Proposer is single address"
+invariant = "Only address at SLOT_PROPOSER can create proposals/submit sig"

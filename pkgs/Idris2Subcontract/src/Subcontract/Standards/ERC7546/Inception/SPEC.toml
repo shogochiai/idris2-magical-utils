@@ -1,0 +1,222 @@
+# Inception Text Governance Specification
+# Human intent injection point for Self-Amending Protocols
+
+[meta]
+name = "Inception"
+version = "0.1.0"
+description = "TextDAO-style deliberative governance for protocol intent"
+
+# =============================================================================
+# InceptionSpec Types
+# =============================================================================
+
+[spec.INTENT_KEYWORDS]
+id = "INTENT-KW"
+description = "Intent keywords that guide LLM proposal generation"
+type = "List String"
+example = '["security", "efficiency", "user-privacy"]'
+
+[spec.NON_GOALS]
+id = "INTENT-NG"
+description = "Things the protocol explicitly will NOT do"
+type = "List String"
+example = '["KYC", "centralized-custody", "MEV-extraction"]'
+
+[spec.BOUNDARY]
+id = "INTENT-BD"
+description = "Hard boundaries that must never be crossed"
+type = "List String"
+example = '["no-admin-keys", "max-upgrade-frequency-7d"]'
+
+[spec.ALLOWED_CHANGE_KINDS]
+id = "INTENT-ACK"
+description = "Change kinds that can be auto-adopted without human review"
+type = "List ChangeKind"
+values = ["Bugfix", "GasOptimization", "Documentation", "SecurityPatch", "FeatureAddition", "FeatureRemoval", "ParameterChange", "ArchitecturalChange"]
+
+[spec.INCEPTION_SPEC]
+id = "INCEP-SPEC"
+description = "Complete Inception specification (the constitution)"
+fields = ["intentKeywords", "nonGoals", "boundary", "allowedChangeKinds", "version", "ipfsHash"]
+
+# =============================================================================
+# Proposal Types
+# =============================================================================
+
+[spec.PROPOSAL_STATUS]
+id = "PROP-STATUS"
+description = "Proposal lifecycle status"
+values = ["Pending", "Active", "Accepted", "Rejected", "Superseded"]
+
+[spec.TEXT_PROPOSAL]
+id = "PROP-TEXT"
+description = "Text proposal for Inception amendment"
+fields = ["proposalId", "textHash", "proposer", "parentId", "status", "createdAt", "votingEnds", "totalVotes"]
+
+[spec.RANKED_VOTE]
+id = "VOTE-RCV"
+description = "Ranked choice vote (up to 3 preferences)"
+fields = ["voter", "rank1", "rank2", "rank3", "weight"]
+
+# =============================================================================
+# Propose Functions
+# =============================================================================
+
+[spec.SUBMIT_PROPOSAL]
+id = "PROP-SUBMIT"
+description = "Submit a new text proposal"
+inputs = ["textHash: String", "votingPeriod: Nat", "changeKind: ChangeKind"]
+outputs = ["ProposalCreated Nat | Unauthorized | InvalidText | BoundaryViolated"]
+
+[spec.ACTIVATE_PROPOSAL]
+id = "PROP-ACTIVATE"
+description = "Activate a pending proposal (start voting)"
+inputs = ["proposalId: Nat"]
+outputs = ["Either String InceptionState"]
+
+[spec.VALIDATE_PROPOSAL]
+id = "PROP-VALIDATE"
+description = "Validate proposal against current Inception"
+inputs = ["InceptionSpec", "ProposeParams"]
+outputs = ["Either String ()"]
+
+# =============================================================================
+# Fork Functions
+# =============================================================================
+
+[spec.CREATE_FORK]
+id = "FORK-CREATE"
+description = "Create a fork of an existing proposal"
+inputs = ["parentId: Nat", "textHash: String", "forkReason: String", "votingPeriod: Nat"]
+outputs = ["ForkCreated Nat | ParentNotFound | ParentNotForkable | InvalidFork"]
+
+[spec.GET_FORK_DEPTH]
+id = "FORK-DEPTH"
+description = "Get fork depth (0 = root, 1 = first fork, etc.)"
+inputs = ["proposalId: Nat"]
+outputs = ["Nat"]
+
+[spec.GET_FORK_LINEAGE]
+id = "FORK-LINEAGE"
+description = "Get fork lineage (from root to current)"
+inputs = ["proposalId: Nat"]
+outputs = ["List Nat"]
+
+[spec.GET_FORK_TREE]
+id = "FORK-TREE"
+description = "Get all proposals in fork tree"
+inputs = ["rootId: Nat"]
+outputs = ["List TextProposal"]
+
+# =============================================================================
+# Vote Functions
+# =============================================================================
+
+[spec.CAST_VOTE]
+id = "VOTE-CAST"
+description = "Cast a ranked choice vote"
+inputs = ["rank1: Nat", "rank2: Nat", "rank3: Nat"]
+outputs = ["VoteCast Nat | AlreadyVoted | InvalidProposal | VotingClosed | InvalidRanking"]
+
+[spec.GET_VOTES_FOR]
+id = "VOTE-GET"
+description = "Get votes for a proposal"
+inputs = ["proposalId: Nat"]
+outputs = ["List RankedVote"]
+
+[spec.TRANSFER_VOTES]
+id = "VOTE-TRANSFER"
+description = "Transfer votes from eliminated proposal to next preference"
+inputs = ["eliminated: Nat"]
+outputs = ["List RankedVote"]
+
+[spec.GET_EFFECTIVE_VOTES]
+id = "VOTE-EFFECTIVE"
+description = "Get effective vote count after eliminations"
+inputs = ["votes: List RankedVote", "eliminatedIds: List Nat", "proposalId: Nat"]
+outputs = ["Nat"]
+
+# =============================================================================
+# Resolve Functions
+# =============================================================================
+
+[spec.RESOLVE_PROPOSAL]
+id = "RESOLVE-PROP"
+description = "Resolve a proposal (or fork competition)"
+inputs = ["proposalId: Nat", "timestamp: Nat"]
+outputs = ["Winner Nat | NoQuorum | Elimination Nat | Tie | StillVoting"]
+
+[spec.RUN_RCV_ROUND]
+id = "RESOLVE-RCV"
+description = "Run one round of RCV elimination"
+inputs = ["RCVRound"]
+outputs = ["(ResolveResult, RCVRound)"]
+
+[spec.HAS_QUORUM]
+id = "RESOLVE-QUORUM"
+description = "Check if quorum is reached"
+inputs = ["totalVotes: Nat", "eligibleVoters: Nat"]
+outputs = ["Bool"]
+
+[spec.HAS_SUPER_MAJORITY]
+id = "RESOLVE-SUPER"
+description = "Check if proposal has super majority (66.7%)"
+inputs = ["proposalVotes: Nat", "totalVotes: Nat"]
+outputs = ["Bool"]
+
+[spec.APPLY_INCEPTION_UPDATE]
+id = "RESOLVE-APPLY"
+description = "Apply accepted proposal to update Inception spec"
+inputs = ["winnerId: Nat", "newSpec: InceptionSpec"]
+outputs = ["Either String InceptionState"]
+
+# =============================================================================
+# Drift Detection
+# =============================================================================
+
+[spec.DETECT_DRIFT]
+id = "DRIFT-DETECT"
+description = "Check proposal text against Inception for drift"
+inputs = ["InceptionSpec", "proposalText: String"]
+outputs = ["NoDrift | MinorDrift | MajorDrift | BoundaryViolation"]
+
+[spec.AUDITOR_VERDICT]
+id = "DRIFT-VERDICT"
+description = "Auditor verdict on proposal-Inception alignment"
+values = ["Match", "DriftDetected String", "InsufficientEvidence"]
+
+# =============================================================================
+# Storage Slots
+# =============================================================================
+
+[spec.SLOT_INCEPTION_HASH]
+id = "SLOT-INCEP"
+description = "Current InceptionSpec IPFS hash"
+slot = "INCEPTION_NAMESPACE + 0"
+
+[spec.SLOT_PROPOSAL_COUNT]
+id = "SLOT-PROP-CNT"
+description = "Total proposal count"
+slot = "INCEPTION_NAMESPACE + 10"
+
+[spec.SLOT_PROPOSALS_BASE]
+id = "SLOT-PROP-BASE"
+description = "Proposals mapping base"
+slot = "INCEPTION_NAMESPACE + 11"
+
+[spec.SLOT_VOTES_BASE]
+id = "SLOT-VOTE-BASE"
+description = "Votes mapping base"
+slot = "INCEPTION_NAMESPACE + 100"
+
+[spec.SLOT_QUORUM_BPS]
+id = "SLOT-QUORUM"
+description = "Quorum threshold (basis points)"
+slot = "INCEPTION_NAMESPACE + 301"
+default = 1000  # 10%
+
+[spec.SLOT_SUPER_MAJORITY_BPS]
+id = "SLOT-SUPER"
+description = "Super majority threshold (basis points)"
+slot = "INCEPTION_NAMESPACE + 302"
+default = 6667  # 66.67%

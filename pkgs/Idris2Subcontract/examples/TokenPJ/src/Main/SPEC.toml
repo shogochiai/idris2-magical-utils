@@ -1,0 +1,93 @@
+# TokenPJ Specification
+# Defines the contract's public interface for verification and documentation
+
+[contract]
+name = "TokenPJ"
+version = "1.0.0"
+namespace = "tokenpj.token.v1"
+
+[storage]
+# ERC-7201 root slot
+root = "0x8a3c5e7f9b1d2a4c6e8f0b2d4a6c8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c00"
+
+[[storage.fields]]
+name = "totalSupply"
+type = "uint256"
+offset = 0
+
+[[storage.fields]]
+name = "balances"
+type = "mapping(address => uint256)"
+offset = 1
+
+[[storage.fields]]
+name = "allowances"
+type = "mapping(address => mapping(address => uint256))"
+offset = 2
+
+[[storage.fields]]
+name = "decimals"
+type = "uint8"
+offset = 3
+
+[[storage.fields]]
+name = "owner"
+type = "address"
+offset = 4
+
+[functions]
+
+[[functions.entries]]
+name = "totalSupply"
+selector = "0x18160ddd"
+signature = "totalSupply() returns (uint256)"
+mutability = "view"
+
+[[functions.entries]]
+name = "balanceOf"
+selector = "0x70a08231"
+signature = "balanceOf(address) returns (uint256)"
+mutability = "view"
+
+[[functions.entries]]
+name = "transfer"
+selector = "0xa9059cbb"
+signature = "transfer(address,uint256) returns (bool)"
+mutability = "nonpayable"
+
+[[functions.entries]]
+name = "approve"
+selector = "0x095ea7b3"
+signature = "approve(address,uint256) returns (bool)"
+mutability = "nonpayable"
+
+[[functions.entries]]
+name = "allowance"
+selector = "0xdd62ed3e"
+signature = "allowance(address,address) returns (uint256)"
+mutability = "view"
+
+[[functions.entries]]
+name = "mint"
+selector = "0x40c10f19"
+signature = "mint(address,uint256)"
+mutability = "nonpayable"
+access = "onlyOwner"
+
+[[functions.entries]]
+name = "owner"
+selector = "0x8da5cb5b"
+signature = "owner() returns (address)"
+mutability = "view"
+
+[events]
+
+[[events.entries]]
+name = "Transfer"
+signature = "Transfer(address indexed, address indexed, uint256)"
+topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+[[events.entries]]
+name = "Approval"
+signature = "Approval(address indexed, address indexed, uint256)"
+topic = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"

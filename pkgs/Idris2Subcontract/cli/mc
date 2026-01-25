@@ -1,0 +1,286 @@
+#!/bin/bash
+# MC CLI - MetaContract for Idris2
+# Usage: mc <command> [args]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MC_ROOT="${MC_ROOT:-$(pwd)}"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+print_help() {
+    echo "MC CLI - MetaContract Framework for Idris2"
+    echo ""
+    echo "Usage: mc <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  init <name>       Initialize new MC project"
+    echo "  build             Build all contracts"
+    echo "  deploy            Deploy contracts to network"
+    echo "  upgrade           Upgrade dictionary with new functions"
+    echo "  test              Run Foundry tests"
+    echo "  status            Show deployment status"
+    echo ""
+    echo "Options:"
+    echo "  --network <name>  Target network (default: anvil)"
+    echo "  --help            Show this help"
+}
+
+cmd_init() {
+    local name="${1:-my-mc-project}"
+    echo -e "${BLUE}=== Initializing MC Project: $name ===${NC}"
+
+    mkdir -p "$name"
+    cd "$name"
+
+    # Create directory structure
+    mkdir -p src/{textdao,hubdao}/{storages,functions/{onlyMember,onlyReps,protected},interfaces}
+    mkdir -p test script deploy
+
+    # Create pack.toml
+    cat > pack.toml << 'EOF'
+# MC Project - pack.toml
+
+[custom.all.idris2-yul]
+type   = "local"
+path   = "/Users/bob/code/idris2-yul"
+ipkg   = "idris2-yul.ipkg"
+
+[custom.all.idris2-mc]
+type   = "local"
+path   = "/Users/bob/code/idris2-mc"
+ipkg   = "idris2-mc.ipkg"
+EOF
+
+    # Create ipkg
+    cat > "${name}.ipkg" << EOF
+package ${name}
+version = 0.1.0
+
+authors = "MC Developer"
+
+brief = "MC Project: ${name}"
+
+sourcedir = "src"
+
+depends = base
+        , contrib
+        , idris2-yul
+        , idris2-mc
+
+modules =
+EOF
+
+    # Create foundry.toml
+    cat > foundry.toml << 'EOF'
+[profile.default]
+src = "build/output"
+out = "build/foundry"
+libs = ["lib"]
+solc_version = "0.8.24"
+evm_version = "cancun"
+
+[rpc_endpoints]
+anvil = "http://127.0.0.1:8545"
+EOF
+
+    # Create example schema
+    cat > src/textdao/storages/Schema.idr << 'EOF'
+||| TextDAO Storage Schema
+||| Define your storage layout here using ERC-7201 pattern
+module TextDAO.Storages.Schema
+
+import EVM.Storage.ERC7201
+
+-- Your schema definitions here
+-- See idris2-mc for examples
+EOF
+
+    # Create .gitignore
+    cat > .gitignore << 'EOF'
+build/
+*.ttc
+*.ttm
+depends/
+EOF
+
+    echo -e "${GREEN}✓ Project initialized: $name${NC}"
+    echo ""
+    echo "Next steps:"
+    echo "  cd $name"
+    echo "  mc build"
+}
+
+cmd_build() {
+    echo -e "${BLUE}=== Building MC Contracts ===${NC}"
+
+    # Find all .idr files in src/*/functions/
+    find src -path "*/functions/*.idr" -type f | while read -r file; do
+        name=$(basename "$file" .idr)
+        echo -e "${YELLOW}Building: $file${NC}"
+
+        # Use idris2-yul to compile
+        if [ -x "/Users/bob/code/idris2-yul/scripts/build-contract.sh" ]; then
+            /Users/bob/code/idris2-yul/scripts/build-contract.sh "$file" 2>&1 || true
+        else
+            echo "  Skipping (idris2-yul not found)"
+        fi
+    done
+
+    echo -e "${GREEN}✓ Build complete${NC}"
+}
+
+cmd_deploy() {
+    local network="${NETWORK:-anvil}"
+    echo -e "${BLUE}=== Deploying to $network ===${NC}"
+
+    # Check for deploy script
+    if [ ! -f "script/Deploy.s.sol" ] && [ ! -f "deploy/deploy.sh" ]; then
+        echo -e "${YELLOW}No deploy script found. Creating template...${NC}"
+        mkdir -p deploy
+        cat > deploy/deploy.sh << 'DEPLOY_EOF'
+#!/bin/bash
+# MC Deploy Script
+# Customize this for your project
+
+set -e
+
+NETWORK="${1:-anvil}"
+RPC_URL="${RPC_URL:-http://127.0.0.1:8545}"
+PRIVATE_KEY="${PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
+
+echo "Deploying to: $NETWORK ($RPC_URL)"
+
+# Deploy Dictionary
+echo "1. Deploying Dictionary..."
+DICT_BYTECODE=$(cat build/output/Dictionary.bin 2>/dev/null || echo "")
+if [ -n "$DICT_BYTECODE" ]; then
+    DICT_ADDR=$(cast send --create "0x$DICT_BYTECODE" --private-key "$PRIVATE_KEY" --rpc-url "$RPC_URL" --json | jq -r '.contractAddress')
+    echo "   Dictionary: $DICT_ADDR"
+fi
+
+# Deploy Proxy
+echo "2. Deploying Proxy..."
+PROXY_BYTECODE=$(cat build/output/Proxy.bin 2>/dev/null || echo "")
+if [ -n "$PROXY_BYTECODE" ]; then
+    PROXY_ADDR=$(cast send --create "0x$PROXY_BYTECODE" --private-key "$PRIVATE_KEY" --rpc-url "$RPC_URL" --json | jq -r '.contractAddress')
+    echo "   Proxy: $PROXY_ADDR"
+fi
+
+echo "Done!"
+DEPLOY_EOF
+        chmod +x deploy/deploy.sh
+    fi
+
+    # Run deploy script
+    if [ -f "deploy/deploy.sh" ]; then
+        ./deploy/deploy.sh "$network"
+    fi
+
+    echo -e "${GREEN}✓ Deploy complete${NC}"
+}
+
+cmd_upgrade() {
+    echo -e "${BLUE}=== Upgrading Dictionary ===${NC}"
+
+    if [ ! -f "deploy/upgrade.sh" ]; then
+        echo -e "${YELLOW}Creating upgrade script template...${NC}"
+        mkdir -p deploy
+        cat > deploy/upgrade.sh << 'UPGRADE_EOF'
+#!/bin/bash
+# MC Upgrade Script
+# Registers new function implementations in Dictionary
+
+set -e
+
+DICT_ADDR="${DICT_ADDR:-}"
+RPC_URL="${RPC_URL:-http://127.0.0.1:8545}"
+PRIVATE_KEY="${PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
+
+if [ -z "$DICT_ADDR" ]; then
+    echo "Error: DICT_ADDR not set"
+    exit 1
+fi
+
+echo "Upgrading Dictionary: $DICT_ADDR"
+
+# For each function contract, register its selectors
+# setImplementation(bytes4 selector, address impl)
+# selector: 0x2c3c3e4e
+
+# Example:
+# cast send $DICT_ADDR "setImplementation(bytes4,address)" 0x12345678 $IMPL_ADDR \
+#   --private-key "$PRIVATE_KEY" --rpc-url "$RPC_URL"
+
+echo "Done!"
+UPGRADE_EOF
+        chmod +x deploy/upgrade.sh
+    fi
+
+    echo -e "${GREEN}✓ Upgrade template created${NC}"
+}
+
+cmd_test() {
+    echo -e "${BLUE}=== Running Tests ===${NC}"
+
+    if command -v forge &> /dev/null; then
+        forge test -vv
+    else
+        echo -e "${YELLOW}Foundry not found. Install with:${NC}"
+        echo "  curl -L https://foundry.paradigm.xyz | bash"
+        echo "  foundryup"
+    fi
+}
+
+cmd_status() {
+    echo -e "${BLUE}=== MC Project Status ===${NC}"
+
+    # Count contracts
+    local func_count=$(find src -path "*/functions/*.idr" -type f 2>/dev/null | wc -l | tr -d ' ')
+    local built_count=$(find build/output -name "*.bin" 2>/dev/null | wc -l | tr -d ' ')
+
+    echo "Source contracts: $func_count"
+    echo "Built contracts:  $built_count"
+
+    if [ -d "build/output" ]; then
+        echo ""
+        echo "Built artifacts:"
+        ls -la build/output/*.bin 2>/dev/null | awk '{print "  " $NF ": " $5 " bytes"}'
+    fi
+}
+
+# Main dispatch
+case "${1:-}" in
+    init)
+        shift
+        cmd_init "$@"
+        ;;
+    build)
+        cmd_build
+        ;;
+    deploy)
+        cmd_deploy
+        ;;
+    upgrade)
+        cmd_upgrade
+        ;;
+    test)
+        cmd_test
+        ;;
+    status)
+        cmd_status
+        ;;
+    help|--help|-h)
+        print_help
+        ;;
+    *)
+        print_help
+        exit 1
+        ;;
+esac
