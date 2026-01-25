@@ -1,0 +1,27 @@
+package idris2-cdk
+version = 0.1.0
+authors = "shogochiai"
+brief   = "Idris2 CDK for Internet Computer Protocol (ICP)"
+license = "MIT"
+
+sourcedir = "src"
+
+modules = ICP.IC0
+        , ICP.Types
+        , ICP.API
+        , ICP.Candid.Types
+        , ICP.StableMemory
+        , ICP.StableKV
+        , ICP.StableBTree
+        , ICP.IndexerSchema
+        , ICP.Management.HttpOutcall
+        , ICP.Management.TECDSA
+        -- FR Monad (Failure-Recovery Monad)
+        , FRMonad.Failure
+        , FRMonad.Evidence
+        , FRMonad.Core
+        , FRMonad.Indexed
+        , FRMonad.Graded
+        -- Tests
+        , FRMonad.Tests.AllTests
+        , ICP.Tests.AllTests

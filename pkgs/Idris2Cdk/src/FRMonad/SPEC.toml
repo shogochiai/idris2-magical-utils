@@ -1,0 +1,141 @@
+# FRMonad Module Specification
+
+[spec.FR_CORE_001]
+description = "Monad left identity law: pure a >>= f === f a"
+priority = "high"
+
+[spec.FR_CORE_002]
+description = "Monad right identity law: m >>= pure === m"
+priority = "high"
+
+[spec.FR_CORE_003]
+description = "Monad associativity law"
+priority = "high"
+
+[spec.FR_CORE_004]
+description = "isOk returns True for Ok, False for Fail"
+priority = "medium"
+
+[spec.FR_CORE_005]
+description = "isFail returns True for Fail, False for Ok"
+priority = "medium"
+
+[spec.FR_CORE_006]
+description = "fromOk extracts value or returns default"
+priority = "medium"
+
+[spec.FR_CORE_007]
+description = "orElse returns first on success, second on failure"
+priority = "high"
+
+[spec.FR_CORE_008]
+description = "handleWith applies handler on failure"
+priority = "high"
+
+[spec.FR_CORE_009]
+description = "require succeeds when condition is True"
+priority = "medium"
+
+[spec.FR_CORE_010]
+description = "guard fails when condition is False"
+priority = "medium"
+
+[spec.FR_CORE_011]
+description = "sequence stops at first failure"
+priority = "medium"
+
+[spec.FR_CORE_012]
+description = "firstSuccess returns first Ok from list"
+priority = "medium"
+
+[spec.FR_CORE_013]
+description = "toMaybe converts FR to Maybe"
+priority = "low"
+
+[spec.FR_CORE_014]
+description = "toEither converts FR to Either"
+priority = "low"
+
+[spec.FR_FAIL_001]
+description = "Critical severity for system invariant failures"
+priority = "high"
+
+[spec.FR_FAIL_002]
+description = "High severity for traps and auth failures"
+priority = "high"
+
+[spec.FR_FAIL_003]
+description = "Medium severity for conflicts and call errors"
+priority = "medium"
+
+[spec.FR_FAIL_004]
+description = "Low severity for not found and validation errors"
+priority = "medium"
+
+[spec.FR_FAIL_005]
+description = "Category classification maps failures to domains"
+priority = "high"
+
+[spec.FR_FAIL_006]
+description = "isRetryable identifies transient failures"
+priority = "high"
+
+[spec.FR_FAIL_007]
+description = "isUserRecoverable identifies user-fixable failures"
+priority = "medium"
+
+[spec.FR_FAIL_008]
+description = "Severity ordering: Critical > High > Medium > Low > Info"
+priority = "medium"
+
+[spec.FR_EV_001]
+description = "emptyEvidence is monoid identity"
+priority = "high"
+
+[spec.FR_EV_002]
+description = "mkEvidence creates evidence with phase/label/detail"
+priority = "medium"
+
+[spec.FR_EV_003]
+description = "addTag adds diagnostic tag to evidence"
+priority = "medium"
+
+[spec.FR_EV_004]
+description = "combineEvidence merges evidence (monoid operation)"
+priority = "high"
+
+[spec.FR_EV_005]
+description = "cyclesConsumed calculates cycle difference"
+priority = "medium"
+
+[spec.FR_EV_006]
+description = "callCount tracks inter-canister calls"
+priority = "medium"
+
+[spec.FR_IDX_001]
+description = "isIOk checks indexed result success"
+priority = "medium"
+
+[spec.FR_IDX_002]
+description = "initialize transitions Uninitialized to Initialized"
+priority = "high"
+
+[spec.FR_IDX_003]
+description = "start transitions Initialized to Running"
+priority = "high"
+
+[spec.FR_IDX_004]
+description = "iquery stays in Running state"
+priority = "medium"
+
+[spec.FR_IDX_005]
+description = "ibind chains state-indexed computations"
+priority = "high"
+
+[spec.FR_IDX_006]
+description = "ihandleWith handles indexed failures"
+priority = "high"
+
+[spec.FR_IDX_007]
+description = "runIFR extracts result from indexed computation"
+priority = "medium"

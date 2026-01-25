@@ -1,0 +1,29 @@
+# ICP Module Specification
+
+[spec.ICP_TYP_001]
+description = "rejectCodeFromInt converts Int32 to RejectCode"
+priority = "high"
+
+[spec.ICP_TYP_002]
+description = "rejectCodeToInt converts RejectCode to Int"
+priority = "high"
+
+[spec.ICP_TYP_003]
+description = "RejectCode roundtrip preserves value"
+priority = "high"
+
+[spec.ICP_TYP_004]
+description = "RejectCode equality is reflexive"
+priority = "medium"
+
+[spec.ICP_TYP_005]
+description = "RejectCode show produces correct strings"
+priority = "low"
+
+[spec.ICP_TYP_006]
+description = "Phase show produces correct strings"
+priority = "low"
+
+[spec.ICP_TYP_007]
+description = "Phase equality works correctly"
+priority = "medium"

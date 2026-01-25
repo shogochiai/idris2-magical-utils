@@ -1,0 +1,18 @@
+[lazy]
+version = "0.1.0"
+
+[coverage]
+threshold = 80
+
+[semantic]
+threshold = 80
+
+[policy]
+auto_apply = false
+urgent_only = false
+
+# Families to enable
+[families]
+core = true
+depgraph = true
+pr = true
