@@ -1,0 +1,81 @@
+============================================================
+  Precise Expression-Level Coverage Report
+============================================================
+
+📦 Coverage.Collector
+   Module: 2414/3288 expressions (73.4%)
+      △ parseParenCount: 2/59 (3.4%)
+        └─ 57 expressions not executed
+      △ findLineCount: 58/205 (28.3%)
+        └─ 147 expressions not executed
+      △ isHotSpotLine: 57/134 (42.5%)
+        └─ 77 expressions not executed
+      △ zipWithRanges: 139/311 (44.7%)
+        └─ 172 expressions not executed
+      △ calculateFunctionCoverage: 22/47 (46.8%)
+        └─ 25 expressions not executed
+      △ extractTitles: 554/742 (74.7%)
+        └─ 188 expressions not executed
+      △ go: 321/429 (74.8%)
+        └─ 108 expressions not executed
+      △ findParts: 391/485 (80.6%)
+        └─ 94 expressions not executed
+      △ calcPct: 109/111 (98.2%)
+        └─ 2 expressions not executed
+      △ parseLine: 166/169 (98.2%)
+        └─ 3 expressions not executed
+      △ zipWithIndex: 69/70 (98.6%)
+        └─ 1 expressions not executed
+      ✓ summarize: 85/85 (100.0%)
+      ✓ groupByLine: 118/118 (100.0%)
+      ✓ parseSpanTitle: 23/23 (100.0%)
+      ✓ parseAnnotatedHtml: 150/150 (100.0%)
+      ✓ parseHotSpotRow: 19/19 (100.0%)
+      ✓ parseProfileHtml: 47/47 (100.0%)
+      ✓ go: 53/53 (100.0%)
+      ✓ parseSchemeDefs: 31/31 (100.0%)
+
+📦 Coverage.Report
+   Module: 718/777 expressions (92.4%)
+      △ maybeStringJson: 12/53 (22.6%)
+        └─ 41 expressions not executed
+      △ maybeNatJson: 12/25 (48.0%)
+        └─ 13 expressions not executed
+      △ escapeChar: 53/57 (93.0%)
+        └─ 4 expressions not executed
+      △ functionCoverageJson: 480/481 (99.8%)
+        └─ 1 expressions not executed
+      ✓ escapeJson: 64/64 (100.0%)
+      ✓ stringListJson: 97/97 (100.0%)
+
+📦 Coverage.SourceAnalyzer
+   Module: 1833/2043 expressions (89.7%)
+      △ extractFunctions: 396/483 (82.0%)
+        └─ 87 expressions not executed
+      △ zipWithIndex: 693/802 (86.4%)
+        └─ 109 expressions not executed
+      △ findModule: 79/87 (90.8%)
+        └─ 8 expressions not executed
+      △ extractFuncName: 174/178 (97.8%)
+        └─ 4 expressions not executed
+      △ isExportLine: 51/52 (98.1%)
+        └─ 1 expressions not executed
+      △ analyzeSource: 246/247 (99.6%)
+        └─ 1 expressions not executed
+      ✓ go: 53/53 (100.0%)
+      ✓ extractSignature: 78/78 (100.0%)
+      ✓ isBlank: 37/37 (100.0%)
+      ✓ extractModuleName: 26/26 (100.0%)
+
+📦 Coverage.Types
+   Module: 1631/1866 expressions (87.4%)
+      △ parseSchemeFunc: 1110/1287 (86.2%)
+        └─ 177 expressions not executed
+      △ belongsToModule: 471/529 (89.0%)
+        └─ 58 expressions not executed
+      ✓ idrisToSchemeModule: 27/27 (100.0%)
+      ✓ coveredFunction: 23/23 (100.0%)
+
+============================================================
+TOTAL: 6596/7974 expressions (82.7%)
+============================================================

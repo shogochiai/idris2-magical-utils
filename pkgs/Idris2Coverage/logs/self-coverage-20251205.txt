@@ -1,0 +1,48 @@
+==================================================
+  idris2-coverage Self-Coverage Report
+==================================================
+
+📦 Coverage.Collector
+   9/9 functions (100%)
+      ✓ parseLine (22)
+      ✓ findLineCount (5)
+      ✓ go (3)
+      ✓ parseSchemeDefs (2)
+      ✓ isHotSpotLine (1)
+      ✓ parseParenCount (1)
+      ✓ parseHotSpotRow (1)
+      ✓ parseProfileHtml (1)
+      ✓ zipWithIndex (1)
+
+📦 Coverage.Report
+   6/6 functions (100%)
+      ✓ escapeChar (9)
+      ✓ escapeJson (9)
+      ✓ stringListJson (3)
+      ✓ maybeNatJson (2)
+      ✓ maybeStringJson (1)
+      ✓ functionCoverageJson (1)
+
+📦 Coverage.SourceAnalyzer
+   10/10 functions (100%)
+      ✓ isBlank (9)
+      ✓ go (6)
+      ✓ extractFunctions (6)
+      ✓ extractFuncName (5)
+      ✓ extractSignature (5)
+      ✓ isExportLine (5)
+      ✓ zipWithIndex (1)
+      ✓ analyzeSource (1)
+      ✓ findModule (1)
+      ✓ extractModuleName (1)
+
+📦 Coverage.Types
+   4/4 functions (100%)
+      ✓ idrisToSchemeModule (9)
+      ✓ belongsToModule (1)
+      ✓ coveredFunction (1)
+      ✓ parseSchemeFunc (1)
+
+==================================================
+TOTAL: 29/29 functions (100%)
+==================================================

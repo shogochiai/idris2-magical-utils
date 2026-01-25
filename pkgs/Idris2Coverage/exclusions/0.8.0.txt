@@ -1,0 +1,5 @@
+# Exclusion patterns specific to Idris2 0.8.0
+# Add version-specific compiler-generated patterns here
+
+# Example patterns found in 0.8.0:
+# (Add discovered patterns via PRs)

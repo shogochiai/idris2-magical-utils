@@ -1,0 +1,15 @@
+{
+  "name": "idris2-coverage",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "meraymond.idris-vscode"
+      ]
+    }
+  },
+  "postCreateCommand": "idris2 --version && pack --version",
+  "remoteUser": "idris"
+}

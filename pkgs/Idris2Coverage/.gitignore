@@ -1,0 +1,32 @@
+# Idris2 build artifacts
+build/
+*.ttc
+*.ttm
+
+# Profiler outputs
+*.ss.html
+profile.html
+
+# Temporary ipkg files
+self-analyze.ipkg
+test-runner.ipkg
+
+# Session/audit logs
+lazy-idris/
+.lazy/
+logs/
+
+# Test data
+test-data/
+
+# Editor
+.idea/
+*.iml
+.vscode/
+*~
+\#*\#
+.#*
+
+# OS
+.DS_Store
+Thumbs.db

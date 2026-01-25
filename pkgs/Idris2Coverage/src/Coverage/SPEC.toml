@@ -1,0 +1,816 @@
+# Coverage SPEC.toml - Code Coverage Module for Idris2
+
+[test]
+test_dir = "src/Coverage/Tests"
+test_glob = "**/*.idr"
+
+[definitions]
+module_self = "src/Coverage"
+fn_collectProfile = "collectProfile"
+fn_analyzeSource = "analyzeSource"
+fn_runTests = "runTests"
+fn_aggregate = "aggregate"
+fn_generateReport = "generateReport"
+type_FunctionCoverage = "FunctionCoverage"
+type_ModuleCoverage = "ModuleCoverage"
+type_ProjectCoverage = "ProjectCoverage"
+type_CoverageReport = "CoverageReport"
+type_ProfileHit = "ProfileHit"
+type_FunctionDef = "FunctionDef"
+type_FunctionHitAggregate = "FunctionHitAggregate"
+type_TestProfileResult = "TestProfileResult"
+type_OutputFormat = "OutputFormat"
+type_ExprCoverage = "ExprCoverage"
+
+# =============================================================================
+# Type Specifications
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_COV_001"
+text = "There exists a record `${type_FunctionCoverage}` containing moduleName, name, signature, lineStart, lineEnd, coveredLines, totalLines, coveragePercent, and calledByTests fields"
+
+[[type]]
+id = "REQ_TYPE_COV_002"
+text = "There exists a record `${type_ModuleCoverage}` containing path, functionsTotal, functionsCovered, and lineCoveragePercent fields"
+
+[[type]]
+id = "REQ_TYPE_COV_003"
+text = "There exists a record `${type_ProjectCoverage}` containing totalFunctions, coveredFunctions, lineCoveragePercent, and branchCoveragePercent fields"
+
+[[type]]
+id = "REQ_TYPE_COV_004"
+text = "There exists a record `${type_CoverageReport}` containing functions, modules, and project fields"
+
+[[type]]
+id = "REQ_TYPE_COV_005"
+text = "There exists a record `${type_ProfileHit}` containing schemeFunc, hitCount, filePath, and line fields"
+
+[[type]]
+id = "REQ_TYPE_COV_006"
+text = "There exists a record `${type_FunctionDef}` containing name, signature, lineStart, lineEnd, and exported fields for parsed Idris function definitions"
+
+[[type]]
+id = "REQ_TYPE_COV_007"
+text = "There exists a record `${type_FunctionHitAggregate}` containing schemeFunc, totalHits, and calledByTests for aggregated profile data"
+
+[[type]]
+id = "REQ_TYPE_COV_008"
+text = "There exists a record `${type_TestProfileResult}` containing testId, testPassed, and profileHits for test execution results"
+
+[[type]]
+id = "REQ_TYPE_COV_009"
+text = "There exists a data type `${type_OutputFormat}` with constructors JSON and Text for report format selection"
+
+[[type]]
+id = "REQ_TYPE_UTIL_001"
+text = "There exists a function `parseSchemeFunc` that parses Scheme function names like 'Module-func' into (module, funcName) pairs"
+
+[[type]]
+id = "REQ_TYPE_UTIL_002"
+text = "There exists a function `idrisToSchemeModule` that converts Idris module names to Scheme format (e.g., 'A.B' -> 'AC-45B')"
+
+[[type]]
+id = "REQ_TYPE_UTIL_003"
+text = "There exists a function `belongsToModule` that checks if a Scheme function name belongs to a given Idris module"
+
+[[type]]
+id = "REQ_TYPE_UTIL_004"
+text = "There exists a function `coveredFunction` that creates a FunctionCoverage with 100% coverage for testing"
+
+[[type]]
+id = "REQ_TYPE_UTIL_005"
+text = "There exists a function `uncoveredFunction` that creates a FunctionCoverage with 0% coverage for testing"
+
+[[type]]
+id = "REQ_TYPE_COV_010"
+text = "There exists a record `${type_ExprCoverage}` containing line, char, and count fields for expression-level coverage data from annotated .ss.html"
+
+# =============================================================================
+# Collector Specifications
+# =============================================================================
+
+[[spec_area]]
+name = "Profile Collection"
+description = "Parse Chez Scheme profile HTML output"
+
+[[spec_area.sub_feature]]
+name = "HTML Parsing"
+specs = [
+  "- [REQ_COV_COL_001] ${module_self}/Collector SHALL parse profile.html Hot Spots table",
+  "- [REQ_COV_COL_002] ${module_self}/Collector SHALL extract function name and hit count from each row",
+  "- [REQ_COV_COL_003] ${module_self}/Collector SHALL parse .ss file for (define Module-func ...) patterns",
+  "- [REQ_COV_COL_004] ${module_self}/Collector SHALL return List ProfileHit"
+]
+
+# =============================================================================
+# Source Analyzer Specifications
+# =============================================================================
+
+[[spec_area]]
+name = "Source Analysis"
+description = "Parse Idris2 source files for function metadata"
+
+[[spec_area.sub_feature]]
+name = "Function Discovery"
+specs = [
+  "- [REQ_COV_SRC_001] ${module_self}/SourceAnalyzer SHALL extract export declarations from .idr files",
+  "- [REQ_COV_SRC_002] ${module_self}/SourceAnalyzer SHALL determine line_start and line_end for each function",
+  "- [REQ_COV_SRC_003] ${module_self}/SourceAnalyzer SHALL extract function signatures",
+  "- [REQ_COV_SRC_004] ${module_self}/SourceAnalyzer SHALL handle multi-line function definitions"
+]
+
+# =============================================================================
+# Test Runner Specifications
+# =============================================================================
+
+[[spec_area]]
+name = "Test Execution"
+description = "Run tests with profiling enabled"
+
+[[spec_area.sub_feature]]
+name = "Profile Execution"
+specs = [
+  "- [REQ_COV_RUN_001] ${module_self}/TestRunner SHALL discover test files matching glob pattern",
+  "- [REQ_COV_RUN_002] ${module_self}/TestRunner SHALL compile each test with idris2 --profile",
+  "- [REQ_COV_RUN_003] ${module_self}/TestRunner SHALL execute compiled test and capture profile.html",
+  "- [REQ_COV_RUN_004] ${module_self}/TestRunner SHALL associate profile results with test ID"
+]
+
+# =============================================================================
+# Aggregator Specifications
+# =============================================================================
+
+[[spec_area]]
+name = "Coverage Aggregation"
+description = "Aggregate coverage data and compute called_by_tests"
+
+[[spec_area.sub_feature]]
+name = "Test Mapping"
+specs = [
+  "- [REQ_COV_AGG_001] ${module_self}/Aggregator SHALL map each function to list of tests that called it",
+  "- [REQ_COV_AGG_002] ${module_self}/Aggregator SHALL compute coverage_percent per function",
+  "- [REQ_COV_AGG_003] ${module_self}/Aggregator SHALL detect dead code (exported but not in .ss)",
+  "- [REQ_COV_AGG_004] ${module_self}/Aggregator SHALL aggregate to module and project level",
+  "- [REQ_COV_AGG_005] ${module_self}/Collector SHALL exclude test modules from coverage calculation"
+]
+
+# =============================================================================
+# Report Specifications
+# =============================================================================
+
+[[spec_area]]
+name = "Report Generation"
+description = "Generate coverage reports in JSON/Text format"
+
+[[spec_area.sub_feature]]
+name = "Output Formats"
+specs = [
+  "- [REQ_COV_REP_001] ${module_self}/Report SHALL generate JSON output matching lazy-idris schema",
+  "- [REQ_COV_REP_002] ${module_self}/Report SHALL generate human-readable text output",
+  "- [REQ_COV_REP_003] ${module_self}/Report SHALL include all required fields per lazy-idris spec",
+  "- [REQ_COV_REP_004] ${module_self}/Report SHALL write output to specified file path"
+]
+
+# =============================================================================
+# Specs (normalized)
+# =============================================================================
+
+[[spec]]
+id = "REQ_COV_COL_001"
+description = "${module_self}/Collector SHALL parse profile.html Hot Spots table"
+
+[[spec]]
+id = "REQ_COV_COL_002"
+description = "${module_self}/Collector SHALL extract function name and hit count from each row"
+
+[[spec]]
+id = "REQ_COV_COL_003"
+description = "${module_self}/Collector SHALL parse .ss file for (define Module-func ...) patterns"
+
+[[spec]]
+id = "REQ_COV_COL_004"
+description = "${module_self}/Collector SHALL return List ProfileHit"
+
+[[spec]]
+id = "REQ_COV_SRC_001"
+description = "${module_self}/SourceAnalyzer SHALL extract export declarations from .idr files"
+
+[[spec]]
+id = "REQ_COV_SRC_002"
+description = "${module_self}/SourceAnalyzer SHALL determine line_start and line_end for each function"
+
+[[spec]]
+id = "REQ_COV_SRC_003"
+description = "${module_self}/SourceAnalyzer SHALL extract function signatures"
+
+[[spec]]
+id = "REQ_COV_RUN_001"
+description = "${module_self}/TestRunner SHALL discover test files matching glob pattern"
+
+[[spec]]
+id = "REQ_COV_RUN_002"
+description = "${module_self}/TestRunner SHALL compile each test with idris2 --profile"
+
+[[spec]]
+id = "REQ_COV_RUN_003"
+description = "${module_self}/TestRunner SHALL execute compiled test and capture profile.html"
+
+[[spec]]
+id = "REQ_COV_AGG_001"
+description = "${module_self}/Aggregator SHALL map each function to list of tests that called it"
+
+[[spec]]
+id = "REQ_COV_AGG_002"
+description = "${module_self}/Aggregator SHALL compute coverage_percent per function"
+
+[[spec]]
+id = "REQ_COV_AGG_003"
+description = "${module_self}/Aggregator SHALL detect dead code (exported but not in .ss)"
+
+[[spec]]
+id = "REQ_COV_REP_001"
+description = "${module_self}/Report SHALL generate JSON output matching lazy-idris schema"
+
+[[spec]]
+id = "REQ_COV_REP_002"
+description = "${module_self}/Report SHALL generate human-readable text output"
+
+[[spec]]
+id = "REQ_COV_SRC_004"
+description = "${module_self}/SourceAnalyzer SHALL handle multi-line function definitions"
+
+[[spec]]
+id = "REQ_COV_RUN_004"
+description = "${module_self}/TestRunner SHALL associate profile results with test ID"
+
+[[spec]]
+id = "REQ_COV_AGG_004"
+description = "${module_self}/Aggregator SHALL aggregate to module and project level"
+
+[[spec]]
+id = "REQ_COV_AGG_005"
+description = "${module_self}/Collector SHALL exclude test modules from coverage calculation"
+
+[[spec]]
+id = "REQ_COV_REP_003"
+description = "${module_self}/Report SHALL include all required fields per lazy-idris spec"
+
+[[spec]]
+id = "REQ_COV_REP_004"
+description = "${module_self}/Report SHALL write output to specified file path"
+
+# =============================================================================
+# Linearity Module Specifications (v0.2.0)
+# =============================================================================
+
+[[spec_area]]
+name = "Linearity Analysis"
+description = "Handle Idris2 QTT (Quantitative Type Theory) annotations"
+
+[[spec_area.sub_feature]]
+name = "Quantity Handling"
+specs = [
+  "- [REQ_COV_LIN_001] ${module_self}/Linearity SHALL parse quantity annotations (0/1/ω)",
+  "- [REQ_COV_LIN_002] ${module_self}/Linearity SHALL identify erased parameters (Q0)",
+  "- [REQ_COV_LIN_003] ${module_self}/Linearity SHALL identify linear parameters (Q1)",
+  "- [REQ_COV_LIN_004] ${module_self}/Linearity SHALL compute effective state space excluding erased params"
+]
+
+[[spec]]
+id = "REQ_COV_LIN_001"
+description = "${module_self}/Linearity SHALL parse quantity annotations (0/1/ω)"
+
+[[spec]]
+id = "REQ_COV_LIN_002"
+description = "${module_self}/Linearity SHALL identify erased parameters (Q0)"
+
+[[spec]]
+id = "REQ_COV_LIN_003"
+description = "${module_self}/Linearity SHALL identify linear parameters (Q1)"
+
+[[spec]]
+id = "REQ_COV_LIN_004"
+description = "${module_self}/Linearity SHALL compute effective state space excluding erased params"
+
+# =============================================================================
+# Type Analyzer Module Specifications (v0.2.0)
+# =============================================================================
+
+[[spec_area]]
+name = "Type Analysis"
+description = "Parse and analyze Idris2 type signatures"
+
+[[spec_area.sub_feature]]
+name = "Type Parsing"
+specs = [
+  "- [REQ_COV_TYP_001] ${module_self}/TypeAnalyzer SHALL parse function signatures with linearity",
+  "- [REQ_COV_TYP_002] ${module_self}/TypeAnalyzer SHALL resolve primitive type state counts",
+  "- [REQ_COV_TYP_003] ${module_self}/TypeAnalyzer SHALL analyze Maybe/Either/List/Pair types",
+  "- [REQ_COV_TYP_004] ${module_self}/TypeAnalyzer SHALL produce AnalyzedFunction records"
+]
+
+[[spec]]
+id = "REQ_COV_TYP_001"
+description = "${module_self}/TypeAnalyzer SHALL parse function signatures with linearity"
+
+[[spec]]
+id = "REQ_COV_TYP_002"
+description = "${module_self}/TypeAnalyzer SHALL resolve primitive type state counts"
+
+[[spec]]
+id = "REQ_COV_TYP_003"
+description = "${module_self}/TypeAnalyzer SHALL analyze Maybe/Either/List/Pair types"
+
+[[spec]]
+id = "REQ_COV_TYP_004"
+description = "${module_self}/TypeAnalyzer SHALL produce AnalyzedFunction records"
+
+# =============================================================================
+# State Space Module Specifications (v0.2.0)
+# =============================================================================
+
+[[spec_area]]
+name = "State Space Analysis"
+description = "Calculate test case requirements from type signatures"
+
+[[spec_area.sub_feature]]
+name = "State Calculation"
+specs = [
+  "- [REQ_COV_SPC_001] ${module_self}/StateSpace SHALL calculate parameter state space",
+  "- [REQ_COV_SPC_002] ${module_self}/StateSpace SHALL suggest representative test values",
+  "- [REQ_COV_SPC_003] ${module_self}/StateSpace SHALL identify coverage gaps",
+  "- [REQ_COV_SPC_004] ${module_self}/StateSpace SHALL apply configurable state limits"
+]
+
+[[spec]]
+id = "REQ_COV_SPC_001"
+description = "${module_self}/StateSpace SHALL calculate parameter state space"
+
+[[spec]]
+id = "REQ_COV_SPC_002"
+description = "${module_self}/StateSpace SHALL suggest representative test values"
+
+[[spec]]
+id = "REQ_COV_SPC_003"
+description = "${module_self}/StateSpace SHALL identify coverage gaps"
+
+[[spec]]
+id = "REQ_COV_SPC_004"
+description = "${module_self}/StateSpace SHALL apply configurable state limits"
+
+# =============================================================================
+# Path Analysis Module Specifications (v0.2.0)
+# =============================================================================
+
+[[spec_area]]
+name = "Path Analysis"
+description = "Detect early exits and prune unreachable paths"
+
+[[spec_area.sub_feature]]
+name = "Path Pruning"
+specs = [
+  "- [REQ_COV_PTH_001] ${module_self}/PathAnalysis SHALL detect Nothing/Left/Nil early exits",
+  "- [REQ_COV_PTH_002] ${module_self}/PathAnalysis SHALL analyze Maybe parameter paths",
+  "- [REQ_COV_PTH_003] ${module_self}/PathAnalysis SHALL analyze Either parameter paths",
+  "- [REQ_COV_PTH_004] ${module_self}/PathAnalysis SHALL compute effective test count after pruning"
+]
+
+[[spec]]
+id = "REQ_COV_PTH_001"
+description = "${module_self}/PathAnalysis SHALL detect Nothing/Left/Nil early exits"
+
+[[spec]]
+id = "REQ_COV_PTH_002"
+description = "${module_self}/PathAnalysis SHALL analyze Maybe parameter paths"
+
+[[spec]]
+id = "REQ_COV_PTH_003"
+description = "${module_self}/PathAnalysis SHALL analyze Either parameter paths"
+
+[[spec]]
+id = "REQ_COV_PTH_004"
+description = "${module_self}/PathAnalysis SHALL compute effective test count after pruning"
+
+# =============================================================================
+# Complexity Module Specifications (v0.2.0)
+# =============================================================================
+
+[[spec_area]]
+name = "Complexity Analysis"
+description = "Score function complexity and recommend splits"
+
+[[spec_area.sub_feature]]
+name = "Complexity Scoring"
+specs = [
+  "- [REQ_COV_CPX_001] ${module_self}/Complexity SHALL calculate complexity factors",
+  "- [REQ_COV_CPX_002] ${module_self}/Complexity SHALL determine if function should split",
+  "- [REQ_COV_CPX_003] ${module_self}/Complexity SHALL generate split recommendations",
+  "- [REQ_COV_CPX_004] ${module_self}/Complexity SHALL produce complexity warnings"
+]
+
+[[spec]]
+id = "REQ_COV_CPX_001"
+description = "${module_self}/Complexity SHALL calculate complexity factors"
+
+[[spec]]
+id = "REQ_COV_CPX_002"
+description = "${module_self}/Complexity SHALL determine if function should split"
+
+[[spec]]
+id = "REQ_COV_CPX_003"
+description = "${module_self}/Complexity SHALL generate split recommendations"
+
+[[spec]]
+id = "REQ_COV_CPX_004"
+description = "${module_self}/Complexity SHALL produce complexity warnings"
+
+# =============================================================================
+# Test Hint Module Specifications (v0.3.0)
+# =============================================================================
+
+[[spec_area]]
+name = "Test Hint Generation"
+description = "Generate actionable test hints for uncovered functions"
+
+[[spec_area.sub_feature]]
+name = "Hint Generation"
+specs = [
+  "- [REQ_COV_HNT_001] ${module_self}/TestHint SHALL generate happy path hints",
+  "- [REQ_COV_HNT_002] ${module_self}/TestHint SHALL generate exhaustive path hints",
+  "- [REQ_COV_HNT_003] ${module_self}/TestHint SHALL produce code templates",
+  "- [REQ_COV_HNT_004] ${module_self}/TestHint SHALL output hints as JSON"
+]
+
+[[spec]]
+id = "REQ_COV_HNT_001"
+description = "${module_self}/TestHint SHALL generate happy path hints"
+
+[[spec]]
+id = "REQ_COV_HNT_002"
+description = "${module_self}/TestHint SHALL generate exhaustive path hints"
+
+[[spec]]
+id = "REQ_COV_HNT_003"
+description = "${module_self}/TestHint SHALL produce code templates"
+
+[[spec]]
+id = "REQ_COV_HNT_004"
+description = "${module_self}/TestHint SHALL output hints as JSON"
+
+# =============================================================================
+# Extended Type Specifications (v0.2.0)
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_LIN_001"
+text = "There exists a data type `Quantity` with constructors Q0 (erased), Q1 (linear), and QW (unrestricted)"
+
+[[type]]
+id = "REQ_TYPE_LIN_002"
+text = "There exists a data type `StateCount` with constructors Finite, Bounded, and Unbounded"
+
+[[type]]
+id = "REQ_TYPE_LIN_003"
+text = "There exists a record `LinearParam` containing paramName, paramType, and quantity fields"
+
+[[type]]
+id = "REQ_TYPE_LIN_004"
+text = "There exists a record `LinearityWarning` containing funcName, paramName, and issue fields"
+
+[[type]]
+id = "REQ_TYPE_LIN_005"
+text = "There exists a function `linearityFactor` that computes test weight based on quantity"
+
+[[type]]
+id = "REQ_TYPE_LIN_006"
+text = "There exists a function `isErased` that checks if a LinearParam has Q0 quantity"
+
+[[type]]
+id = "REQ_TYPE_LIN_007"
+text = "There exists a function `isLinear` that checks if a LinearParam has Q1 quantity"
+
+[[type]]
+id = "REQ_TYPE_LIN_008"
+text = "There exists a function `runtimeParams` that filters out erased parameters"
+
+[[type]]
+id = "REQ_TYPE_LIN_009"
+text = "There exists a function `effectiveStateSpace` that calculates state space excluding erased params"
+
+[[type]]
+id = "REQ_TYPE_TYP_001"
+text = "There exists a data type `TypeComplexity` with constructors Simple, Compound, and Recursive"
+
+[[type]]
+id = "REQ_TYPE_TYP_002"
+text = "There exists a record `TypeInfo` containing typeName, stateCount, complexity, and constructors fields"
+
+[[type]]
+id = "REQ_TYPE_TYP_003"
+text = "There exists a record `ConstructorInfo` containing name and argTypes fields"
+
+[[type]]
+id = "REQ_TYPE_TYP_004"
+text = "There exists a record `AnalyzedFunction` containing name, signature, params, and stateSpace fields"
+
+[[type]]
+id = "REQ_TYPE_TYP_005"
+text = "There exists a function `parseFunctionSig` that parses Idris function signature strings"
+
+[[type]]
+id = "REQ_TYPE_TYP_006"
+text = "There exists a function `resolveType` that determines StateCount for a type name"
+
+[[type]]
+id = "REQ_TYPE_TYP_007"
+text = "There exists a function `analyzeFunction` that produces AnalyzedFunction from signature"
+
+[[type]]
+id = "REQ_TYPE_PTH_001"
+text = "There exists a data type `EarlyExitPattern` with constructors NothingPattern, LeftPattern, NilPattern, FailPattern, and GuardPattern"
+
+[[type]]
+id = "REQ_TYPE_PTH_002"
+text = "There exists a data type `Reachability` with constructors Always, Conditional, and EarlyExit"
+
+[[type]]
+id = "REQ_TYPE_PTH_003"
+text = "There exists a record `PatternBranch` containing pattern, reachability, isPrunable, and stateContribution fields"
+
+[[type]]
+id = "REQ_TYPE_PTH_004"
+text = "There exists a record `FunctionPathAnalysis` containing funcName, totalBranches, reachable, earlyExits, and prunedPaths fields"
+
+[[type]]
+id = "REQ_TYPE_PTH_005"
+text = "There exists a function `isEarlyExitPattern` that identifies Nothing/Left/Nil patterns"
+
+[[type]]
+id = "REQ_TYPE_PTH_006"
+text = "There exists a function `analyzeFunctionPaths` that produces FunctionPathAnalysis"
+
+[[type]]
+id = "REQ_TYPE_SPC_001"
+text = "There exists a record `StateSpaceConfig` containing equivalenceClassLimit, maxTotalStates, recursionDepth, and pruneEarlyExits fields"
+
+[[type]]
+id = "REQ_TYPE_SPC_002"
+text = "There exists a record `EstimatedTestCase` containing paramValues, category, and priority fields"
+
+[[type]]
+id = "REQ_TYPE_SPC_003"
+text = "There exists a record `CoverageGap` containing missingValues and suggestedTest fields"
+
+[[type]]
+id = "REQ_TYPE_SPC_004"
+text = "There exists a record `FunctionStateSpaceAnalysis` containing funcName, totalStates, coveredStates, and gaps fields"
+
+[[type]]
+id = "REQ_TYPE_SPC_005"
+text = "There exists a function `paramStateSpace` that calculates state count for a parameter"
+
+[[type]]
+id = "REQ_TYPE_SPC_006"
+text = "There exists a function `functionStateSpace` that calculates total function state space"
+
+[[type]]
+id = "REQ_TYPE_SPC_007"
+text = "There exists a function `suggestTestCases` that generates representative test values"
+
+[[type]]
+id = "REQ_TYPE_CPX_001"
+text = "There exists a record `ComplexityConfig` containing maxParams, maxStateSpace, maxPatternDepth, maxBranches, and warnLinearOverload fields"
+
+[[type]]
+id = "REQ_TYPE_CPX_002"
+text = "There exists a record `ComplexityFactors` containing paramFactor, stateFactor, depthFactor, branchFactor, linearityFactor, and totalScore fields"
+
+[[type]]
+id = "REQ_TYPE_CPX_003"
+text = "There exists a data type `SplitReason` with constructors TooManyParams, StateSpaceTooBig, TooManyBranches, DeepNesting, LinearOverload, and CombinedComplexity"
+
+[[type]]
+id = "REQ_TYPE_CPX_004"
+text = "There exists a record `SplitRecommendation` containing funcName, reasons, suggestedSplit, and priority fields"
+
+[[type]]
+id = "REQ_TYPE_CPX_005"
+text = "There exists a function `calculateFactors` that computes ComplexityFactors for a function"
+
+[[type]]
+id = "REQ_TYPE_CPX_006"
+text = "There exists a function `shouldSplit` that determines if function complexity exceeds threshold"
+
+[[type]]
+id = "REQ_TYPE_CPX_007"
+text = "There exists a function `generateWarnings` that produces complexity warnings"
+
+[[type]]
+id = "REQ_TYPE_HNT_001"
+text = "There exists a data type `HintPriority` with constructors Critical, Important, Nice, and Optional"
+
+[[type]]
+id = "REQ_TYPE_HNT_002"
+text = "There exists a data type `HintCategory` with constructors HappyPath, ErrorPath, BoundaryCase, NegativeTest, LinearResource, and StateTransition"
+
+[[type]]
+id = "REQ_TYPE_HNT_003"
+text = "There exists a record `TestHint` containing category, priority, description, params, and codeTemplate fields"
+
+[[type]]
+id = "REQ_TYPE_HNT_004"
+text = "There exists a record `FunctionTestHints` containing funcName, signature, happyPathHints, and exhaustiveHints fields"
+
+[[type]]
+id = "REQ_TYPE_HNT_005"
+text = "There exists a function `happyPathHints` that generates happy path test hints"
+
+[[type]]
+id = "REQ_TYPE_HNT_006"
+text = "There exists a function `exhaustivePathHints` that generates exhaustive test hints"
+
+[[type]]
+id = "REQ_TYPE_HNT_007"
+text = "There exists a function `generateTestHints` that produces FunctionTestHints"
+
+[[type]]
+id = "REQ_TYPE_HNT_008"
+text = "There exists a function `generateTestCode` that produces test code from hints"
+
+[[type]]
+id = "REQ_TYPE_HNT_009"
+text = "There exists a function `hintsToJson` that serializes hints to JSON format"
+
+[[type]]
+id = "REQ_TYPE_UTIL_006"
+text = "There exists a function `multStateCount` that multiplies two StateCount values"
+
+[[type]]
+id = "REQ_TYPE_UTIL_007"
+text = "There exists a function `addStateCount` that adds two StateCount values"
+
+[[type]]
+id = "REQ_TYPE_UTIL_008"
+text = "There exists a function `boundStateCount` that caps a StateCount at a limit"
+
+# =============================================================================
+# Additional Linearity Functions (v0.2.0)
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_LIN_010"
+text = "There exists a function `isLinearResourceType` that checks if a type is a known linear resource"
+
+[[type]]
+id = "REQ_TYPE_LIN_011"
+text = "There exists a function `getResourceInfo` that retrieves resource info for a type"
+
+[[type]]
+id = "REQ_TYPE_LIN_012"
+text = "There exists a function `canPruneForLinearity` that determines if paths can be pruned based on linearity"
+
+[[type]]
+id = "REQ_TYPE_LIN_013"
+text = "There exists a function `pruneLinearBranches` that removes unreachable branches due to linearity"
+
+[[type]]
+id = "REQ_TYPE_LIN_014"
+text = "There exists a function `isResourceCovered` that checks if a linear resource is properly tested"
+
+[[type]]
+id = "REQ_TYPE_LIN_015"
+text = "There exists a function `findUncoveredResources` that identifies untested linear resources"
+
+[[type]]
+id = "REQ_TYPE_LIN_016"
+text = "There exists a function `checkLinearityIssues` that detects linearity-related problems"
+
+[[type]]
+id = "REQ_TYPE_LIN_017"
+text = "There exists a function `parseQuantity` that parses quantity annotation strings (0/1/omega)"
+
+[[type]]
+id = "REQ_TYPE_LIN_018"
+text = "There exists a function `parseLinearParam` that parses parameter with linearity annotation"
+
+[[type]]
+id = "REQ_TYPE_LIN_019"
+text = "There exists a record `LinearResource` containing resourceType, acquireFunc, and consumeFunc fields"
+
+# =============================================================================
+# Additional Type Records (v0.2.0)
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_TYP_008"
+text = "There exists a record `FunctionStateSpace` containing funcName and stateSpace fields"
+
+[[type]]
+id = "REQ_TYPE_TYP_009"
+text = "There exists a record `ComplexityMetrics` containing paramCount, stateSpaceSize, patternDepth, branchCount, linearParams, shouldSplit, and splitReason fields"
+
+[[type]]
+id = "REQ_TYPE_TYP_010"
+text = "There exists a record `StateSpaceReport` containing functions and summary fields"
+
+[[type]]
+id = "REQ_TYPE_TYP_011"
+text = "There exists a record `TTDump` containing moduleName, functions, and types fields"
+
+[[type]]
+id = "REQ_TYPE_TYP_012"
+text = "There exists a record `ModuleAnalysis` containing moduleName and functions fields"
+
+# =============================================================================
+# Additional Path Analysis Records (v0.2.0)
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_PTH_007"
+text = "There exists a record `MaybePathAnalysis` containing paramName, nothingBranch, justBranch, and canPruneNothing fields"
+
+[[type]]
+id = "REQ_TYPE_PTH_008"
+text = "There exists a record `EitherPathAnalysis` containing paramName, leftBranch, rightBranch, and canPruneLeft fields"
+
+[[type]]
+id = "REQ_TYPE_PTH_009"
+text = "There exists a record `ParamDependency` containing sourceParam, sourceValue, targetParam, and effect fields"
+
+[[type]]
+id = "REQ_TYPE_PTH_010"
+text = "There exists a record `PathPruningReport` containing moduleName, totalFunctions, totalPaths, prunedPaths, effectivePaths, and savingsPercent fields"
+
+# =============================================================================
+# Additional Test Hint Records (v0.3.0)
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_HNT_010"
+text = "There exists a record `ParamHint` containing name, value, and rationale fields"
+
+[[type]]
+id = "REQ_TYPE_HNT_011"
+text = "There exists a record `ModuleTestHintSummary` containing moduleName, totalHints, criticalCount, and importantCount fields"
+
+# =============================================================================
+# Additional State Space Records (v0.2.0)
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_SPC_008"
+text = "There exists a record `StateSpaceSummary` containing totalFunctions, avgStateSpace, and maxStateSpace fields"
+
+# =============================================================================
+# Additional Complexity Records (v0.2.0)
+# =============================================================================
+
+[[type]]
+id = "REQ_TYPE_CPX_008"
+text = "There exists a record `ModuleComplexityReport` containing moduleName, functionMetrics, splitRecommendations, avgComplexity, maxComplexity, and functionsNeedingSplit fields"
+
+[[type]]
+id = "REQ_TYPE_CPX_009"
+text = "There exists a record `ComplexityWarning` containing funcName, warningType, message, and severity fields"
+
+# =============================================================================
+# Unified Runner Specifications (v0.4.0)
+# =============================================================================
+
+[[spec_area]]
+name = "Unified Test Runner"
+description = "High-level API for running tests with coverage collection"
+
+[[spec_area.sub_feature]]
+name = "Test Execution with Coverage"
+specs = [
+  "- [REQ_COV_UNI_001] ${module_self}/UnifiedRunner SHALL run tests with profiling and return combined TestCoverageReport",
+  "- [REQ_COV_UNI_002] ${module_self}/UnifiedRunner SHALL clean up all temporary files (.ss.html, profile.html, temp sources)",
+  "- [REQ_COV_UNI_003] ${module_self}/UnifiedRunner SHALL exclude test modules from branch coverage calculation"
+]
+
+[[spec]]
+id = "REQ_COV_UNI_001"
+description = "${module_self}/UnifiedRunner SHALL run tests with profiling and return combined TestCoverageReport"
+
+[[spec]]
+id = "REQ_COV_UNI_002"
+description = "${module_self}/UnifiedRunner SHALL clean up all temporary files (.ss.html, profile.html, temp sources)"
+
+[[spec]]
+id = "REQ_COV_UNI_003"
+description = "${module_self}/UnifiedRunner SHALL exclude test modules from branch coverage calculation"
+
+[[type]]
+id = "REQ_TYPE_UNI_001"
+text = "There exists a record `TestResult` containing testName, passed, and message fields"
+
+[[type]]
+id = "REQ_TYPE_UNI_002"
+text = "There exists a record `TestCoverageReport` containing testResults, totalTests, passedTests, failedTests, branchCoverage, and timestamp fields"
+
+[[type]]
+id = "REQ_TYPE_UNI_003"
+text = "There exists a function `runTestsWithCoverage` that executes tests and returns coverage data"
+

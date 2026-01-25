@@ -1,0 +1,31 @@
+package idris2-coverage
+version = 0.3.0
+authors = "lazy-idris team"
+brief = "Code coverage tool for Idris2 with type-driven analysis"
+
+sourcedir = "src"
+main = Main
+
+depends = base, contrib, idris2-coverage-core
+
+modules = Main
+        , Coverage.Types
+        , Coverage.Collector
+        , Coverage.SourceAnalyzer
+        , Coverage.TestRunner
+        , Coverage.Aggregator
+        , Coverage.Report
+        , Coverage.Linearity
+        , Coverage.TypeAnalyzer
+        , Coverage.StateSpace
+        , Coverage.PathAnalysis
+        , Coverage.Complexity
+        , Coverage.TestHint
+        , Coverage.UnifiedRunner
+        , Coverage.DumpcasesParser
+        , Coverage.TestCoverage
+        , Coverage.Config
+        , Coverage.Exclusions
+        , Coverage.Tests.AllTests
+
+executable = idris2-cov
