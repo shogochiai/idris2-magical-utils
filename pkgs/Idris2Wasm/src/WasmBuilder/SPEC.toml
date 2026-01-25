@@ -1,0 +1,100 @@
+# WasmBuilder Specification
+# Idris2 → IC WASM build pipeline
+
+[definitions]
+prefix = "REQ_WASM"
+
+[[spec_area]]
+name = "RefC Compilation"
+
+[[spec]]
+id = "${prefix}_REFC_001"
+title = "Compile Idris2 to C via RefC backend"
+invariant = "idris2 --codegen refc produces valid C file"
+
+[[spec]]
+id = "${prefix}_REFC_002"
+title = "Handle package dependencies"
+invariant = "-p flags passed correctly to idris2"
+
+[[spec_area]]
+name = "Runtime Preparation"
+
+[[spec]]
+id = "${prefix}_RT_001"
+title = "Download RefC runtime sources"
+invariant = "Runtime files fetched from Idris2 repo when not cached"
+
+[[spec]]
+id = "${prefix}_RT_002"
+title = "Download mini-gmp"
+invariant = "mini-gmp.c/h fetched from gmplib when not cached"
+
+[[spec]]
+id = "${prefix}_RT_003"
+title = "Create gmp.h wrapper"
+invariant = "gmp.h provides mpz_inits/mpz_clears wrappers"
+
+[[spec_area]]
+name = "Emscripten Compilation"
+
+[[spec]]
+id = "${prefix}_EMCC_001"
+title = "Compile C to WASM"
+invariant = "emcc produces standalone WASM with STANDALONE_WASM=1"
+
+[[spec]]
+id = "${prefix}_EMCC_002"
+title = "Include IC0 support"
+invariant = "canister_entry.c and ic0_stubs.c linked"
+
+[[spec]]
+id = "${prefix}_EMCC_003"
+title = "Disable filesystem"
+invariant = "FILESYSTEM=0 to avoid WASI imports"
+
+[[spec_area]]
+name = "WASI Stubbing"
+
+[[spec]]
+id = "${prefix}_WASI_001"
+title = "Stub fd_close import"
+invariant = "wasi_snapshot_preview1.fd_close replaced with stub returning 0"
+
+[[spec]]
+id = "${prefix}_WASI_002"
+title = "Stub fd_write import"
+invariant = "wasi_snapshot_preview1.fd_write replaced with stub returning 0"
+
+[[spec]]
+id = "${prefix}_WASI_003"
+title = "Stub fd_seek import"
+invariant = "wasi_snapshot_preview1.fd_seek replaced with stub returning 0"
+
+[[spec]]
+id = "${prefix}_WASI_004"
+title = "Handle missing wabt gracefully"
+invariant = "If wasm2wat/wat2wasm unavailable, copy original WASM"
+
+[[spec_area]]
+name = "Build Pipeline"
+
+[[spec]]
+id = "${prefix}_BUILD_001"
+title = "buildCanister executes all steps"
+invariant = "RefC → Runtime → Emcc → WASI stub in sequence"
+
+[[spec]]
+id = "${prefix}_BUILD_002"
+title = "Return stubbed WASM path on success"
+invariant = "BuildSuccess contains path to *_stubbed.wasm"
+
+[[spec]]
+id = "${prefix}_BUILD_003"
+title = "Return error message on failure"
+invariant = "BuildError contains descriptive error from failed step"
+
+[[spec]]
+id = "${prefix}_BUILD_004"
+title = "Auto-detect IC0 support location"
+invariant = "buildCanisterAuto finds lib/ic0 or ../idris2-wasm/support/ic0"

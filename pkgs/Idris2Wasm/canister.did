@@ -1,0 +1,8 @@
+// Candid interface for Idris2 canister
+service : {
+    // Query method - returns greeting
+    greet: () -> (text) query;
+
+    // Update method - returns pong
+    ping: () -> (text);
+}

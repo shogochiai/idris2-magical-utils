@@ -1,0 +1,23 @@
+package idris2-wasm
+version = 0.1.0
+authors = "lazy-idris team"
+brief = "Idris2 to IC WASM compilation pipeline"
+
+sourcedir = "src"
+
+depends = base, contrib
+
+modules = WasmBuilder.WasmBuilder
+        , WasmBuilder.CandidStubs
+        , WasmBuilder.IC0.FFI
+        , WasmBuilder.IC0.Call
+        , WasmBuilder.IC0.Stable
+        , WasmBuilder.SourceMap.VLQ
+        , WasmBuilder.SourceMap.SourceMap
+        , WasmBuilder.SourceMap.VLQTests
+        , WasmBuilder.SourceMap.SourceMapTests
+        , WasmBuilder.Tests.AllTests
+        , CLI
+
+executable = idris2-wasm
+main = CLI

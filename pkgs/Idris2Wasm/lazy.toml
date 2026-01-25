@@ -1,0 +1,21 @@
+[lazy]
+version = "0.1.0"
+
+# =============================================================================
+# Upstream Tracking Configuration
+# =============================================================================
+
+# ic-wasm: Used for WASM instrumentation/profiling
+[[upstream.forks]]
+name = "ic-wasm"
+local_path = "/Users/bob/code/ic-wasm"
+upstream = "dfinity/ic-wasm"
+fork = "pochi/ic-wasm"
+base_branch = "main"
+
+# PRs waiting for merge
+[[tracking.prs]]
+url = "https://github.com/dfinity/ic-wasm/pull/104"
+
+[[tracking.prs]]
+url = "https://github.com/dfinity/ic-wasm/pull/107"

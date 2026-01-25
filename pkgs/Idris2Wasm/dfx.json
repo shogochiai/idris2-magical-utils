@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "canisters": {
+    "idris2_canister": {
+      "type": "custom",
+      "candid": "canister.did",
+      "wasm": "build/canister/canister.wasm",
+      "build": "./scripts/build-canister.sh"
+    }
+  },
+  "defaults": {
+    "build": {
+      "packtool": ""
+    }
+  }
+}

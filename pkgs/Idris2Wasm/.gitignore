@@ -1,0 +1,16 @@
+# Build outputs
+build/
+*.wasm
+*.js
+
+# Idris2
+*.ttc
+*.ttm
+*.ibc
+
+# Emscripten
+*.html
+*.mem
+
+# OS
+.DS_Store
