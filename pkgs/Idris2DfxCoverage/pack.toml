@@ -1,0 +1,17 @@
+[custom.all.idris2-coverage-core]
+type = "local"
+path = "/Users/bob/code/idris2-coverage-core"
+ipkg = "idris2-coverage-core.ipkg"
+
+[custom.all.idris2-wasm]
+type = "local"
+path = "/Users/bob/code/idris2-wasm"
+ipkg = "idris2-wasm.ipkg"
+
+[custom.all.idris2-dfx-coverage]
+type = "local"
+path = "."
+ipkg = "idris2-dfx-coverage.ipkg"
+
+[install]
+libs = ["idris2-dfx-coverage"]

@@ -1,0 +1,11 @@
+package test-branch-parser
+
+depends = base, contrib, idris2-dfx-coverage
+
+sourcedir = "test"
+
+modules = Main
+
+main = Main
+
+executable = test-branch-parser

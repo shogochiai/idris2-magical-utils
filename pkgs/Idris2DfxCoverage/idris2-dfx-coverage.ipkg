@@ -1,0 +1,34 @@
+package idris2-dfx-coverage
+version = 0.1.0
+authors = "lazy-idris team"
+brief = "ICP Canister coverage analysis for Idris2 CDK backend"
+
+sourcedir = "src"
+
+depends = base, contrib, idris2-coverage-core, idris2-wasm
+
+modules = DfxCoverage.Idris2Coverage
+        , DfxCoverage.CandidParser
+        , DfxCoverage.CanisterCall
+        , DfxCoverage.CoverageAnalyzer
+        , DfxCoverage.Exclusions
+        -- WASM Trace Instrumentation
+        , DfxCoverage.WasmTrace.TraceEntry
+        , DfxCoverage.WasmTrace.TraceParser
+        -- WASM Function Mapping
+        , DfxCoverage.WasmMapper.WasmFunc
+        , DfxCoverage.WasmMapper.NameSection
+        , DfxCoverage.WasmMapper.WasmBranchParser
+        -- IC0 System API Mock
+        , DfxCoverage.Ic0Mock.Ic0Stubs
+        , DfxCoverage.Ic0Mock.MockContext
+        -- Code-Level Coverage
+        , DfxCoverage.CodeCoverage.CodeCoverageResult
+        , DfxCoverage.CodeCoverage.CodeCoverageAnalyzer
+        -- ic-wasm Integration
+        , DfxCoverage.IcWasm.Instrumenter
+        , DfxCoverage.IcWasm.ProfilingParser
+        , DfxCoverage.IcWasm.IcpPublicNameParser
+        , DfxCoverage.IcWasm.HttpOutcallDetector
+        -- Dumpcases Analysis
+        , DfxCoverage.DumpcasesParser
