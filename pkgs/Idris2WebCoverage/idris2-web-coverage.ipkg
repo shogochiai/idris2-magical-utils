@@ -1,0 +1,14 @@
+package idris2webcoverage
+version = 0.1.0
+
+sourcedir = "src"
+
+depends = base, contrib, idris2-coverage-core
+
+modules = WebCoverage.Types
+        , WebCoverage.DumpcasesParser
+        , WebCoverage.V8Runner
+        , WebCoverage.PlaywrightRunner
+        , WebCoverage.SourceMapper
+        , WebCoverage.JSFunctionParser
+        , WebCoverage.UnifiedRunner

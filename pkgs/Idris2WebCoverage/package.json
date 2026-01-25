@@ -1,0 +1,17 @@
+{
+  "name": "idris2-web-coverage",
+  "version": "0.1.0",
+  "description": "V8 coverage for Idris2 dom-mvc apps with source map support",
+  "type": "module",
+  "bin": {
+    "idris2-web-cov": "./bin/idris2-web-cov.mjs"
+  },
+  "scripts": {
+    "test": "node bin/idris2-web-cov.mjs --help"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "source-map": "^0.7.4",
+    "commander": "^11.0.0"
+  }
+}

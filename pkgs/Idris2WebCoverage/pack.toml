@@ -1,0 +1,15 @@
+# idris2-web-coverage pack.toml
+# Web coverage library for idris2-dom-mvc apps
+
+[custom.all.idris2-coverage-core]
+type   = "local"
+path   = "/Users/bob/code/idris2-coverage-core"
+ipkg   = "idris2-coverage-core.ipkg"
+
+[custom.all.idris2-web-coverage]
+type   = "local"
+path   = "."
+ipkg   = "idris2-web-coverage.ipkg"
+
+[install]
+libs = ["idris2-web-coverage"]
