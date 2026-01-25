@@ -1,17 +1,22 @@
 ||| Subcontract ABI: Type-Safe Function Signatures and Selectors
 |||
 ||| Provides compile-time binding between function signatures and selectors.
-||| Selector values are still provided as constants (due to KECCAK256 runtime
-||| constraints), but the type system ensures signature-selector pairs remain
-||| consistent.
+||| Function selectors are automatically computed from signatures using a pure
+||| Idris2 Keccak256 implementation, eliminating manual hardcoding.
 |||
-||| Key insight: We cannot compute keccak256 at compile time in the current
-||| idris2-evm interpreter, so we use phantom types to bind signatures to
-||| known selector constants, and verify consistency via tests.
+||| Usage:
+||| ```idris
+||| transferSig : Sig
+||| transferSig = MkSig "transfer" [TAddress, TUint256] [TBool]
+|||
+||| transferSel : Sel transferSig
+||| transferSel = selectorOf transferSig  -- Computes 0xa9059cbb
+||| ```
 |||
 module Subcontract.Core.ABI.Sig
 
 import public Data.List
+import public Subcontract.Core.ABI.Keccak
 
 -- =============================================================================
 -- ABI Parameter Types (Static only for now)
@@ -87,3 +92,27 @@ showSel {sig} (MkSel v) = sigString sig ++ " => 0x" ++ showHex8 v
                        hexDigit ((n `div` 0x100) `mod` 16),
                        hexDigit ((n `div` 0x10) `mod` 16),
                        hexDigit (n `mod` 16)]
+
+-- =============================================================================
+-- Automatic Selector Generation
+-- =============================================================================
+
+||| Compute selector from signature
+|||
+||| This uses a pure Idris2 Keccak256 implementation to compute the 4-byte
+||| function selector from the canonical signature string. No hardcoding required.
+|||
+||| @ sig The function signature
+||| @ returns A Sel bound to the signature with the correct selector value
+|||
+||| Example:
+||| ```idris
+||| transferSig : Sig
+||| transferSig = MkSig "transfer" [TAddress, TUint256] [TBool]
+|||
+||| transferSel : Sel transferSig
+||| transferSel = selectorOf transferSig  -- Computes 0xa9059cbb
+||| ```
+public export
+selectorOf : (sig : Sig) -> Sel sig
+selectorOf sig = MkSel (selectorPure (sigString sig))

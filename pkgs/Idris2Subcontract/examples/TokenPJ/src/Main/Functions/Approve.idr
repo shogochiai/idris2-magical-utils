@@ -32,7 +32,7 @@ approveSig = MkSig "approve" [TAddress, TUint256] [TBool]
 
 public export
 approveSel : Sel approveSig
-approveSel = MkSel 0x095ea7b3
+approveSel = selectorOf approveSig
 
 public export
 allowanceSig : Sig
@@ -40,7 +40,7 @@ allowanceSig = MkSig "allowance" [TAddress, TAddress] [TUint256]
 
 public export
 allowanceSel : Sel allowanceSig
-allowanceSel = MkSel 0xdd62ed3e
+allowanceSel = selectorOf allowanceSig
 
 -- =============================================================================
 -- Implementation

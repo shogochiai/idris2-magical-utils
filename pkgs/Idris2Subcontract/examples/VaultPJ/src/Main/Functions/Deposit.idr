@@ -30,7 +30,7 @@ depositSig = MkSig "deposit" [] []
 
 public export
 depositSel : Sel depositSig
-depositSel = MkSel 0xd0e30db0
+depositSel = selectorOf depositSig
 
 public export
 depositOfSig : Sig
@@ -38,7 +38,7 @@ depositOfSig = MkSig "depositOf" [TAddress] [TUint256]
 
 public export
 depositOfSel : Sel depositOfSig
-depositOfSel = MkSel 0x8f601f66
+depositOfSel = selectorOf depositOfSig
 
 -- =============================================================================
 -- Guards

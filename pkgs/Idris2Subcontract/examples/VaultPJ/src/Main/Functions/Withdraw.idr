@@ -30,7 +30,7 @@ withdrawSig = MkSig "withdraw" [TUint256] []
 
 public export
 withdrawSel : Sel withdrawSig
-withdrawSel = MkSel 0x2e1a7d4d
+withdrawSel = selectorOf withdrawSig
 
 public export
 withdrawAllSig : Sig
@@ -38,7 +38,7 @@ withdrawAllSig = MkSig "withdrawAll" [] []
 
 public export
 withdrawAllSel : Sel withdrawAllSig
-withdrawAllSel = MkSel 0x853828b6
+withdrawAllSel = selectorOf withdrawAllSig
 
 -- =============================================================================
 -- Guards

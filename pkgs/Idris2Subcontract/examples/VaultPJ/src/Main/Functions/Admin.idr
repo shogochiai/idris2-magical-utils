@@ -27,7 +27,7 @@ pauseSig = MkSig "pause" [] []
 
 public export
 pauseSel : Sel pauseSig
-pauseSel = MkSel 0x8456cb59
+pauseSel = selectorOf pauseSig
 
 public export
 unpauseSig : Sig
@@ -35,7 +35,7 @@ unpauseSig = MkSig "unpause" [] []
 
 public export
 unpauseSel : Sel unpauseSig
-unpauseSel = MkSel 0x3f4ba83a
+unpauseSel = selectorOf unpauseSig
 
 public export
 ownerSig : Sig
@@ -43,7 +43,7 @@ ownerSig = MkSig "owner" [] [TAddress]
 
 public export
 ownerSel : Sel ownerSig
-ownerSel = MkSel 0x8da5cb5b
+ownerSel = selectorOf ownerSig
 
 public export
 totalDepositsSig : Sig
@@ -51,7 +51,7 @@ totalDepositsSig = MkSig "totalDeposits" [] [TUint256]
 
 public export
 totalDepositsSel : Sel totalDepositsSig
-totalDepositsSel = MkSel 0x7d882097
+totalDepositsSel = selectorOf totalDepositsSig
 
 -- =============================================================================
 -- Guards

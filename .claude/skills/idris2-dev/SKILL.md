@@ -106,6 +106,31 @@ When the Yul codegen creates closures across many let bindings, parameter order 
 - `git@github.com:org/repo.git` (correct)
 - `https://github.com/org/repo` (wrong - auth issues)
 
+## EVM Smart Contract Selector Pattern
+
+For EVM smart contracts using idris2-subcontract, **always use `MkSig` + `selectorOf`** to auto-compute function selectors. Never hardcode selector values.
+
+```idris
+import Subcontract.Core.ABI.Sig
+
+-- Define signature: name, input types, output types
+transferSig : Sig
+transferSig = MkSig "transfer" [TAddress, TUint256] [TBool]
+
+-- Auto-compute selector (computes keccak256 at runtime, no hardcoding)
+transferSel : Sel transferSig
+transferSel = selectorOf transferSig  -- 0xa9059cbb
+
+-- Use in Entry points
+transferEntry : Entry transferSig
+transferEntry = MkEntry transferSel $ do
+  ...
+```
+
+**Available ABI types:** `TUint256`, `TBytes32`, `TAddress`, `TBool`
+
+**Why:** Hardcoded selectors (e.g., `MkSel 0xa9059cbb`) are error-prone and opaque. `selectorOf` computes keccak256("transfer(address,uint256)") automatically, binding the selector to its signature via phantom types.
+
 ## Generated Files - No Manual Edits
 
 | File | Source | Command |

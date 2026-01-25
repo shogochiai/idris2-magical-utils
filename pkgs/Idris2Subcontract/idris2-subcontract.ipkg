@@ -49,6 +49,7 @@ modules = Subcontract.Standards.ERC7546.Slots
         , Subcontract.Core.Effects
         , Subcontract.Core.Epoch
         , Subcontract.Core.LinearAsset
+        , Subcontract.Core.ABI.Keccak
         , Subcontract.Core.ABI.Sig
         , Subcontract.Core.ABI.Decoder
         , Subcontract.Std.Functions.FeatureToggle

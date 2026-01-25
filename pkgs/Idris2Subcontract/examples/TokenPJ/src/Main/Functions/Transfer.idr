@@ -32,7 +32,7 @@ transferSig = MkSig "transfer" [TAddress, TUint256] [TBool]
 
 public export
 transferSel : Sel transferSig
-transferSel = MkSel 0xa9059cbb
+transferSel = selectorOf transferSig
 
 -- =============================================================================
 -- Implementation

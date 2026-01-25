@@ -33,7 +33,7 @@ incrementSig = MkSig "increment" [] [TUint256]
 
 public export
 incrementSel : Sel incrementSig
-incrementSel = MkSel 0xd09de08a
+incrementSel = selectorOf incrementSig
 
 public export
 decrementSig : Sig
@@ -41,7 +41,7 @@ decrementSig = MkSig "decrement" [] [TUint256]
 
 public export
 decrementSel : Sel decrementSig
-decrementSel = MkSel 0x2baeceb7
+decrementSel = selectorOf decrementSig
 
 public export
 addSig : Sig
@@ -49,7 +49,7 @@ addSig = MkSig "add" [TUint256] [TUint256]
 
 public export
 addSel : Sel addSig
-addSel = MkSel 0x1003e2d2
+addSel = selectorOf addSig
 
 public export
 getCountSig : Sig
@@ -57,7 +57,7 @@ getCountSig = MkSig "getCount" [] [TUint256]
 
 public export
 getCountSel : Sel getCountSig
-getCountSel = MkSel 0xa87d942c
+getCountSel = selectorOf getCountSig
 
 -- =============================================================================
 -- Implementation

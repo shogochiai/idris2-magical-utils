@@ -19,7 +19,7 @@ totalSupplySig = MkSig "totalSupply" [] [TUint256]
 
 public export
 totalSupplySel : Sel totalSupplySig
-totalSupplySel = MkSel 0x18160ddd
+totalSupplySel = selectorOf totalSupplySig
 
 public export
 balanceOfSig : Sig
@@ -27,7 +27,7 @@ balanceOfSig = MkSig "balanceOf" [TAddress] [TUint256]
 
 public export
 balanceOfSel : Sel balanceOfSig
-balanceOfSel = MkSel 0x70a08231
+balanceOfSel = selectorOf balanceOfSig
 
 public export
 ownerSig : Sig
@@ -35,7 +35,7 @@ ownerSig = MkSig "owner" [] [TAddress]
 
 public export
 ownerSel : Sel ownerSig
-ownerSel = MkSel 0x8da5cb5b
+ownerSel = selectorOf ownerSig
 
 -- =============================================================================
 -- Entry Points

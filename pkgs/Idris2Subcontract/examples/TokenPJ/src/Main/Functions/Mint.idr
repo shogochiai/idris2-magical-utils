@@ -31,7 +31,7 @@ mintSig = MkSig "mint" [TAddress, TUint256] []
 
 public export
 mintSel : Sel mintSig
-mintSel = MkSel 0x40c10f19
+mintSel = selectorOf mintSig
 
 -- =============================================================================
 -- Access Control
