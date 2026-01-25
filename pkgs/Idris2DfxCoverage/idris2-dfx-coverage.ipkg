@@ -5,7 +5,7 @@ brief = "ICP Canister coverage analysis for Idris2 CDK backend"
 
 sourcedir = "src"
 
-depends = base, contrib, idris2-coverage-core, idris2-wasm
+depends = base, contrib, idris2-coverage-core, idris2-icwasm
 
 modules = DfxCoverage.Idris2Coverage
         , DfxCoverage.CandidParser

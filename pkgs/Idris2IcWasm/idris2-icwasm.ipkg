@@ -1,4 +1,4 @@
-package idris2-wasm
+package idris2-icwasm
 version = 0.1.0
 authors = "lazy-idris team"
 brief = "Idris2 to IC WASM compilation pipeline"
@@ -19,5 +19,5 @@ modules = WasmBuilder.WasmBuilder
         , WasmBuilder.Tests.AllTests
         , CLI
 
-executable = idris2-wasm
+executable = idris2-icwasm
 main = CLI

@@ -3,10 +3,10 @@ type = "local"
 path = "../Idris2CoverageCore"
 ipkg = "idris2-coverage-core.ipkg"
 
-[custom.all.idris2-wasm]
+[custom.all.idris2-icwasm]
 type = "local"
-path = "../Idris2Wasm"
-ipkg = "idris2-wasm.ipkg"
+path = "../Idris2IcWasm"
+ipkg = "idris2-icwasm.ipkg"
 
 [custom.all.idris2-dfx-coverage]
 type = "local"

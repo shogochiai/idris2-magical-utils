@@ -8,10 +8,10 @@ type = "local"
 path = "pkgs/Idris2Evm"
 ipkg = "idris2-evm.ipkg"
 
-[custom.all.idris2-wasm]
+[custom.all.idris2-icwasm]
 type = "local"
-path = "pkgs/Idris2Wasm"
-ipkg = "idris2-wasm.ipkg"
+path = "pkgs/Idris2IcWasm"
+ipkg = "idris2-icwasm.ipkg"
 
 [custom.all.idris2-coverage]
 type = "local"

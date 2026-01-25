@@ -64,9 +64,9 @@ instrumentWasm opts = do
     then pure $ Right ()
     else pure $ Left $ "ic-wasm instrument failed with exit code " ++ show exitCode
 
-||| Quick instrument with defaults for idris2-wasm canisters
+||| Quick instrument with defaults for idris2-icwasm canisters
 ||| Uses start page 10 to avoid conflict with canister stable memory (pages 0-9)
-||| idris2-wasm generated canisters pre-allocate 26 pages for profiling support
+||| idris2-icwasm generated canisters pre-allocate 26 pages for profiling support
 export
 quickInstrument : String -> String -> IO (Either String ())
 quickInstrument input output =

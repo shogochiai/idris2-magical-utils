@@ -1,4 +1,4 @@
-||| CLI for idris2-wasm build tool
+||| CLI for idris2-icwasm build tool
 module CLI
 
 import System
@@ -63,9 +63,9 @@ parseArgs args = go defaultOptions args
 
 usage : String
 usage = """
-idris2-wasm - Build Idris2 to ICP canister WASM
+idris2-icwasm - Build Idris2 to ICP canister WASM
 
-Usage: idris2-wasm build [OPTIONS]
+Usage: idris2-icwasm build [OPTIONS]
 
 Options:
   --canister=NAME   Canister name (default: canister)
@@ -76,7 +76,7 @@ Options:
   --help, -h        Show this help
 
 Example:
-  idris2-wasm build --canister=my_canister --main=src/Main.idr
+  idris2-icwasm build --canister=my_canister --main=src/Main.idr
 """
 
 ||| Resolve project directory to absolute path
@@ -116,5 +116,5 @@ main = do
     ("--help" :: _) => putStrLn usage
     ("-h" :: _) => putStrLn usage
     _ => do
-      putStrLn "Unknown command. Use 'idris2-wasm build' or 'idris2-wasm --help'"
+      putStrLn "Unknown command. Use 'idris2-icwasm build' or 'idris2-icwasm --help'"
       exitFailure

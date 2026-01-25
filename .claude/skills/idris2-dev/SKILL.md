@@ -19,12 +19,54 @@ triggers:
 
 ## Project Policy
 
-**idris2-wasm / idris2-yul projects are Idris2-complete**
+**idris2-icwasm / idris2-yul projects are Idris2-complete**
 
-- **IC WASM:** No Rust or C. Use idris2-wasm only.
+- **IC WASM:** No Rust or C. Use idris2-icwasm only.
 - **EVM:** No Solidity, Foundry, Hardhat. Use idris2-yul only.
 
 Minimize external toolchain dependencies. Maximize Idris2 type safety.
+
+## Compilation Targets
+
+Idris2 パッケージは4つのバックエンドターゲットがある:
+
+| Target | Backend | Build | `%foreign` prefix |
+|--------|---------|-------|-------------------|
+| Native | Chez Scheme | `pack build <pkg>` | (standard) |
+| EVM | idris2-yul codegen | `idris2-yul` 経由 | `evm:*` |
+| IC WASM | idris2-icwasm codegen | `idris2-icwasm` 経由 | `wasm:*`, `ic0:*` |
+| JavaScript | Idris2 built-in | `--cg javascript` / `--cg node` | `javascript:*` |
+
+### ターゲット判定方法
+
+ソース内の `%foreign` 宣言で判定:
+- `"evm:*"` → EVM ターゲット。`pack build` は **必ず失敗**（正常動作）
+- `"javascript:*"` → JS ターゲット。ipkg に `--cg javascript` が必要
+- `"wasm:*"` / `"ic0:*"` → IC WASM ターゲット
+- 上記なし → Native (Chez) ターゲット
+
+### パッケージ別ターゲット一覧
+
+| Package | Target | `pack build` | 正しいビルド |
+|---------|--------|--------------|-------------|
+| idris2-textdao | EVM | ❌ expected fail | `idris2-yul` 経由 |
+| idris2-ouf | EVM | ❌ expected fail | `idris2-yul` 経由 |
+| idris2-subcontract | EVM (lib) | ✅ lib のみ | `idris2-yul` 経由 |
+| oucdashboard | JS | ✅ (`--cg javascript` in ipkg) | `pack build` / ipkg opts |
+| ouc | IC WASM | ✅ tests のみ | `idris2-icwasm` 経由 |
+| icp-indexer | IC WASM | ✅ tests のみ | `idris2-icwasm` 経由 |
+| lazyweb | Native | ✅ | `pack build` |
+| (その他 magical-utils) | Native | ✅ | `pack build` |
+
+### アーキテクチャ対応表
+
+EVM 系と IC 系は対称的な3層構造:
+
+| Layer | EVM | IC |
+|-------|-----|-----|
+| 低レベル型・生成 | idris2-evm (型・解釈器) + idris2-yul (codegen) | idris2-icwasm (生成+IC0 FFI、1パッケージで両方) |
+| アプリFW | idris2-subcontract (UCS/ERC-7546) | idris2-cdk (StableMemory/FR Monad/ICP API) |
+| カバレッジ | idris2-evm-coverage | idris2-dfx-coverage |
 
 ## Memory Explosion Patterns (OOM Avoidance)
 
@@ -67,6 +109,6 @@ When idris2-yul creates closures across many let bindings, parameter order can g
 
 | File | Source | Command |
 |------|--------|---------|
-| `canister_entry.c` | `can.did` | `idris2-wasm gen-entry` |
+| `canister_entry.c` | `can.did` | `idris2-icwasm gen-entry` |
 | `*.ttc` (TTC cache) | `*.idr` | `idris2 --build` |
 | `build/` directory | Source | Build system |

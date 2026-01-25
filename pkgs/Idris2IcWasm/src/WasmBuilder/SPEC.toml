@@ -97,4 +97,4 @@ invariant = "BuildError contains descriptive error from failed step"
 [[spec]]
 id = "${prefix}_BUILD_004"
 title = "Auto-detect IC0 support location"
-invariant = "buildCanisterAuto finds lib/ic0 or ../idris2-wasm/support/ic0"
+invariant = "buildCanisterAuto finds lib/ic0 or ../idris2-icwasm/support/ic0"
