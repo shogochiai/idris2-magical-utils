@@ -1,0 +1,16 @@
+package idris2-e2e-harness
+version = 0.1.0
+authors = "a-life team"
+brief = "E2E test harness for cross-chain (EVM/ICP) testing"
+
+depends = base, contrib
+
+sourcedir = "src"
+
+modules = Harness
+        , Harness.Types
+        , Harness.Evm
+        , Harness.Icp
+        , Harness.Anvil
+        , Harness.Replica
+        , Harness.Runner

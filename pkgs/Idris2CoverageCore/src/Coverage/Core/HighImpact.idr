@@ -183,3 +183,75 @@ coverageReadingGuide =
   "high_impact_targets: Functions with coverage issues, sorted by severity. " ++
   "kind: untested_canonical = has untested branches; bug_unhandled_input = partial code; unknown_crash = investigate. " ++
   "severity: branchCount/executedCount ratio. Inf = no branches executed or bug/unknown."
+
+-- =============================================================================
+-- Filtered Targets (with exclusion tracking)
+-- =============================================================================
+
+||| Exclusion pattern for filtering targets
+public export
+ExclPattern : Type
+ExclPattern = String
+
+||| Check if a function name matches an exclusion pattern
+public export
+matchesExclusion : String -> ExclPattern -> Bool
+matchesExclusion fn pat = isPrefixOf pat fn || isInfixOf pat fn
+
+||| Container for filtered targets with exclusion tracking
+public export
+record FilteredTargets where
+  constructor MkFilteredTargets
+  targets       : List HighImpactTarget
+  excludedCount : Nat
+  totalCount    : Nat
+
+||| Create FilteredTargets from a list (no exclusions)
+public export
+mkFilteredTargets : List HighImpactTarget -> FilteredTargets
+mkFilteredTargets ts = MkFilteredTargets ts 0 (length ts)
+
+||| Default exclusion patterns (stdlib, test helpers, primitives)
+public export
+defaultExclPatterns : List ExclPattern
+defaultExclPatterns =
+  [ "Prelude."
+  , "Data."
+  , "Control."
+  , "System."
+  , "Decidable."
+  , "Language."
+  , "test_"
+  , "prim__"
+  , "believe_me"
+  , "assert_"
+  ]
+
+||| Create FilteredTargets with exclusion patterns applied
+public export
+mkFilteredTargetsWithPatterns : List ExclPattern -> List HighImpactTarget -> FilteredTargets
+mkFilteredTargetsWithPatterns pats ts =
+  let allPats = defaultExclPatterns ++ pats
+      isExcluded = \t => any (matchesExclusion (funcName t)) allPats
+      (excluded, kept) = partition isExcluded ts
+  in MkFilteredTargets kept (length excluded) (length ts)
+
+||| Get top K targets from filtered set
+public export
+getTopK : Nat -> FilteredTargets -> List HighImpactTarget
+getTopK k ft = take k (sortTargets (targets ft))
+
+||| Get count of excluded targets
+public export
+getExcludedCount : FilteredTargets -> Nat
+getExcludedCount = excludedCount
+
+||| Get all targets (after exclusion)
+public export
+getTargets : FilteredTargets -> List HighImpactTarget
+getTargets = targets
+
+||| Get total count before exclusion
+public export
+getTotalCount : FilteredTargets -> Nat
+getTotalCount = totalCount

@@ -82,9 +82,9 @@ generateTempPackToml projectPackToml =
         , "# This enables Coverage.Profiler to track function hits during test execution"
         , "[custom.all.idris2-coverage]"
         , "type   = \"github\""
-        , "url    = \"https://github.com/aspect-and-syntax/idris2-coverage\""
+        , "url    = \"git@github.com:shogochiai/idris2-magical-utils.git\""
         , "commit = \"latest\""
-        , "ipkg   = \"idris2-coverage.ipkg\""
+        , "ipkg   = \"pkgs/Idris2Coverage/idris2-coverage.ipkg\""
         ]
   in if projectPackToml == ""
        then coverageDef

@@ -268,11 +268,30 @@ mutual
     pure (ctx, [], yulCall "apply_closure" [compileAVar closure, compileAVar arg])
 
   -- Constructor application
+  -- Allocates heap memory for tagged value: [tag][field1][field2]...
   compileANFExprWithStmts ctx (ACon _ n ci (Just tag) args) = do
-    pure (ctx, [], yulNum (cast tag))
+    let compiledArgs = map compileAVar args
+    let numFields = length args
+    if numFields == 0
+      -- Zero-arity constructor: just return tag value (no allocation needed)
+      then pure (ctx, [], yulNum (cast tag))
+      -- Multi-field constructor: allocate heap and store tag + fields
+      else do
+        let numWords = 1 + cast numFields  -- tag + fields
+        let allocStmts = allocWords numWords
+        let writeStmts = writeTaggedValue (yulVar "ptr") (cast tag) compiledArgs
+        pure (ctx, allocStmts ++ writeStmts, yulVar "ptr")
 
   compileANFExprWithStmts ctx (ACon _ n ci Nothing args) = do
-    pure (ctx, [], yulNum 0)
+    let compiledArgs = map compileAVar args
+    let numFields = length args
+    if numFields == 0
+      then pure (ctx, [], yulNum 0)
+      else do
+        let numWords = 1 + cast numFields
+        let allocStmts = allocWords numWords
+        let writeStmts = writeTaggedValue (yulVar "ptr") 0 compiledArgs
+        pure (ctx, allocStmts ++ writeStmts, yulVar "ptr")
 
   -- Primitive operation
   compileANFExprWithStmts ctx (AOp _ _ fn args) = do
@@ -376,7 +395,10 @@ mutual
       Just d => do
         (ctxD, dStmts, dExpr) <- compileANFExprWithStmts ctx2 d
         pure (ctxD, Just (YBlock (dStmts ++ [yulAssign resultVar dExpr])))
-      Nothing => pure (ctx2, Nothing)
+      Nothing =>
+        -- BUGFIX: Always generate a default branch even if mdef is Nothing
+        -- This ensures switch statements have defined behavior for all cases
+        pure (ctx2, Just (YBlock []))
     let declStmt = yulLet resultVar (YLit (YulNum 0))  -- declare variable before switch
     let switchStmt = YSwitch (readTag scExpr) cases defStmt
     -- Add source location comment before switch
@@ -418,7 +440,11 @@ mutual
       Just d => do
         (ctxD, dStmts, dExpr) <- compileANFExprWithStmts ctx2 d
         pure (ctxD, Just (YBlock (dStmts ++ [yulAssign resultVar dExpr])))
-      Nothing => pure (ctx2, Nothing)
+      Nothing =>
+        -- BUGFIX: Always generate a default branch even if mdef is Nothing
+        -- This ensures switch statements have defined behavior for all cases
+        -- The result variable is already initialized to 0, so default is a no-op
+        pure (ctx2, Just (YBlock []))
     let declStmt = yulLet resultVar (YLit (YulNum 0))  -- declare variable before switch
     let switchStmt = YSwitch scExpr cases defStmt
     -- Add source location comment before switch

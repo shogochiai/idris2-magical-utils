@@ -10,6 +10,7 @@ import Data.Maybe
 import System
 import System.Clock
 import System.File
+import Coverage.Core.HighImpact
 
 %default covering
 
