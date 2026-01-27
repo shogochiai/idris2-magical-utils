@@ -188,14 +188,9 @@ coverageReadingGuide =
 -- Filtered Targets (with exclusion tracking)
 -- =============================================================================
 
-||| Exclusion pattern for filtering targets
+||| Check if a function name matches a simple string exclusion pattern
 public export
-ExclPattern : Type
-ExclPattern = String
-
-||| Check if a function name matches an exclusion pattern
-public export
-matchesExclusion : String -> ExclPattern -> Bool
+matchesExclusion : String -> String -> Bool
 matchesExclusion fn pat = isPrefixOf pat fn || isInfixOf pat fn
 
 ||| Container for filtered targets with exclusion tracking
@@ -213,7 +208,7 @@ mkFilteredTargets ts = MkFilteredTargets ts 0 (length ts)
 
 ||| Default exclusion patterns (stdlib, test helpers, primitives)
 public export
-defaultExclPatterns : List ExclPattern
+defaultExclPatterns : List String
 defaultExclPatterns =
   [ "Prelude."
   , "Data."
@@ -229,7 +224,7 @@ defaultExclPatterns =
 
 ||| Create FilteredTargets with exclusion patterns applied
 public export
-mkFilteredTargetsWithPatterns : List ExclPattern -> List HighImpactTarget -> FilteredTargets
+mkFilteredTargetsWithPatterns : List String -> List HighImpactTarget -> FilteredTargets
 mkFilteredTargetsWithPatterns pats ts =
   let allPats = defaultExclPatterns ++ pats
       isExcluded = \t => any (matchesExclusion (funcName t)) allPats
