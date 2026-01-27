@@ -32,3 +32,5 @@ modules = DfxCoverage.Idris2Coverage
         , DfxCoverage.IcWasm.HttpOutcallDetector
         -- Dumpcases Analysis
         , DfxCoverage.DumpcasesParser
+        -- Function Coverage
+        , DfxCoverage.FunctionCoverage
