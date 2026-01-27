@@ -1,0 +1,50 @@
+name: Lazy Ask CI
+on: [pull_request]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PACK_VERSION: latest
+
+jobs:
+  lazy-ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git for HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Cache pack + Idris2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pack
+            ~/.idris2
+          key: pack-${{ runner.os }}-${{ hashFiles('pack.toml') }}
+          restore-keys: pack-${{ runner.os }}-
+
+      - name: Install Chez Scheme
+        run: sudo apt-get update && sudo apt-get install -y chezscheme
+
+      - name: Install pack + Idris2
+        run: |
+          if [ ! -f "$HOME/.pack/bin/pack" ]; then
+            echo "chezscheme" | bash <(curl -sL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash)
+          fi
+          echo "$HOME/.pack/bin" >> "$GITHUB_PATH"
+
+      - name: Install lazy CLI
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/shogochiai/lazy.git /tmp/lazy-build
+          cd /tmp/lazy-build/pkgs/LazyCli
+          pack install-app lazycli
+
+      - name: Run lazy core ask
+        run: |
+          for pkg in Idris2Cdk Idris2IcWasm; do
+            ./scripts/ci/lazy-check.sh core "pkgs/$pkg"
+          done
