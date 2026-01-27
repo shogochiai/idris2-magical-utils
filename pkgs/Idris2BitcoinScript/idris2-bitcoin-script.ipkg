@@ -1,0 +1,12 @@
+package idris2-bitcoin-script
+version = 0.1.0
+authors = "Lazy Technologies"
+brief   = "Stack-safe Bitcoin Script DSL with OP_CAT covenant support"
+
+sourcedir = "src"
+
+modules = Bitcoin.Opcode
+        , Bitcoin.Script
+        , Bitcoin.Patterns
+        , Bitcoin.Contract
+        , Bitcoin.Covenant

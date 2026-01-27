@@ -1,0 +1,8 @@
+package idris2-icwasm-sqlite
+version = 0.1.0
+authors = "Lazy Technologies"
+brief   = "SQLite FFI bindings for ICP WASM canisters"
+
+sourcedir = "src"
+
+modules = IcWasm.SQLite
