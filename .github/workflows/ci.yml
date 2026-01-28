@@ -43,6 +43,12 @@ jobs:
           cd /tmp/lazy-build/pkgs/LazyCli
           pack install-app lazycli
 
+      - name: Build CI stub shared libraries
+        run: |
+          gcc -shared -fPIC -o /tmp/libonnx_shim.so /tmp/lazy-build/lib/ci-stubs.c
+          gcc -shared -fPIC -o /tmp/libvocab_db.so /tmp/lazy-build/lib/ci-stubs.c
+          echo "LD_LIBRARY_PATH=/tmp:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
       - name: Run lazy core ask
         working-directory: /tmp/lazy-build/pkgs/LazyCli
         run: |
