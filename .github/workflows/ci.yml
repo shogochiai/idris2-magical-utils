@@ -44,7 +44,8 @@ jobs:
           pack install-app lazycli
 
       - name: Run lazy core ask
+        working-directory: /tmp/lazy-build/pkgs/LazyCli
         run: |
           for pkg in Idris2Cdk Idris2IcWasm; do
-            ./scripts/ci/lazy-check.sh core "pkgs/$pkg"
+            "$GITHUB_WORKSPACE/scripts/ci/lazy-check.sh" core "$GITHUB_WORKSPACE/pkgs/$pkg"
           done
