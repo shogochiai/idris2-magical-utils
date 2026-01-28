@@ -45,8 +45,45 @@ jobs:
 
       - name: Build CI stub shared libraries
         run: |
-          gcc -shared -fPIC -o /tmp/libonnx_shim.so /tmp/lazy-build/lib/ci-stubs.c
-          gcc -shared -fPIC -o /tmp/libvocab_db.so /tmp/lazy-build/lib/ci-stubs.c
+          cat > /tmp/ci-stubs.c << 'STUBS'
+          #include <stdlib.h>
+          #include <string.h>
+          #include <stdint.h>
+          int onnx_init(void){return 0;} void onnx_cleanup(void){}
+          void* onnx_load_model(const char* p){(void)p;return(void*)1;}
+          void onnx_free_session(void* s){(void)s;}
+          float onnx_trm_infer(void* s,const int64_t* i,const float* m,int64_t l){(void)s;(void)i;(void)m;(void)l;return 0.5f;}
+          float onnx_trm_infer_str(void* s,const char* a,const char* b){(void)s;(void)a;(void)b;return 0.5f;}
+          double onnx_trm_infer_str_d(void* s,const char* a,const char* b){(void)s;(void)a;(void)b;return 0.5;}
+          const char* onnx_get_error(void){return "";}
+          void* vocab_db_open(const char* p){(void)p;return(void*)1;}
+          void vocab_db_close(void* d){(void)d;}
+          int vocab_db_init_schema(void* d){(void)d;return 0;}
+          int vocab_db_begin(void* d){(void)d;return 0;}
+          int vocab_db_commit(void* d){(void)d;return 0;}
+          int vocab_db_rollback(void* d){(void)d;return 0;}
+          int vocab_db_insert_morph(void* d,const char* a,const char* b,const char* c,const char* e){(void)d;(void)a;(void)b;(void)c;(void)e;return 0;}
+          int vocab_db_insert_synset(void* d,const char* a,const char* b,const char* c,const char* e){(void)d;(void)a;(void)b;(void)c;(void)e;return 0;}
+          int vocab_db_insert_abbrev(void* d,const char* a,const char* b,const char* c,const char* e,const char* f){(void)d;(void)a;(void)b;(void)c;(void)e;(void)f;return 0;}
+          int vocab_db_clear(void* d){(void)d;return 0;}
+          char* vocab_db_lookup_morph(void* d,const char* s){(void)d;(void)s;return NULL;}
+          char* vocab_db_lookup_morph_by_variant(void* d,const char* s){(void)d;(void)s;return NULL;}
+          char* vocab_db_lookup_synset(void* d,const char* s){(void)d;(void)s;return NULL;}
+          char* vocab_db_lookup_abbrev(void* d,const char* s){(void)d;(void)s;return NULL;}
+          int vocab_db_in_lexicon(void* d,const char* s){(void)d;(void)s;return 0;}
+          char* vocab_db_get_all_morph_stems(void* d){(void)d;return strdup("[]");}
+          char* vocab_db_get_all_synset_ids(void* d){(void)d;return strdup("[]");}
+          char* vocab_db_get_all_abbrev_shorts(void* d){(void)d;return strdup("[]");}
+          char* vocab_db_get_all_lexicon(void* d){(void)d;return strdup("[]");}
+          int vocab_db_count_morphs(void* d){(void)d;return 0;}
+          int vocab_db_count_synsets(void* d){(void)d;return 0;}
+          int vocab_db_count_abbrevs(void* d){(void)d;return 0;}
+          int vocab_db_count_lexicon(void* d){(void)d;return 0;}
+          const char* vocab_db_get_error(void){return "";}
+          void vocab_db_free_string(char* s){free(s);}
+          STUBS
+          gcc -shared -fPIC -o /tmp/libonnx_shim.so /tmp/ci-stubs.c
+          gcc -shared -fPIC -o /tmp/libvocab_db.so /tmp/ci-stubs.c
           echo "LD_LIBRARY_PATH=/tmp:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Run lazy core ask
