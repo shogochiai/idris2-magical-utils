@@ -9,6 +9,7 @@ depends = base, contrib
 
 modules = WasmBuilder.WasmBuilder
         , WasmBuilder.CandidStubs
+        , WasmBuilder.CandidDecoder
         , WasmBuilder.IC0.FFI
         , WasmBuilder.IC0.Call
         , WasmBuilder.IC0.Stable

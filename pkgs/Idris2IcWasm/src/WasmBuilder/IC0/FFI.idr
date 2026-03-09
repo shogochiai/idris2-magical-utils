@@ -126,6 +126,43 @@ jsonReadBytes = do
           go (idx + 1) len (byte :: acc)
 
 -- =============================================================================
+-- Arg Buffer (IC message args → Idris2, for Candid decoding)
+-- =============================================================================
+
+||| Get total size of message arg buffer
+export
+%foreign "C:ic_arg_size,libic0"
+prim__argSize : PrimIO Int
+
+export
+argSize : IO Int
+argSize = primIO prim__argSize
+
+||| Get byte at index from arg buffer
+export
+%foreign "C:ic_arg_byte,libic0"
+prim__argByte : Int -> PrimIO Int
+
+export
+argByte : Int -> IO Int
+argByte idx = primIO $ prim__argByte idx
+
+||| Read all bytes from arg buffer
+export
+readArgBytes : IO (List Bits8)
+readArgBytes = do
+  size <- argSize
+  go 0 size []
+  where
+    go : Int -> Int -> List Bits8 -> IO (List Bits8)
+    go idx size acc =
+      if idx >= size
+        then pure (reverse acc)
+        else do
+          b <- argByte idx
+          go (idx + 1) size (cast b :: acc)
+
+-- =============================================================================
 -- String Buffer (Idris2 → C)
 -- =============================================================================
 

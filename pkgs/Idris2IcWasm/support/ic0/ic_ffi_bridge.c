@@ -171,6 +171,41 @@ int32_t ic_str_c_get_len(void) {
 }
 
 /* =============================================================================
+ * Arg Buffer: IC message args → Idris2 (for Candid decoding)
+ * ============================================================================= */
+
+#define IC_ARG_BUF_SIZE 8192
+static uint8_t ic_arg_buf[IC_ARG_BUF_SIZE];
+static int32_t ic_arg_buf_size = 0;
+
+/* IC0 imports for argument data */
+extern int32_t ic0_msg_arg_data_size(void);
+extern void ic0_msg_arg_data_copy(int32_t dst, int32_t offset, int32_t size);
+
+/* Load current message args into buffer. Called from C entry stubs. */
+void ic_arg_load(void) {
+    int32_t size = ic0_msg_arg_data_size();
+    if (size > IC_ARG_BUF_SIZE) size = IC_ARG_BUF_SIZE;
+    ic_arg_buf_size = size;
+    if (size > 0) {
+        ic0_msg_arg_data_copy((int32_t)(uintptr_t)ic_arg_buf, 0, size);
+    }
+}
+
+/* Called from Idris2: get total arg buffer size */
+int64_t ic_arg_size(void) {
+    return (int64_t)ic_arg_buf_size;
+}
+
+/* Called from Idris2: get byte at index */
+int64_t ic_arg_byte(int64_t index) {
+    if (index >= 0 && index < ic_arg_buf_size) {
+        return (int64_t)(uint8_t)ic_arg_buf[index];
+    }
+    return 0;
+}
+
+/* =============================================================================
  * Stable Memory Helpers (high-level wrappers for Idris2)
  *
  * These provide convenient Int32/Int64 read/write without pointer manipulation.
