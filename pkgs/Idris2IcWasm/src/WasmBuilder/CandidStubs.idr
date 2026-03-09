@@ -7,6 +7,7 @@
 ||| arbitrary record/variant types to valid Candid binary format.
 module WasmBuilder.CandidStubs
 
+import Data.Bits
 import Data.String
 import Data.List
 import Data.Maybe
@@ -37,6 +38,7 @@ data CandidType
   | CTFloat32
   | CTFloat64
   | CTNull
+  | CTPrincipal
   | CTOpt CandidType
   | CTVec CandidType
   | CTRecord (List (String, CandidType))
@@ -62,6 +64,7 @@ Show CandidType where
   show CTFloat32 = "float32"
   show CTFloat64 = "float64"
   show CTNull = "null"
+  show CTPrincipal = "principal"
   show (CTOpt t) = "opt " ++ show t
   show (CTVec t) = "vec " ++ show t
   show (CTRecord _) = "record {...}"
@@ -125,15 +128,21 @@ leb128Unsigned n = go n []
            then reverse (toHex byte :: acc)
            else go rest (toHex (byte + 128) :: acc)
 
-||| Encode signed integer as SLEB128 bytes
+||| Encode signed integer as SLEB128 bytes (correct multi-byte implementation)
 sleb128Signed : Int -> List String
-sleb128Signed n =
-  if n >= 0 && n < 64
-    then [toHex (cast n)]
-    else if n < 0 && n >= -64
-      then [toHex (cast (128 + n))]
-      else ["0x00"]  -- Simplified: just return 0 for complex cases
+sleb128Signed n = go n []
   where
+    go : Int -> List String -> List String
+    go val acc =
+      let byte : Int  = val .&. 0x7F
+          rest : Int  = val `shiftR` 7
+          -- done when rest is all-sign-bits and sign bit of byte matches
+          done : Bool = (rest == 0 && byte .&. 0x40 == 0) ||
+                        (rest == -1 && byte .&. 0x40 /= 0)
+          outByte : Bits32 = if done then cast byte else cast (byte .|. 0x80)
+      in if done
+           then reverse (toHex outByte :: acc)
+           else go rest (toHex outByte :: acc)
     toHex : Bits32 -> String
     toHex b =
       let hi = b `div` 16
@@ -164,9 +173,10 @@ typeCodes CTInt32 = "0x75"    -- -11
 typeCodes CTInt64 = "0x74"    -- -12
 typeCodes CTFloat32 = "0x73"  -- -13
 typeCodes CTFloat64 = "0x72"  -- -14
-typeCodes CTText = "0x71"     -- -15
-typeCodes CTBlob = "0x6d,0x7b" -- vec nat8
-typeCodes (CTOpt _) = "0x6e"  -- -18
+typeCodes CTText = "0x71"       -- -15
+typeCodes CTPrincipal = "0x68"  -- -24
+typeCodes CTBlob = "0x6d,0x7b"  -- vec nat8
+typeCodes (CTOpt _) = "0x6e"   -- -18
 typeCodes (CTVec _) = "0x6d"  -- -19
 typeCodes (CTRecord _) = "0x6c" -- -20
 typeCodes (CTVariant _) = "0x6b" -- -21
@@ -197,6 +207,7 @@ parseSimpleType s =
     "int64" => CTInt64
     "float32" => CTFloat32
     "float64" => CTFloat64
+    "principal" => CTPrincipal
     _ => if isPrefixOf "opt " t
            then CTOpt (parseSimpleType (substr 4 (length t) t))
          else if isPrefixOf "vec " t
@@ -438,6 +449,7 @@ isPrimitive CTInt64 = True
 isPrimitive CTFloat32 = True
 isPrimitive CTFloat64 = True
 isPrimitive CTBlob = True
+isPrimitive CTPrincipal = True
 isPrimitive _ = False
 
 ||| Generate default value bytes for a type
@@ -457,7 +469,8 @@ defaultValueBytes CTInt64 = ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x
 defaultValueBytes CTFloat32 = ["0x00", "0x00", "0x00", "0x00"]
 defaultValueBytes CTFloat64 = ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
 defaultValueBytes CTText = ["0x00"]  -- empty string (length 0)
-defaultValueBytes CTBlob = ["0x00"]  -- empty blob (length 0)
+defaultValueBytes CTBlob = ["0x00"]      -- empty blob (length 0)
+defaultValueBytes CTPrincipal = ["0x01", "0x00"]  -- opaque=1, len=0 (anonymous principal)
 defaultValueBytes (CTOpt _) = ["0x00"]  -- none
 defaultValueBytes (CTVec _) = ["0x00"]  -- empty vec (length 0)
 defaultValueBytes (CTRecord fields) =
@@ -517,6 +530,7 @@ getTypeRef CTInt64 _ = "0x74"
 getTypeRef CTFloat32 _ = "0x73"
 getTypeRef CTFloat64 _ = "0x72"
 getTypeRef CTText _ = "0x71"
+getTypeRef CTPrincipal _ = "0x68"  -- -24
 getTypeRef CTBlob _ = "0x7b"  -- nat8 for vec nat8
 getTypeRef t indices =
   case lookupType t indices of
