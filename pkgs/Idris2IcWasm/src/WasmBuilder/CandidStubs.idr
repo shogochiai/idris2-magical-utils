@@ -76,9 +76,10 @@ Show CandidType where
 public export
 record DidMethod where
   constructor MkDidMethod
-  name : String
+  name       : String
+  argTypes   : List CandidType   -- メソッド引数型リスト
   returnType : CandidType
-  isQuery : Bool
+  isQuery    : Bool
 
 ||| Type definition from .did file
 public export
@@ -344,6 +345,22 @@ extractReturnType s =
        then trim $ substr 1 (minus (length result) 2) result
        else result
 
+||| Extract arg types from method signature (the part before "->")
+||| Format: "(type1, type2, ...)" → [CandidType, ...]
+extractArgTypes : String -> List CandidType
+extractArgTypes s =
+  let chars = unpack s
+      -- Take everything before "->"
+      beforeArrow = takeWhile (\c => c /= '-') chars
+      argStr = trim (pack beforeArrow)
+  in if isPrefixOf "(" argStr
+       then
+         let inner = trim $ substr 1 (minus (length argStr) 2) argStr
+         in if null inner
+              then []
+              else map (parseSimpleType . trim) (forget (split (== ',') inner))
+       else []
+
 ||| Parse method line from service block
 ||| Format: "  methodName: (args) -> (returnType) query;"
 parseMethodLine : String -> Maybe DidMethod
@@ -359,10 +376,11 @@ parseMethodLine line =
                 let methodName = trim (pack namePart)
                     restStr = pack rest
                     isQ = isInfixOf "query" restStr
+                    argTypes = extractArgTypes restStr
                     returnStr = extractReturnType restStr
                 in if null methodName || isPrefixOf "{" methodName || isPrefixOf "service" methodName
                      then Nothing
-                     else Just $ MkDidMethod methodName (parseSimpleType returnStr) isQ
+                     else Just $ MkDidMethod methodName argTypes (parseSimpleType returnStr) isQ
               _ => Nothing
 
 ||| Extract lines within the service block only
@@ -607,3 +625,42 @@ generateReplyForType : String -> CandidType -> List TypeDef -> String
 generateReplyForType methodName ctype defs =
   let comment = " // " ++ methodName ++ " -> " ++ show ctype
   in generateCandidResponse ctype defs ++ comment
+
+-- =============================================================================
+-- Tests
+-- =============================================================================
+
+export
+testArgTypes_vote : List String
+testArgTypes_vote =
+  let did = "service : {\n  voteIpFork: (nat, text, bool) -> (text);\n}"
+      ms = parseDidFile did
+  in case ms of
+       [m] => map show m.argTypes
+       _   => ["ERROR:" ++ show (length ms)]
+-- expected: ["nat", "text", "bool"]
+
+export
+testArgTypes_noArgs : List String
+testArgTypes_noArgs =
+  let did = "service : {\n  listActive: () -> (text) query;\n}"
+      ms = parseDidFile did
+  in case ms of
+       [m] => map show m.argTypes
+       _   => ["ERROR:" ++ show (length ms)]
+-- expected: []
+
+export
+testArgTypes_principal : List String
+testArgTypes_principal =
+  let did = "service : {\n  register: (nat, principal) -> (text);\n}"
+      ms = parseDidFile did
+  in case ms of
+       [m] => map show m.argTypes
+       _   => ["ERROR:" ++ show (length ms)]
+-- expected: ["nat", "principal"]
+
+export
+testSleb128Minus100 : List String
+testSleb128Minus100 = sleb128Signed (-100)
+-- expected: ["0x9c", "0x7f"]
