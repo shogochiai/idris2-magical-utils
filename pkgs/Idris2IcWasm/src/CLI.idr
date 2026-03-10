@@ -3,9 +3,12 @@ module CLI
 
 import System
 import System.Directory
+import System.File
 import Data.String
 import Data.List
 import WasmBuilder.WasmBuilder
+import WasmBuilder.CandidStubs
+import WasmBuilder.CanisterEntryGen
 
 %default covering
 
@@ -65,9 +68,13 @@ usage : String
 usage = """
 idris2-icwasm - Build Idris2 to ICP canister WASM
 
-Usage: idris2-icwasm build [OPTIONS]
+Usage: idris2-icwasm <command> [OPTIONS]
 
-Options:
+Commands:
+  build       Compile Idris2 to IC WASM canister
+  gen-entry   Generate canister_entry.c from a .did file
+
+Build Options:
   --canister=NAME   Canister name (default: canister)
   --main=PATH       Main module path (default: src/Main.idr)
   --project=DIR     Project directory (default: .)
@@ -75,8 +82,16 @@ Options:
   -p=PKG            Short for --package
   --help, -h        Show this help
 
+Gen-entry Options:
+  --did=PATH        Path to .did file (required)
+  --prefix=NAME     FFI prefix, e.g. "theworld" (required)
+  --lib=NAME        Library name, e.g. "libic0" (informational)
+  --init=FUNC       Init function name called in canister_init (optional)
+  --out=PATH        Output C file path (default: canister_entry_gen.c)
+
 Example:
   idris2-icwasm build --canister=my_canister --main=src/Main.idr
+  idris2-icwasm gen-entry --did=can.did --prefix=theworld --lib=libic0 --out=build/canister_entry_gen.c
 """
 
 ||| Resolve project directory to absolute path
@@ -88,6 +103,83 @@ resolveProjectDir dir = do
         | Nothing => pure "."
       pure cwd
     else pure dir
+
+-- =============================================================================
+-- gen-entry options
+-- =============================================================================
+
+record GenEntryOptions where
+  constructor MkGenEntryOptions
+  didPath    : String
+  ffiPfx     : String
+  libName    : String
+  initFn     : String
+  outPath    : String
+  cmdMapPath : String  -- "" = auto-number from 0
+
+defaultGenEntryOptions : GenEntryOptions
+defaultGenEntryOptions = MkGenEntryOptions
+  { didPath    = ""
+  , ffiPfx     = ""
+  , libName    = ""
+  , initFn     = ""
+  , outPath    = "canister_entry_gen.c"
+  , cmdMapPath = ""
+  }
+
+parseGenEntryArgs : List String -> GenEntryOptions
+parseGenEntryArgs args = go defaultGenEntryOptions args
+  where
+    go : GenEntryOptions -> List String -> GenEntryOptions
+    go opts [] = opts
+    go opts (arg :: rest) =
+      case parseKeyValue arg of
+        Just ("--did",     val) => go ({ didPath    := val } opts) rest
+        Just ("--prefix",  val) => go ({ ffiPfx     := val } opts) rest
+        Just ("--lib",     val) => go ({ libName    := val } opts) rest
+        Just ("--init",    val) => go ({ initFn     := val } opts) rest
+        Just ("--out",     val) => go ({ outPath    := val } opts) rest
+        Just ("--cmd-map", val) => go ({ cmdMapPath := val } opts) rest
+        _                       => go opts rest
+
+runGenEntry : List String -> IO ()
+runGenEntry args = do
+  let opts = parseGenEntryArgs args
+  when (opts.didPath == "") $ do
+    putStrLn "Error: --did=<path> is required"
+    exitFailure
+  when (opts.ffiPfx == "") $ do
+    putStrLn "Error: --prefix=<name> is required"
+    exitFailure
+  -- Read .did file
+  Right didContent <- readFile opts.didPath
+    | Left err => do
+        putStrLn $ "Error reading " ++ opts.didPath ++ ": " ++ show err
+        exitFailure
+  -- Read optional cmd-map file
+  cmdMap <- if opts.cmdMapPath == ""
+              then pure []
+              else do
+                Right content <- readFile opts.cmdMapPath
+                  | Left err => do
+                      putStrLn $ "Error reading " ++ opts.cmdMapPath ++ ": " ++ show err
+                      exitFailure
+                pure (parseCmdMap content)
+  let methods = parseDidFile didContent
+      defs    = parseTypeDefinitions didContent
+      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn
+      output  = generateCanisterEntry genOpts methods defs cmdMap
+  -- Write output file
+  Right () <- writeFile opts.outPath output
+    | Left err => do
+        putStrLn $ "Error writing " ++ opts.outPath ++ ": " ++ show err
+        exitFailure
+  putStrLn $ "Generated " ++ opts.outPath ++
+             " (" ++ show (length methods) ++ " methods)"
+
+-- =============================================================================
+-- Main
+-- =============================================================================
 
 main : IO ()
 main = do
@@ -113,8 +205,9 @@ main = do
           case result of
             BuildSuccess _ => exitSuccess
             BuildError _ => exitFailure
+    ("gen-entry" :: rest) => runGenEntry rest
     ("--help" :: _) => putStrLn usage
     ("-h" :: _) => putStrLn usage
     _ => do
-      putStrLn "Unknown command. Use 'idris2-icwasm build' or 'idris2-icwasm --help'"
+      putStrLn "Unknown command. Use 'idris2-icwasm build', 'idris2-icwasm gen-entry', or 'idris2-icwasm --help'"
       exitFailure
