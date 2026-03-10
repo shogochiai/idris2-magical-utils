@@ -236,6 +236,7 @@ generateFuncEntry modulePrefix ef didMethods typeDefs =
        , "__attribute__((export_name(\"canister_" ++ queryOrUpdate ++ " " ++ ef.name ++ "\")))"
        , "void canister_" ++ queryOrUpdate ++ "_" ++ ef.name ++ "(void) {"
        , "    debug_log(\"" ++ ef.name ++ " called\");"
+       , "    ic_arg_load();  // Load IC message args into buffer for CandidDecoder.readArgs"
        , "    ensure_idris2_init();"
        , funcCallCode
        , "    " ++ replyCode
@@ -300,6 +301,9 @@ generateCanisterEntryC modulePrefix exports didMethods typeDefs =
       , "extern void ic0_debug_print(int32_t src, int32_t size);"
       , "extern void ic0_trap(int32_t src, int32_t size);"
       , "extern int64_t ic0_stable64_grow(int64_t new_pages);"
+      , ""
+      , "/* IC FFI Bridge (ic_ffi_bridge.c) */"
+      , "extern void ic_arg_load(void);  /* Load IC message args into buffer for CandidDecoder */"
       , ""
       , "/* Idris2 RefC Runtime - Value types */"
       , "#define CONSTRUCTOR_TAG 17"
