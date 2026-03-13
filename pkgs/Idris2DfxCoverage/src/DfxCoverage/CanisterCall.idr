@@ -239,6 +239,14 @@ stopReplica opts = do
   _ <- system cmd
   pure ()
 
+||| Strip projectDir prefix from a path so it becomes relative to projectDir
+stripPrefix : String -> String -> String
+stripPrefix dir path =
+  let pfx = dir ++ "/"
+  in if isPrefixOf pfx path
+       then substr (length pfx) (length path) path
+       else path
+
 ||| Install WASM to canister directly (skips dfx build which validates .did)
 public export
 installWasm : DeployOptions -> String -> IO DeployResult
@@ -250,9 +258,12 @@ installWasm opts wasmPath = do
   _ <- system createCmd
 
   -- Install WASM directly
-  let cmd = "cd " ++ opts.projectDir ++ " && " ++
+  -- wasmPath is relative to invocation cwd (e.g. "pkgs/X/build/foo.wasm")
+  -- but we cd into projectDir, so strip that prefix to avoid double-nesting
+  let localWasm = stripPrefix opts.projectDir wasmPath
+      cmd = "cd " ++ opts.projectDir ++ " && " ++
             opts.dfxPath ++ " canister install " ++ opts.canisterName ++
-            " --wasm " ++ wasmPath ++
+            " --wasm " ++ localWasm ++
             " --mode reinstall -y" ++
             " --network " ++ opts.network ++ " 2>&1"
   putStrLn $ "    Deploying: " ++ opts.canisterName
