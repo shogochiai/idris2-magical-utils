@@ -43,11 +43,6 @@ type = "local"
 path = "pkgs/Idris2Subcontract"
 ipkg = "idris2-subcontract.ipkg"
 
-[custom.all.idris2-icwasm-sqlite]
-type = "local"
-path = "pkgs/Idris2IcWasmSQLite"
-ipkg = "idris2-icwasm-sqlite.ipkg"
-
 [custom.all.idris2-bitcoin-script]
 type = "local"
 path = "pkgs/Idris2BitcoinScript"
