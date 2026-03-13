@@ -531,8 +531,9 @@ compileToRefC opts buildDir = do
             then ipkgDir ++ "/build"
             else opts'.projectDir ++ "/build"
 
+      -- Use pack (not bare idris2) so pack.toml dependencies are resolved
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
-                "idris2 --codegen refc --build " ++ ipkg
+                "pack --cg refc build " ++ ipkg
 
       -- RefC generates C file then tries native compile (which fails without GMP)
       -- We ignore the exit code and just check if C file was generated

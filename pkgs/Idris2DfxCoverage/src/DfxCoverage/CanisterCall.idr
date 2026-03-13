@@ -196,8 +196,8 @@ defaultDeployOptions = MkDeployOptions
 export
 findTestModulePath : String -> IO (Maybe String)
 findTestModulePath projectDir = do
-  -- Use find command to search for Tests/AllTests.idr
-  let cmd = "find " ++ projectDir ++ "/src -name 'AllTests.idr' -path '*/Tests/*' 2>/dev/null | head -1"
+  -- Prefer src/Tests/AllTests.idr (root-level); fall back to find in subdirectories
+  let cmd = "if [ -f " ++ projectDir ++ "/src/Tests/AllTests.idr ]; then echo " ++ projectDir ++ "/src/Tests/AllTests.idr; else find " ++ projectDir ++ "/src -name 'AllTests.idr' -path '*/Tests/*' 2>/dev/null | head -1; fi"
   (exitCode, stdout, _) <- executeCommand cmd
   let result = trim stdout
   if result == ""
