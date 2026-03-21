@@ -20,13 +20,30 @@ import WasmBuilder.CandidStubs
 -- Generation Options
 -- =============================================================================
 
+||| Injection annotation: inject ic0_time or a constant into an arg slot
+public export
+data Injection
+  = InjectTime Nat             -- @inject_time=N: set arg N to ic0_time()/1e9
+  | InjectConst Nat Integer    -- @inject_const=N:V: set arg N to constant V
+  | InjectTimePlus Nat Integer -- @inject_time_plus=N:V: set arg N to now+V
+
+||| Parsed cmd-map entry with annotations
+public export
+record CmdMapEntry where
+  constructor MkCmdMapEntry
+  cmdId      : Nat
+  injections : List Injection
+  resultFn   : Maybe String    -- @result_fn=funcName: custom result function
+
 ||| Options controlling code generation
 public export
 record GenOptions where
   constructor MkGenOptions
-  ffiPrefix : String  -- e.g. "theworld" for theworld_reset_ffi, theworld_c_set_arg_i32 etc.
-  libName   : String  -- e.g. "libic0" (informational; used in comments)
-  initFn    : String  -- function called inside canister_init after stable grow, "" = none
+  ffiPrefix           : String     -- e.g. "theworld" for theworld_reset_ffi, theworld_c_set_arg_i32 etc.
+  libName             : String     -- e.g. "libic0" (informational; used in comments)
+  initFn              : String     -- function called inside canister_init after stable grow, "" = none
+  heartbeatCmd        : Maybe Nat  -- CMD id for canister_heartbeat, Nothing = no heartbeat
+  heartbeatCheckpoint : Maybe Nat  -- sqlite_stable_save every N heartbeats, Nothing = no checkpoint
 
 -- =============================================================================
 -- CMD_ID Assignment
@@ -41,26 +58,68 @@ assignCmdIds methods = zip methods (go 0 methods)
     go _ []      = []
     go n (_ :: rest) = n :: go (n + 1) rest
 
-||| Parse a cmd-map file: lines of "methodName=N" or "# comment"
-||| Returns list of (methodName, cmdId) pairs
+||| Parse annotation tokens from cmd-map line remainder
+||| e.g. "@inject_time=2 @inject_const=3:900 @result_fn=ic_str_c_get"
+parseAnnotations : List String -> (List Injection, Maybe String)
+parseAnnotations [] = ([], Nothing)
+parseAnnotations (tok :: rest) =
+  let (injs, rfn) = parseAnnotations rest
+  in if isPrefixOf "@inject_time=" tok
+       then case parsePositive {a=Nat} (substr 13 (length tok) tok) of
+              Just n  => (InjectTime n :: injs, rfn)
+              Nothing => (injs, rfn)
+     else if isPrefixOf "@inject_const=" tok
+       then let val = substr 14 (length tok) tok
+            in case break (== ':') (unpack val) of
+                 (nPart, ':' :: vPart) =>
+                   case (parsePositive {a=Nat} (pack nPart), parseInteger {a=Integer} (pack vPart)) of
+                     (Just n, Just v) => (InjectConst n v :: injs, rfn)
+                     _                => (injs, rfn)
+                 _ => (injs, rfn)
+     else if isPrefixOf "@inject_time_plus=" tok
+       then let val = substr 18 (length tok) tok
+            in case break (== ':') (unpack val) of
+                 (nPart, ':' :: vPart) =>
+                   case (parsePositive {a=Nat} (pack nPart), parseInteger {a=Integer} (pack vPart)) of
+                     (Just n, Just v) => (InjectTimePlus n v :: injs, rfn)
+                     _                => (injs, rfn)
+                 _ => (injs, rfn)
+     else if isPrefixOf "@result_fn=" tok
+       then (injs, Just (substr 11 (length tok) tok))
+     else (injs, rfn)
+
+||| Parse a cmd-map file: lines of "methodName=N [@annotation...]" or "# comment"
+||| Returns list of (methodName, CmdMapEntry) pairs
 export
-parseCmdMap : String -> List (String, Nat)
-parseCmdMap content =
+parseCmdMapEntries : String -> List (String, CmdMapEntry)
+parseCmdMapEntries content =
   mapMaybe parseLine (lines content)
   where
-    parseLine : String -> Maybe (String, Nat)
+    parseLine : String -> Maybe (String, CmdMapEntry)
     parseLine l =
       let t = trim l
       in if null t || isPrefixOf "#" t
            then Nothing
-           else case break (== '=') (unpack t) of
-                  (namePart, '=' :: rest) =>
-                    let methodName = trim (pack namePart)
-                        numStr     = trim (pack rest)
-                    in case parseInteger {a=Integer} numStr of
-                         Just n  => if n >= 0 then Just (methodName, cast n) else Nothing
-                         Nothing => Nothing
-                  _ => Nothing
+           else let tokens = words t
+                in case tokens of
+                     [] => Nothing
+                     (first :: annots) =>
+                       case break (== '=') (unpack first) of
+                         (namePart, '=' :: rest) =>
+                           let methodName = trim (pack namePart)
+                               numStr     = trim (pack rest)
+                           in case parseInteger {a=Integer} numStr of
+                                Just n  => if n >= 0
+                                  then let (injs, rfn) = parseAnnotations annots
+                                       in Just (methodName, MkCmdMapEntry (cast n) injs rfn)
+                                  else Nothing
+                                Nothing => Nothing
+                         _ => Nothing
+
+||| Backward-compatible: parse cmd-map returning simple (String, Nat) pairs
+export
+parseCmdMap : String -> List (String, Nat)
+parseCmdMap content = map (\(n, e) => (n, e.cmdId)) (parseCmdMapEntries content)
 
 ||| Assign CMD IDs using an explicit map, falling back to auto-numbering
 ||| for methods not in the map (starting after the max mapped ID).
@@ -96,80 +155,141 @@ cmdMacroName : String -> String
 cmdMacroName name = "CMD_" ++ toCmdMacro name
 
 -- =============================================================================
--- Argument Decode Code Generation
+-- Argument Decode Code Generation (N-ary Generic)
 -- =============================================================================
 
-||| Generate C code to decode Candid arguments.
+||| Generate C code to decode a single Candid argument at given index.
+||| Returns (decode_code, set_arg_code)
+||| argIdx: 0-based position in Candid args, ffiIdx: 1-based FFI arg slot
+genSingleArgDecode : String -> Nat -> Nat -> CandidType -> (String, String)
+genSingleArgDecode pfx argIdx ffiIdx CTNat =
+  ( "    uint64_t a" ++ show argIdx ++ " = parse_leb128(offset, &new_offset); offset = new_offset;\n"
+  , "    " ++ pfx ++ "_c_set_arg_i32(" ++ show ffiIdx ++ ", (int32_t)a" ++ show argIdx ++ ");\n"
+  )
+genSingleArgDecode pfx argIdx ffiIdx CTNat64 =
+  ( "    uint64_t a" ++ show argIdx ++ " = parse_leb128(offset, &new_offset); offset = new_offset;\n"
+  , "    " ++ pfx ++ "_c_set_arg_i32(" ++ show ffiIdx ++ ", (int32_t)a" ++ show argIdx ++ ");\n"
+  )
+genSingleArgDecode pfx argIdx ffiIdx CTText =
+  ( "    { uint64_t tlen" ++ show argIdx ++ " = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
+    "      if (tlen" ++ show argIdx ++ " >= sizeof(text_arg_buf)) tlen" ++ show argIdx ++ " = sizeof(text_arg_buf)-1;\n" ++
+    "      for (uint64_t i=0; i<tlen" ++ show argIdx ++ " && offset<arg_buf_size; i++) text_arg_buf[i]=(char)arg_buf[offset++];\n" ++
+    "      text_arg_buf[tlen" ++ show argIdx ++ "] = '\\0'; text_arg_len = (int32_t)tlen" ++ show argIdx ++ "; }\n"
+  , "    " ++ pfx ++ "_c_set_arg_str(" ++ show ffiIdx ++ ", text_arg_buf);\n"
+  )
+genSingleArgDecode pfx argIdx ffiIdx CTBool =
+  ( "    uint64_t a" ++ show argIdx ++ " = (uint64_t)arg_buf[offset++];\n"
+  , "    " ++ pfx ++ "_c_set_arg_i32(" ++ show ffiIdx ++ ", (int32_t)a" ++ show argIdx ++ ");\n"
+  )
+genSingleArgDecode pfx argIdx ffiIdx CTPrincipal =
+  -- Principal decoded as text (hex representation handled by Idris2 side)
+  genSingleArgDecode pfx argIdx ffiIdx CTText
+genSingleArgDecode pfx argIdx ffiIdx (CTOpt _) =
+  -- Opt: pass as text for Idris2 to decode
+  genSingleArgDecode pfx argIdx ffiIdx CTText
+genSingleArgDecode pfx argIdx ffiIdx _ =
+  -- Fallback for complex types: pass as text
+  genSingleArgDecode pfx argIdx ffiIdx CTText
+
+||| Generate C code to decode N-ary Candid arguments.
 ||| Returns (setup_code, set_arg_code_for_idris)
 genArgDecodeCode : String -> List CandidType -> (String, String)
 genArgDecodeCode _ [] = ("", "")
-genArgDecodeCode pfx [CTNat] =
-  ( "    uint64_t a0 = parse_candid_nat_arg();\n"
-  , "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)a0);\n"
-  )
-genArgDecodeCode pfx [CTNat64] =
-  ( "    uint64_t a0 = parse_candid_nat_arg();\n"
-  , "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)a0);\n"
-  )
-genArgDecodeCode pfx [CTText] =
-  ( "    parse_candid_text_arg();\n"
-  , "    " ++ pfx ++ "_c_set_arg_str(1, text_arg_buf);\n"
-  )
-genArgDecodeCode pfx [CTBool] =
-  ( "    uint64_t a0 = parse_candid_bool_arg();\n"
-  , "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)a0);\n"
-  )
-genArgDecodeCode pfx [CTPrincipal] =
-  ( "    parse_candid_text_arg(); /* principal as text */\n"
-  , "    " ++ pfx ++ "_c_set_arg_str(1, text_arg_buf);\n"
-  )
-genArgDecodeCode pfx [CTNat, CTText] =
-  ( "    uint64_t a0 = parse_candid_nat_text_args();\n"
-  , "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)a0);\n" ++
-    "    " ++ pfx ++ "_c_set_arg_str(2, text_arg_buf);\n"
-  )
-genArgDecodeCode pfx [CTText, CTNat] =
-  ( "    parse_candid_text_nat_args();\n"
-  , "    " ++ pfx ++ "_c_set_arg_str(1, text_arg_buf);\n" ++
-    "    " ++ pfx ++ "_c_set_arg_i32(2, (int32_t)text_nat_arg);\n"
-  )
-genArgDecodeCode pfx _ =
-  ( "    parse_candid_text_arg(); /* TODO: complex args */\n"
-  , "    " ++ pfx ++ "_c_set_arg_str(1, text_arg_buf);\n"
-  )
+genArgDecodeCode pfx argTypes =
+  let n = length argTypes
+      header =
+        "    load_candid_args();\n" ++
+        "    if (arg_buf_size < 7) goto arg_done;\n" ++
+        "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') goto arg_done;\n" ++
+        "    { int32_t offset=4, new_offset;\n" ++
+        "    uint64_t type_count = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
+        "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
+        "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
+        "    if (arg_count < " ++ show n ++ ") goto arg_done_inner;\n" ++
+        "    offset += " ++ show n ++ "; /* skip type codes */\n"
+      -- Generate decode + set-arg for each argument
+      go : Nat -> List CandidType -> (String, String)
+      go _ [] = ("", "")
+      go idx (t :: ts) =
+        let ffiIdx   = idx + 1  -- FFI slots are 1-based (slot 0 = CMD)
+            pair1 = genSingleArgDecode pfx idx ffiIdx t
+            pair2 = go (idx + 1) ts
+        in (fst pair1 ++ fst pair2, snd pair1 ++ snd pair2)
+      pair = go 0 argTypes
+      decodes = fst pair
+      setArgs = snd pair
+      footer = "    arg_done_inner: ; }\n    arg_done: ;\n"
+  in (header ++ decodes ++ footer, setArgs)
 
 -- =============================================================================
 -- Reply Code Generation
 -- =============================================================================
 
 ||| Generate C reply code for a given Candid return type
-genReplyCode : String -> CandidType -> String
-genReplyCode pfx CTText    = "    reply_candid_text(" ++ pfx ++ "_c_get_result_str());\n"
-genReplyCode pfx CTNat     = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_u64());\n"
-genReplyCode pfx CTNat64   = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_u64());\n"
-genReplyCode pfx CTBool    = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_i32());\n"
-genReplyCode _   CTNull    = "    reply_empty();\n"
-genReplyCode pfx _         = "    reply_candid_text(" ++ pfx ++ "_c_get_result_str());\n"
+genReplyCode : String -> Maybe String -> CandidType -> String
+genReplyCode pfx Nothing  CTText    = "    reply_candid_text(" ++ pfx ++ "_c_get_result_str());\n"
+genReplyCode _   (Just fn) CTText   = "    reply_candid_text(" ++ fn ++ "());\n"
+genReplyCode pfx _        CTNat     = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_u64());\n"
+genReplyCode pfx _        CTNat64   = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_u64());\n"
+genReplyCode pfx _        CTBool    = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_i32());\n"
+genReplyCode _   _        CTNull    = "    reply_empty();\n"
+genReplyCode pfx Nothing  _         = "    reply_candid_text(" ++ pfx ++ "_c_get_result_str());\n"
+genReplyCode _   (Just fn) _        = "    reply_candid_text(" ++ fn ++ "());\n"
+
+-- =============================================================================
+-- Injection Code Generation
+-- =============================================================================
+
+||| Generate C code for injecting ic0_time or constants
+genInjectionCode : String -> List Injection -> String
+genInjectionCode _ [] = ""
+genInjectionCode pfx injs =
+  let needsTime = any isTimeInj injs
+      timeDecl  = if needsTime
+                    then "    uint64_t _now = ic0_time() / 1000000000ULL;\n"
+                    else ""
+      injCode   = concatMap (genOneInj pfx) injs
+  in timeDecl ++ injCode
+  where
+    isTimeInj : Injection -> Bool
+    isTimeInj (InjectTime _)     = True
+    isTimeInj (InjectTimePlus _ _) = True
+    isTimeInj _ = False
+
+    genOneInj : String -> Injection -> String
+    genOneInj p (InjectTime n) =
+      "    " ++ p ++ "_c_set_arg_i32(" ++ show n ++ ", (int32_t)_now);\n"
+    genOneInj p (InjectConst n v) =
+      "    " ++ p ++ "_c_set_arg_i32(" ++ show n ++ ", " ++ show v ++ ");\n"
+    genOneInj p (InjectTimePlus n v) =
+      "    " ++ p ++ "_c_set_arg_i32(" ++ show n ++ ", (int32_t)(_now + " ++ show v ++ "));\n"
 
 -- =============================================================================
 -- Method Entry Function Generation
 -- =============================================================================
 
 ||| Generate one canister_query_* or canister_update_* function
-genMethodEntry : GenOptions -> (DidMethod, Nat) -> String
-genMethodEntry opts pair =
+genMethodEntryWithAnnotations : GenOptions -> List (String, CmdMapEntry) -> (DidMethod, Nat) -> String
+genMethodEntryWithAnnotations opts cmdMapEntries pair =
   let (method, cmdId) = pair
       _ = cmdId in
   let pfx        = opts.ffiPrefix
       kind       = if method.isQuery then "query" else "update"
       funcName   = "canister_" ++ kind ++ "_" ++ method.name
       exportName = "canister_" ++ kind ++ " " ++ method.name
-      (setupCode, setArgCode) = genArgDecodeCode pfx method.argTypes
-      replyCode  = genReplyCode pfx method.returnType
+      entry      = lookup method.name cmdMapEntries
+      injections = maybe [] (.injections) entry
+      resultFn   = entry >>= (.resultFn)
+      argDecPair = genArgDecodeCode pfx method.argTypes
+      setupCode  = fst argDecPair
+      setArgCode = snd argDecPair
+      replyCode  = genReplyCode pfx resultFn method.returnType
+      injCode    = genInjectionCode pfx injections
       callCode   =
         "    " ++ pfx ++ "_reset_ffi();\n" ++
         "    " ++ pfx ++ "_c_set_arg_i32(0, " ++ cmdMacroName method.name ++ ");\n" ++
         (if null method.argTypes then "" else setArgCode) ++
+        injCode ++
         "    void* closure = __mainExpression_0();\n" ++
         "    idris2_trampoline(closure);\n"
   in "__attribute__((used, visibility(\"default\"), export_name(\"" ++ exportName ++ "\")))\n" ++
@@ -179,6 +299,10 @@ genMethodEntry opts pair =
      callCode ++
      replyCode ++
      "}\n\n"
+
+||| Backward-compatible entry generation (no annotations)
+genMethodEntry : GenOptions -> (DidMethod, Nat) -> String
+genMethodEntry opts = genMethodEntryWithAnnotations opts []
 
 -- =============================================================================
 -- CMD_ID Defines
@@ -192,13 +316,52 @@ genCmdDefines pairs =
     genLine (m, n) = "#define " ++ cmdMacroName m.name ++ " " ++ show n
 
 -- =============================================================================
+-- Heartbeat Generation
+-- =============================================================================
+
+||| Generate canister_heartbeat function
+genHeartbeat : GenOptions -> String
+genHeartbeat opts =
+  case opts.heartbeatCmd of
+    Nothing => ""
+    Just cmd =>
+      let pfx = opts.ffiPrefix
+          checkpointCode = case opts.heartbeatCheckpoint of
+            Nothing => ""
+            Just interval =>
+              "    /* stable memory checkpoint every " ++ show interval ++ " heartbeats */\n" ++
+              "    if (++_hb_count % " ++ show interval ++ " == 0) {\n" ++
+              "        sqlite_stable_save(1, _now);\n" ++
+              "    }\n"
+          counterDecl = case opts.heartbeatCheckpoint of
+            Nothing => ""
+            Just _  => "    static uint32_t _hb_count = 0;\n"
+      in "\n/* =============================================================================\n" ++
+         " * Heartbeat\n" ++
+         " * ============================================================================= */\n\n" ++
+         "__attribute__((used, visibility(\"default\"), export_name(\"canister_heartbeat\")))\n" ++
+         "void canister_heartbeat(void) {\n" ++
+         counterDecl ++
+         "    " ++ pfx ++ "_reset_ffi();\n" ++
+         "    " ++ pfx ++ "_c_set_arg_i32(0, " ++ show cmd ++ ");\n" ++
+         "    uint64_t _now = ic0_time() / 1000000000ULL;\n" ++
+         "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)_now);\n" ++
+         "    void* closure = __mainExpression_0();\n" ++
+         "    idris2_trampoline(closure);\n" ++
+         checkpointCode ++
+         "}\n\n"
+
+-- =============================================================================
 -- Fixed Header
 -- =============================================================================
 
 ||| Fixed C header: IC0 externs, Idris2 forward decls, FFI bridge, Candid parsers, reply helpers, lifecycle
-fixedHeader : GenOptions -> String
-fixedHeader opts =
+fixedHeader : GenOptions -> List (String, CmdMapEntry) -> String
+fixedHeader opts cmdMapEntries =
   let pfx = opts.ffiPrefix
+      -- Collect all unique custom result functions from annotations
+      customFns = nub $ mapMaybe (\(_, e) => e.resultFn) cmdMapEntries
+      customFnDecls = concatMap (\fn => "extern const char* " ++ fn ++ "(void);\n") customFns
   in
     "/*\n" ++
     " * Canister Entry Points - AUTO-GENERATED from can.did\n" ++
@@ -244,6 +407,7 @@ fixedHeader opts =
     "extern uint64_t " ++ pfx ++ "_c_get_result_u64(void);\n" ++
     "extern const char* " ++ pfx ++ "_c_get_result_str(void);\n" ++
     "extern void " ++ pfx ++ "_reset_ffi(void);\n" ++
+    (if null customFns then "" else "\n/* Custom result functions */\n" ++ customFnDecls) ++
     "\n" ++
     "/* Forward declarations from SQLite persistence */\n" ++
     "extern int sqlite_stable_save(uint32_t schema_version, uint64_t timestamp);\n" ++
@@ -275,88 +439,8 @@ fixedHeader opts =
     "    return result;\n" ++
     "}\n" ++
     "\n" ++
-    "static uint64_t parse_candid_nat_arg(void) {\n" ++
-    "    load_candid_args();\n" ++
-    "    if (arg_buf_size < 7) return 0;\n" ++
-    "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') return 0;\n" ++
-    "    int32_t offset=4, new_offset;\n" ++
-    "    uint64_t type_count = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
-    "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
-    "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (arg_count < 1) return 0;\n" ++
-    "    offset++; /* skip type code */\n" ++
-    "    return parse_leb128(offset, &new_offset);\n" ++
-    "}\n" ++
-    "\n" ++
     "static char text_arg_buf[4096];\n" ++
     "static int32_t text_arg_len = 0;\n" ++
-    "\n" ++
-    "static int32_t parse_candid_text_arg(void) {\n" ++
-    "    load_candid_args(); text_arg_len = 0;\n" ++
-    "    if (arg_buf_size < 7) return 0;\n" ++
-    "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') return 0;\n" ++
-    "    int32_t offset=4, new_offset;\n" ++
-    "    uint64_t type_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
-    "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (arg_count < 1) return 0;\n" ++
-    "    offset++; /* skip type code (0x71=text) */\n" ++
-    "    uint64_t text_len = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (text_len >= sizeof(text_arg_buf)) text_len = sizeof(text_arg_buf)-1;\n" ++
-    "    for (uint64_t i=0; i<text_len && offset<arg_buf_size; i++) text_arg_buf[i]=(char)arg_buf[offset++];\n" ++
-    "    text_arg_buf[text_len] = '\\0'; text_arg_len = (int32_t)text_len;\n" ++
-    "    return text_arg_len;\n" ++
-    "}\n" ++
-    "\n" ++
-    "static uint64_t parse_candid_bool_arg(void) {\n" ++
-    "    load_candid_args();\n" ++
-    "    if (arg_buf_size < 7) return 0;\n" ++
-    "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') return 0;\n" ++
-    "    int32_t offset=4, new_offset;\n" ++
-    "    uint64_t type_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
-    "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (arg_count < 1) return 0;\n" ++
-    "    offset++; /* skip type code (0x7e=bool) */\n" ++
-    "    return (uint64_t)arg_buf[offset];\n" ++
-    "}\n" ++
-    "\n" ++
-    "static uint64_t text_nat_arg = 0;\n" ++
-    "\n" ++
-    "static uint64_t parse_candid_nat_text_args(void) {\n" ++
-    "    load_candid_args(); text_arg_len = 0;\n" ++
-    "    if (arg_buf_size < 7) return 0xFFFFFFFF;\n" ++
-    "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') return 0xFFFFFFFF;\n" ++
-    "    int32_t offset=4, new_offset;\n" ++
-    "    uint64_t type_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
-    "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (arg_count < 2) return 0xFFFFFFFF;\n" ++
-    "    offset += 2; /* skip type codes */\n" ++
-    "    uint64_t nat_value = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    uint64_t text_len = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (text_len >= sizeof(text_arg_buf)) text_len = sizeof(text_arg_buf)-1;\n" ++
-    "    for (uint64_t i=0; i<text_len && offset<arg_buf_size; i++) text_arg_buf[i]=(char)arg_buf[offset++];\n" ++
-    "    text_arg_buf[text_len] = '\\0'; text_arg_len = (int32_t)text_len;\n" ++
-    "    return nat_value;\n" ++
-    "}\n" ++
-    "\n" ++
-    "static void parse_candid_text_nat_args(void) {\n" ++
-    "    load_candid_args(); text_arg_len = 0; text_nat_arg = 0;\n" ++
-    "    if (arg_buf_size < 7) return;\n" ++
-    "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') return;\n" ++
-    "    int32_t offset=4, new_offset;\n" ++
-    "    uint64_t type_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
-    "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (arg_count < 2) return;\n" ++
-    "    offset += 2; /* skip type codes */\n" ++
-    "    uint64_t text_len = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-    "    if (text_len >= sizeof(text_arg_buf)) text_len = sizeof(text_arg_buf)-1;\n" ++
-    "    for (uint64_t i=0; i<text_len && offset<arg_buf_size; i++) text_arg_buf[i]=(char)arg_buf[offset++];\n" ++
-    "    text_arg_buf[text_len] = '\\0'; text_arg_len = (int32_t)text_len;\n" ++
-    "    text_nat_arg = parse_leb128(offset, &new_offset);\n" ++
-    "}\n" ++
     "\n" ++
     "/* =============================================================================\n" ++
     " * Helper Functions\n" ++
@@ -444,7 +528,23 @@ generateCanisterEntry opts methods defs cmdMap =
       pairs   = if null cmdMap
                   then assignCmdIds methods
                   else assignCmdIdsWithMap methods cmdMap
-      header  = fixedHeader opts
+      header  = fixedHeader opts []
       defines = "/* CMD_ID mapping (must match Main.idr case cmd of) */\n" ++ genCmdDefines pairs
       entries = concatMap (genMethodEntry opts) pairs
-  in header ++ defines ++ entries
+      heartbeat = genHeartbeat opts
+  in header ++ defines ++ entries ++ heartbeat
+
+||| Generate canister_entry.c with full annotation support (cmd-map entries)
+export
+generateCanisterEntryFull : GenOptions -> List DidMethod -> List TypeDef -> List (String, CmdMapEntry) -> String
+generateCanisterEntryFull opts methods defs cmdMapEntries =
+  let _ = defs
+      cmdMap  = map (\(n, e) => (n, e.cmdId)) cmdMapEntries
+      pairs   = if null cmdMap
+                  then assignCmdIds methods
+                  else assignCmdIdsWithMap methods cmdMap
+      header  = fixedHeader opts cmdMapEntries
+      defines = "/* CMD_ID mapping (must match Main.idr case cmd of) */\n" ++ genCmdDefines pairs
+      entries = concatMap (genMethodEntryWithAnnotations opts cmdMapEntries) pairs
+      heartbeat = genHeartbeat opts
+  in header ++ defines ++ entries ++ heartbeat

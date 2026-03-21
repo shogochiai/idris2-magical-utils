@@ -88,6 +88,13 @@ Gen-entry Options:
   --lib=NAME        Library name, e.g. "libic0" (informational)
   --init=FUNC       Init function name called in canister_init (optional)
   --out=PATH        Output C file path (default: canister_entry_gen.c)
+  --heartbeat-cmd=N Generate canister_heartbeat with CMD N (optional)
+
+Cmd-map Annotations:
+  methodName=N @inject_time=SLOT        Inject ic0_time()/1e9 into arg slot
+  methodName=N @inject_const=SLOT:VAL   Inject constant value into arg slot
+  methodName=N @inject_time_plus=S:V    Inject ic0_time()/1e9 + V into arg slot
+  methodName=N @result_fn=FUNC          Use custom result function for reply
 
 Example:
   idris2-icwasm build --canister=my_canister --main=src/Main.idr
@@ -110,21 +117,25 @@ resolveProjectDir dir = do
 
 record GenEntryOptions where
   constructor MkGenEntryOptions
-  didPath    : String
-  ffiPfx     : String
-  libName    : String
-  initFn     : String
-  outPath    : String
-  cmdMapPath : String  -- "" = auto-number from 0
+  didPath              : String
+  ffiPfx               : String
+  libName              : String
+  initFn               : String
+  outPath              : String
+  cmdMapPath           : String     -- "" = auto-number from 0
+  heartbeatCmd         : Maybe Nat  -- --heartbeat-cmd=N
+  heartbeatCheckpoint  : Maybe Nat  -- --heartbeat-checkpoint=N
 
 defaultGenEntryOptions : GenEntryOptions
 defaultGenEntryOptions = MkGenEntryOptions
-  { didPath    = ""
-  , ffiPfx     = ""
-  , libName    = ""
-  , initFn     = ""
-  , outPath    = "canister_entry_gen.c"
-  , cmdMapPath = ""
+  { didPath             = ""
+  , ffiPfx              = ""
+  , libName             = ""
+  , initFn              = ""
+  , outPath             = "canister_entry_gen.c"
+  , cmdMapPath          = ""
+  , heartbeatCmd        = Nothing
+  , heartbeatCheckpoint = Nothing
   }
 
 parseGenEntryArgs : List String -> GenEntryOptions
@@ -134,13 +145,15 @@ parseGenEntryArgs args = go defaultGenEntryOptions args
     go opts [] = opts
     go opts (arg :: rest) =
       case parseKeyValue arg of
-        Just ("--did",     val) => go ({ didPath    := val } opts) rest
-        Just ("--prefix",  val) => go ({ ffiPfx     := val } opts) rest
-        Just ("--lib",     val) => go ({ libName    := val } opts) rest
-        Just ("--init",    val) => go ({ initFn     := val } opts) rest
-        Just ("--out",     val) => go ({ outPath    := val } opts) rest
-        Just ("--cmd-map", val) => go ({ cmdMapPath := val } opts) rest
-        _                       => go opts rest
+        Just ("--did",           val) => go ({ didPath      := val } opts) rest
+        Just ("--prefix",        val) => go ({ ffiPfx       := val } opts) rest
+        Just ("--lib",           val) => go ({ libName      := val } opts) rest
+        Just ("--init",          val) => go ({ initFn       := val } opts) rest
+        Just ("--out",           val) => go ({ outPath      := val } opts) rest
+        Just ("--cmd-map",       val) => go ({ cmdMapPath   := val } opts) rest
+        Just ("--heartbeat-cmd", val) => go ({ heartbeatCmd := parsePositive val } opts) rest
+        Just ("--heartbeat-checkpoint", val) => go ({ heartbeatCheckpoint := parsePositive val } opts) rest
+        _                             => go opts rest
 
 runGenEntry : List String -> IO ()
 runGenEntry args = do
@@ -156,26 +169,27 @@ runGenEntry args = do
     | Left err => do
         putStrLn $ "Error reading " ++ opts.didPath ++ ": " ++ show err
         exitFailure
-  -- Read optional cmd-map file
-  cmdMap <- if opts.cmdMapPath == ""
-              then pure []
-              else do
-                Right content <- readFile opts.cmdMapPath
-                  | Left err => do
-                      putStrLn $ "Error reading " ++ opts.cmdMapPath ++ ": " ++ show err
-                      exitFailure
-                pure (parseCmdMap content)
+  -- Read optional cmd-map file (with annotation support)
+  cmdMapEntries <- if opts.cmdMapPath == ""
+                     then pure []
+                     else do
+                       Right content <- readFile opts.cmdMapPath
+                         | Left err => do
+                             putStrLn $ "Error reading " ++ opts.cmdMapPath ++ ": " ++ show err
+                             exitFailure
+                       pure (parseCmdMapEntries content)
   let methods = parseDidFile didContent
       defs    = parseTypeDefinitions didContent
-      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn
-      output  = generateCanisterEntry genOpts methods defs cmdMap
+      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint
+      output  = generateCanisterEntryFull genOpts methods defs cmdMapEntries
   -- Write output file
   Right () <- writeFile opts.outPath output
     | Left err => do
         putStrLn $ "Error writing " ++ opts.outPath ++ ": " ++ show err
         exitFailure
   putStrLn $ "Generated " ++ opts.outPath ++
-             " (" ++ show (length methods) ++ " methods)"
+             " (" ++ show (length methods) ++ " methods)" ++
+             maybe "" (\n => " [heartbeat CMD=" ++ show n ++ "]") opts.heartbeatCmd
 
 -- =============================================================================
 -- Main
