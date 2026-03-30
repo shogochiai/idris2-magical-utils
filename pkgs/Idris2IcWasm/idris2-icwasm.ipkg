@@ -8,6 +8,7 @@ sourcedir = "src"
 depends = base, contrib
 
 modules = IcWasm.SQLite
+        , IcWasm.StableStorage
         , WasmBuilder.CanisterEntryGen
         , WasmBuilder.WasmBuilder
         , WasmBuilder.CandidStubs

@@ -45,6 +45,7 @@ record GenOptions where
   heartbeatCmd        : Maybe Nat  -- CMD id for canister_heartbeat, Nothing = no heartbeat (DEPRECATED)
   heartbeatCheckpoint : Maybe Nat  -- sqlite_stable_save every N heartbeats, Nothing = no checkpoint (DEPRECATED)
   timerCmd            : Maybe Nat  -- CMD id for canister_global_timer, Nothing = no timer
+  sqlStable           : Bool       -- True = emit sqlite_stable_save in pre_upgrade, sqlite_stable_load in post_upgrade
 
 -- =============================================================================
 -- CMD_ID Assignment
@@ -437,11 +438,12 @@ fixedHeader opts cmdMapEntries =
     "extern void " ++ pfx ++ "_reset_ffi(void);\n" ++
     (if null customFns then "" else "\n/* Custom result functions */\n" ++ customFnDecls) ++
     "\n" ++
-    "/* Forward declarations from SQLite persistence */\n" ++
-    "extern int sqlite_stable_save(uint32_t schema_version, uint64_t timestamp);\n" ++
-    "extern int sqlite_stable_load(uint32_t* out_schema_version);\n" ++
-    "extern int sqlite_stable_has_snapshot(void);\n" ++
-    "\n" ++
+    (if opts.sqlStable
+       then "/* Forward declarations from SQLite persistence (auto-coupled: --sql-stable) */\n" ++
+            "extern int sqlite_stable_save(uint32_t schema_version, uint64_t timestamp);\n" ++
+            "extern int sqlite_stable_load(uint32_t* out_schema_version);\n" ++
+            "extern int sqlite_stable_has_snapshot(void);\n\n"
+       else "") ++
     "/* =============================================================================\n" ++
     " * Candid Argument Parsing\n" ++
     " * ============================================================================= */\n" ++
@@ -523,19 +525,23 @@ fixedHeader opts cmdMapEntries =
     "__attribute__((used, visibility(\"default\"), export_name(\"canister_pre_upgrade\")))\n" ++
     "void canister_pre_upgrade(void) {\n" ++
     "    debug(\"canister_pre_upgrade\");\n" ++
-    (if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "(); /* DB must be open for serialize */\n") ++
-    "    uint64_t timestamp = ic0_time();\n" ++
-    "    sqlite_stable_save(1, timestamp);\n" ++
+    (if opts.sqlStable
+       then (if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "(); /* DB must be open for serialize */\n") ++
+            "    uint64_t timestamp = ic0_time();\n" ++
+            "    sqlite_stable_save(1, timestamp);\n"
+       else "") ++
     "}\n" ++
     "\n" ++
     "__attribute__((used, visibility(\"default\"), export_name(\"canister_post_upgrade\")))\n" ++
     "void canister_post_upgrade(void) {\n" ++
     "    debug(\"canister_post_upgrade\");\n" ++
-    (if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "(); /* DB must be open before load */\n") ++
-    "    if (sqlite_stable_has_snapshot()) {\n" ++
-    "        uint32_t schema_version = 0;\n" ++
-    "        sqlite_stable_load(&schema_version);\n" ++
-    "    }\n" ++
+    (if opts.sqlStable
+       then (if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "(); /* DB must be open before load */\n") ++
+            "    if (sqlite_stable_has_snapshot()) {\n" ++
+            "        uint32_t schema_version = 0;\n" ++
+            "        sqlite_stable_load(&schema_version);\n" ++
+            "    }\n"
+       else (if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "();\n")) ++
     "    " ++ pfx ++ "_reset_ffi();\n" ++
     "    " ++ pfx ++ "_c_set_arg_i32(0, 0); /* CMD 0 = init */\n" ++
     "    void* closure = __mainExpression_0();\n" ++

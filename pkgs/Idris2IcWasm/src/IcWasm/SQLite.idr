@@ -3,19 +3,16 @@
 ||| FFI bindings for SQLite in-memory database with stable memory persistence.
 ||| Provides a safe, typed interface over the C bridge for ICP canisters.
 |||
-||| Usage:
-|||   import IcWasm.SQLite
+||| The coupled API enforces: no SQLite without StableConfig.
+|||   handle <- initSqlite (MkStableConfig 1 0 1024)
+|||   _ <- sqlExecH handle "CREATE TABLE foo (id INTEGER PRIMARY KEY)"
 |||
-|||   main = do
-|||     sqlOpen
-|||     _ <- sqlExec "CREATE TABLE foo (id INTEGER PRIMARY KEY)"
-|||     _ <- sqlExec "INSERT INTO foo VALUES (1)"
-|||     rows <- sqlQuery "SELECT * FROM foo"
-|||     sqlClose
+||| Legacy API (sqlOpen/sqlExec) remains for backward compatibility.
 module IcWasm.SQLite
 
 import Data.List
 import Data.String
+import public IcWasm.StableStorage
 
 %default total
 
@@ -425,3 +422,59 @@ export
 setSchemaVersion : SchemaVersion -> IO SqlResult
 setSchemaVersion v =
   sqlExec ("PRAGMA user_version = " ++ show v)
+
+-- =============================================================================
+-- Coupled SQLite + StableStorage API
+-- =============================================================================
+
+||| Opaque handle proving SQLite was initialized with StableConfig.
+||| You can only obtain this via `initSqlite`, which requires a StableConfig.
+||| This enforces: no SQL execution without stable storage configuration.
+export
+data SqliteHandle = MkSqliteHandle StableConfig
+
+||| Initialize SQLite with stable storage configuration.
+||| This is the ONLY way to obtain a SqliteHandle.
+|||
+||| Opens the in-memory database and stores the config for later use
+||| by stableSave/stableLoad. After post_upgrade, call stableLoad first,
+||| then initSqlite to get a handle for subsequent SQL operations.
+|||
+||| @cfg Stable memory configuration (version, startPage, maxPages)
+export
+initSqlite : StableConfig -> IO SqliteHandle
+initSqlite cfg = do
+  sqlOpen
+  pure (MkSqliteHandle cfg)
+
+||| Get the StableConfig from a SqliteHandle
+export
+getStableConfig : SqliteHandle -> StableConfig
+getStableConfig (MkSqliteHandle cfg) = cfg
+
+||| Execute SQL statement with handle proof
+export
+sqlExecH : SqliteHandle -> String -> IO SqlResult
+sqlExecH _ sql = sqlExec sql
+
+||| Execute SELECT with handle proof
+covering
+export
+sqlQueryH : SqliteHandle -> String -> IO (List QueryRow)
+sqlQueryH _ sql = sqlQuery sql
+
+||| Get schema version with handle proof
+covering
+export
+getSchemaVersionH : SqliteHandle -> IO SchemaVersion
+getSchemaVersionH _ = getSchemaVersion
+
+||| Set schema version with handle proof
+export
+setSchemaVersionH : SqliteHandle -> SchemaVersion -> IO SqlResult
+setSchemaVersionH _ v = setSchemaVersion v
+
+||| Prepare statement with handle proof
+export
+sqlPrepareH : SqliteHandle -> String -> IO SqlResult
+sqlPrepareH _ sql = sqlPrepare sql

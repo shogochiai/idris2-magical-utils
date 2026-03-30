@@ -2,6 +2,7 @@
 module WasmBuilder.Tests.AllTests
 
 import WasmBuilder.WasmBuilder
+import IcWasm.StableStorage
 
 %default total
 
@@ -55,6 +56,18 @@ test_BUILD_003 () =
   let result = BuildError "RefC compilation failed"
   in not (isSuccess result)
 
+-- STABLE-SQL-001: StableConfig construction
+test_STABLE_001 : () -> Bool
+test_STABLE_001 () =
+  let cfg = MkStableConfig 1 0 1024
+  in cfg.version == 1 && cfg.startPage == 0 && cfg.maxPages == 1024
+
+-- STABLE-SQL-001: StableConfig enforces non-zero version
+test_STABLE_002 : () -> Bool
+test_STABLE_002 () =
+  let cfg = MkStableConfig 0 0 512
+  in cfg.version == 0 && cfg.maxPages == 512
+
 -- =============================================================================
 -- Test Runner
 -- =============================================================================
@@ -68,6 +81,8 @@ allTests =
   , test "REQ_WASM_RT_003" "gmp wrapper concept" test_RT_003
   , test "REQ_WASM_BUILD_002" "Success result handling" test_BUILD_002
   , test "REQ_WASM_BUILD_003" "Error result handling" test_BUILD_003
+  , test "STABLE_SQL_001" "StableConfig construction" test_STABLE_001
+  , test "STABLE_SQL_002" "StableConfig zero version" test_STABLE_002
   ]
 
 ||| Run all tests

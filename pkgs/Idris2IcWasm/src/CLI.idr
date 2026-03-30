@@ -90,6 +90,7 @@ Gen-entry Options:
   --out=PATH        Output C file path (default: canister_entry_gen.c)
   --timer-cmd=N     Generate canister_global_timer with CMD N (recommended)
   --heartbeat-cmd=N Generate canister_heartbeat with CMD N (deprecated, use --timer-cmd)
+  --sql-stable      Emit sqlite_stable_save in pre_upgrade (auto if --init=sql_ffi_open)
 
 Cmd-map Annotations:
   methodName=N @inject_time=SLOT        Inject ic0_time()/1e9 into arg slot
@@ -127,6 +128,7 @@ record GenEntryOptions where
   heartbeatCmd         : Maybe Nat  -- --heartbeat-cmd=N (deprecated)
   heartbeatCheckpoint  : Maybe Nat  -- --heartbeat-checkpoint=N (deprecated)
   timerCmd             : Maybe Nat  -- --timer-cmd=N
+  sqlStable            : Maybe Bool -- --sql-stable (auto-detected from --init=sql_ffi_open)
 
 defaultGenEntryOptions : GenEntryOptions
 defaultGenEntryOptions = MkGenEntryOptions
@@ -139,6 +141,7 @@ defaultGenEntryOptions = MkGenEntryOptions
   , heartbeatCmd        = Nothing
   , heartbeatCheckpoint = Nothing
   , timerCmd            = Nothing
+  , sqlStable           = Nothing
   }
 
 parseGenEntryArgs : List String -> GenEntryOptions
@@ -157,7 +160,10 @@ parseGenEntryArgs args = go defaultGenEntryOptions args
         Just ("--heartbeat-cmd", val) => go ({ heartbeatCmd := parsePositive val } opts) rest
         Just ("--heartbeat-checkpoint", val) => go ({ heartbeatCheckpoint := parsePositive val } opts) rest
         Just ("--timer-cmd", val) => go ({ timerCmd := parsePositive val } opts) rest
-        _                             => go opts rest
+        Just ("--sql-stable", _) => go ({ sqlStable := Just True } opts) rest
+        _                             => if arg == "--sql-stable"
+                                           then go ({ sqlStable := Just True } opts) rest
+                                           else go opts rest
 
 runGenEntry : List String -> IO ()
 runGenEntry args = do
@@ -182,9 +188,14 @@ runGenEntry args = do
                              putStrLn $ "Error reading " ++ opts.cmdMapPath ++ ": " ++ show err
                              exitFailure
                        pure (parseCmdMapEntries content)
+  -- Auto-detect --sql-stable from --init=sql_ffi_open
+  let autoSqlStable = isInfixOf "sql_ffi_open" opts.initFn
+      sqlStableFlag = case opts.sqlStable of
+                        Just b  => b
+                        Nothing => autoSqlStable
   let methods = parseDidFile didContent
       defs    = parseTypeDefinitions didContent
-      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint opts.timerCmd
+      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint opts.timerCmd sqlStableFlag
       output  = generateCanisterEntryFull genOpts methods defs cmdMapEntries
   -- Write output file
   Right () <- writeFile opts.outPath output
@@ -194,7 +205,8 @@ runGenEntry args = do
   putStrLn $ "Generated " ++ opts.outPath ++
              " (" ++ show (length methods) ++ " methods)" ++
              maybe "" (\n => " [heartbeat CMD=" ++ show n ++ "]") opts.heartbeatCmd ++
-             maybe "" (\n => " [timer CMD=" ++ show n ++ "]") opts.timerCmd
+             maybe "" (\n => " [timer CMD=" ++ show n ++ "]") opts.timerCmd ++
+             (if sqlStableFlag then " [sql-stable]" else "")
 
 -- =============================================================================
 -- Main
