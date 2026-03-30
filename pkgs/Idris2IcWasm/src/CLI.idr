@@ -88,7 +88,8 @@ Gen-entry Options:
   --lib=NAME        Library name, e.g. "libic0" (informational)
   --init=FUNC       Init function name called in canister_init (optional)
   --out=PATH        Output C file path (default: canister_entry_gen.c)
-  --heartbeat-cmd=N Generate canister_heartbeat with CMD N (optional)
+  --timer-cmd=N     Generate canister_global_timer with CMD N (recommended)
+  --heartbeat-cmd=N Generate canister_heartbeat with CMD N (deprecated, use --timer-cmd)
 
 Cmd-map Annotations:
   methodName=N @inject_time=SLOT        Inject ic0_time()/1e9 into arg slot
@@ -123,8 +124,9 @@ record GenEntryOptions where
   initFn               : String
   outPath              : String
   cmdMapPath           : String     -- "" = auto-number from 0
-  heartbeatCmd         : Maybe Nat  -- --heartbeat-cmd=N
-  heartbeatCheckpoint  : Maybe Nat  -- --heartbeat-checkpoint=N
+  heartbeatCmd         : Maybe Nat  -- --heartbeat-cmd=N (deprecated)
+  heartbeatCheckpoint  : Maybe Nat  -- --heartbeat-checkpoint=N (deprecated)
+  timerCmd             : Maybe Nat  -- --timer-cmd=N
 
 defaultGenEntryOptions : GenEntryOptions
 defaultGenEntryOptions = MkGenEntryOptions
@@ -136,6 +138,7 @@ defaultGenEntryOptions = MkGenEntryOptions
   , cmdMapPath          = ""
   , heartbeatCmd        = Nothing
   , heartbeatCheckpoint = Nothing
+  , timerCmd            = Nothing
   }
 
 parseGenEntryArgs : List String -> GenEntryOptions
@@ -153,6 +156,7 @@ parseGenEntryArgs args = go defaultGenEntryOptions args
         Just ("--cmd-map",       val) => go ({ cmdMapPath   := val } opts) rest
         Just ("--heartbeat-cmd", val) => go ({ heartbeatCmd := parsePositive val } opts) rest
         Just ("--heartbeat-checkpoint", val) => go ({ heartbeatCheckpoint := parsePositive val } opts) rest
+        Just ("--timer-cmd", val) => go ({ timerCmd := parsePositive val } opts) rest
         _                             => go opts rest
 
 runGenEntry : List String -> IO ()
@@ -180,7 +184,7 @@ runGenEntry args = do
                        pure (parseCmdMapEntries content)
   let methods = parseDidFile didContent
       defs    = parseTypeDefinitions didContent
-      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint
+      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint opts.timerCmd
       output  = generateCanisterEntryFull genOpts methods defs cmdMapEntries
   -- Write output file
   Right () <- writeFile opts.outPath output
@@ -189,7 +193,8 @@ runGenEntry args = do
         exitFailure
   putStrLn $ "Generated " ++ opts.outPath ++
              " (" ++ show (length methods) ++ " methods)" ++
-             maybe "" (\n => " [heartbeat CMD=" ++ show n ++ "]") opts.heartbeatCmd
+             maybe "" (\n => " [heartbeat CMD=" ++ show n ++ "]") opts.heartbeatCmd ++
+             maybe "" (\n => " [timer CMD=" ++ show n ++ "]") opts.timerCmd
 
 -- =============================================================================
 -- Main

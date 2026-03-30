@@ -199,3 +199,21 @@ strWrite s = do
     go idx (b :: bs) = do
       strWriteByte idx b
       go (idx + 1) bs
+
+-- =============================================================================
+-- IC0 System Timer API
+-- =============================================================================
+
+||| Set the global timer to fire at the given timestamp (nanoseconds since epoch).
+||| Returns the previously set timer value (0 if none).
+||| When the timer fires, the IC runtime calls canister_global_timer().
+||| Use this instead of canister_heartbeat to avoid per-second cycles drain.
+export
+%foreign "C:ic0_global_timer_set,libic0"
+prim__setGlobalTimer : Int -> PrimIO Int
+
+||| Set global timer (IO wrapper)
+||| @timestampNanos Absolute time in nanoseconds when timer should fire
+export
+setGlobalTimer : Int -> IO Int
+setGlobalTimer timestampNanos = primIO $ prim__setGlobalTimer timestampNanos

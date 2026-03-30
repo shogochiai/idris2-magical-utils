@@ -42,8 +42,9 @@ record GenOptions where
   ffiPrefix           : String     -- e.g. "theworld" for theworld_reset_ffi, theworld_c_set_arg_i32 etc.
   libName             : String     -- e.g. "libic0" (informational; used in comments)
   initFn              : String     -- function called inside canister_init after stable grow, "" = none
-  heartbeatCmd        : Maybe Nat  -- CMD id for canister_heartbeat, Nothing = no heartbeat
-  heartbeatCheckpoint : Maybe Nat  -- sqlite_stable_save every N heartbeats, Nothing = no checkpoint
+  heartbeatCmd        : Maybe Nat  -- CMD id for canister_heartbeat, Nothing = no heartbeat (DEPRECATED)
+  heartbeatCheckpoint : Maybe Nat  -- sqlite_stable_save every N heartbeats, Nothing = no checkpoint (DEPRECATED)
+  timerCmd            : Maybe Nat  -- CMD id for canister_global_timer, Nothing = no timer
 
 -- =============================================================================
 -- CMD_ID Assignment
@@ -352,6 +353,32 @@ genHeartbeat opts =
          "}\n\n"
 
 -- =============================================================================
+-- Timer Generation (replaces heartbeat)
+-- =============================================================================
+
+||| Generate canister_global_timer function (IC system timer)
+||| Unlike heartbeat (called every ~1s), timer fires only when explicitly set
+||| via ic0_global_timer_set(). Costs cycles only when work is needed.
+genTimer : GenOptions -> String
+genTimer opts =
+  case opts.timerCmd of
+    Nothing => ""
+    Just cmd =>
+      let pfx = opts.ffiPrefix
+      in "\n/* =============================================================================\n" ++
+         " * Global Timer (replaces heartbeat — fires only when set)\n" ++
+         " * ============================================================================= */\n\n" ++
+         "__attribute__((used, visibility(\"default\"), export_name(\"canister_global_timer\")))\n" ++
+         "void canister_global_timer(void) {\n" ++
+         "    " ++ pfx ++ "_reset_ffi();\n" ++
+         "    " ++ pfx ++ "_c_set_arg_i32(0, " ++ show cmd ++ ");\n" ++
+         "    uint64_t _now = ic0_time() / 1000000000ULL;\n" ++
+         "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)_now);\n" ++
+         "    void* closure = __mainExpression_0();\n" ++
+         "    idris2_trampoline(closure);\n" ++
+         "}\n\n"
+
+-- =============================================================================
 -- Fixed Header
 -- =============================================================================
 
@@ -395,6 +422,7 @@ fixedHeader opts cmdMapEntries =
     "extern void ic0_call_data_append(int32_t src, int32_t size);\n" ++
     "extern void ic0_call_cycles_add128(uint64_t high, uint64_t low);\n" ++
     "extern int32_t ic0_call_perform(void);\n" ++
+    "extern uint64_t ic0_global_timer_set(uint64_t timestamp);\n" ++
     "\n" ++
     "/* Forward declarations from Idris2 generated code */\n" ++
     "extern void* __mainExpression_0(void);\n" ++
@@ -532,7 +560,8 @@ generateCanisterEntry opts methods defs cmdMap =
       defines = "/* CMD_ID mapping (must match Main.idr case cmd of) */\n" ++ genCmdDefines pairs
       entries = concatMap (genMethodEntry opts) pairs
       heartbeat = genHeartbeat opts
-  in header ++ defines ++ entries ++ heartbeat
+      timer   = genTimer opts
+  in header ++ defines ++ entries ++ heartbeat ++ timer
 
 ||| Generate canister_entry.c with full annotation support (cmd-map entries)
 export
@@ -547,4 +576,5 @@ generateCanisterEntryFull opts methods defs cmdMapEntries =
       defines = "/* CMD_ID mapping (must match Main.idr case cmd of) */\n" ++ genCmdDefines pairs
       entries = concatMap (genMethodEntryWithAnnotations opts cmdMapEntries) pairs
       heartbeat = genHeartbeat opts
-  in header ++ defines ++ entries ++ heartbeat
+      timer   = genTimer opts
+  in header ++ defines ++ entries ++ heartbeat ++ timer
