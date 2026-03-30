@@ -3,11 +3,17 @@
 ||| FFI bindings for SQLite in-memory database with stable memory persistence.
 ||| Provides a safe, typed interface over the C bridge for ICP canisters.
 |||
-||| The coupled API enforces: no SQLite without StableConfig.
-|||   handle <- initSqlite (MkStableConfig 1 0 1024)
-|||   _ <- sqlExecH handle "CREATE TABLE foo (id INTEGER PRIMARY KEY)"
+||| ALL SQL operations require a SqliteHandle, obtained ONLY via initSqlite.
+||| initSqlite requires a StableConfig. This enforces:
+|||   no SQLite without stable storage = no forgotten pre_upgrade save.
 |||
-||| Legacy API (sqlOpen/sqlExec) remains for backward compatibility.
+||| Usage:
+|||   handle <- initSqlite (MkStableConfig 1 0 1024)
+|||   _ <- sqlExec handle "CREATE TABLE foo (id INTEGER PRIMARY KEY)"
+|||   _ <- sqlPrepare handle "SELECT * FROM foo"
+|||   row <- sqlStep handle
+|||   val <- sqlColumnInt handle 0
+|||   _ <- sqlFinalize handle
 module IcWasm.SQLite
 
 import Data.List
@@ -17,7 +23,7 @@ import public IcWasm.StableStorage
 %default total
 
 -- =============================================================================
--- FFI Declarations
+-- FFI Declarations (private — not directly accessible)
 -- =============================================================================
 
 %foreign "C:sql_ffi_open,libic0"
@@ -86,7 +92,6 @@ prim__sqlSerialize : Int -> Int -> PrimIO Int
 %foreign "C:sql_ffi_deserialize,libic0"
 prim__sqlDeserialize : Int -> Int -> PrimIO Int
 
--- String buffer FFI for passing strings to C
 %foreign "C:sql_ffi_str_reset,libic0"
 prim__sqlStrReset : PrimIO ()
 
@@ -100,7 +105,7 @@ prim__sqlStrPtr : PrimIO Int
 prim__sqlStrLen : PrimIO Int
 
 -- =============================================================================
--- SQLite Result Codes
+-- SQLite Result Codes (public — needed for pattern matching)
 -- =============================================================================
 
 ||| SQLite result code
@@ -155,17 +160,11 @@ toSqlResult 101 = SqlDone
 toSqlResult n = SqlOther n
 
 -- =============================================================================
--- Column Types
+-- Column Types (public — needed for pattern matching)
 -- =============================================================================
 
-||| SQLite column type
 public export
-data SqlType
-  = SqlInteger
-  | SqlFloat
-  | SqlText
-  | SqlBlob
-  | SqlNull
+data SqlType = SqlInteger | SqlFloat | SqlText | SqlBlob | SqlNull
 
 public export
 Show SqlType where
@@ -184,7 +183,6 @@ Eq SqlType where
   SqlNull == SqlNull = True
   _ == _ = False
 
-||| Convert integer to SqlType
 public export
 toSqlType : Int -> SqlType
 toSqlType 1 = SqlInteger
@@ -194,65 +192,90 @@ toSqlType 4 = SqlBlob
 toSqlType _ = SqlNull
 
 -- =============================================================================
--- Database Operations
+-- Query Row (public type for results)
 -- =============================================================================
 
-||| Open in-memory database
-export
-sqlOpen : IO ()
-sqlOpen = primIO prim__sqlOpen
+public export
+record QueryRow where
+  constructor MkQueryRow
+  columns : List Int
 
-||| Close database
-export
-sqlClose : IO ()
-sqlClose = primIO prim__sqlClose
-
-||| Check if database is open
-export
-sqlIsOpen : IO Bool
-sqlIsOpen = do
-  result <- primIO prim__sqlIsOpen
-  pure (result == 1)
+public export
+SchemaVersion : Type
+SchemaVersion = Nat
 
 -- =============================================================================
--- String Buffer Operations
+-- SqliteHandle: THE entry point. No handle = no SQL.
 -- =============================================================================
 
-||| Reset string buffer
+||| Opaque handle proving SQLite was initialized with StableConfig.
+||| Obtained ONLY via initSqlite (or wrapSqlite for post_upgrade).
+||| All SQL operations require this handle.
 export
+data SqliteHandle = MkSqliteHandle StableConfig
+
+-- Internal string buffer helpers (private)
 sqlStrReset : IO ()
 sqlStrReset = primIO prim__sqlStrReset
 
-||| Push a byte to string buffer
-export
 sqlStrPush : Int -> IO ()
 sqlStrPush byte = primIO $ prim__sqlStrPush byte
 
-||| Get string buffer pointer
-export
 sqlStrPtr : IO Int
 sqlStrPtr = primIO prim__sqlStrPtr
 
-||| Get string buffer length
-export
 sqlStrLen : IO Int
 sqlStrLen = primIO prim__sqlStrLen
 
-||| Write string to buffer (helper)
-export
 sqlWriteString : String -> IO ()
 sqlWriteString s = do
   sqlStrReset
   traverse_ (\c => sqlStrPush (cast (ord c))) (unpack s)
 
 -- =============================================================================
--- SQL Execution
+-- PUBLIC API: All operations require SqliteHandle
+-- =============================================================================
+
+||| Initialize SQLite with stable storage configuration.
+||| This is the ONLY way to create a SqliteHandle.
+||| @cfg Stable memory configuration (version, startPage, maxPages)
+export
+initSqlite : StableConfig -> IO SqliteHandle
+initSqlite cfg = do
+  primIO prim__sqlOpen
+  pure (MkSqliteHandle cfg)
+
+||| Wrap an already-open database with a StableConfig.
+||| Use when C layer (canister_entry.c) already called sql_ffi_open + sqlite_stable_load.
+export
+wrapSqlite : StableConfig -> IO SqliteHandle
+wrapSqlite cfg = pure (MkSqliteHandle cfg)
+
+||| Get the StableConfig from a handle
+export
+getStableConfig : SqliteHandle -> StableConfig
+getStableConfig (MkSqliteHandle cfg) = cfg
+
+||| Close database
+export
+sqlClose : SqliteHandle -> IO ()
+sqlClose _ = primIO prim__sqlClose
+
+||| Check if database is open
+export
+sqlIsOpen : SqliteHandle -> IO Bool
+sqlIsOpen _ = do
+  result <- primIO prim__sqlIsOpen
+  pure (result == 1)
+
+-- =============================================================================
+-- SQL Execution (handle required)
 -- =============================================================================
 
 ||| Execute SQL statement (DDL/DML)
 export
-sqlExec : String -> IO SqlResult
-sqlExec sql = do
+sqlExec : SqliteHandle -> String -> IO SqlResult
+sqlExec _ sql = do
   sqlWriteString sql
   ptr <- sqlStrPtr
   len <- sqlStrLen
@@ -261,22 +284,22 @@ sqlExec sql = do
 
 ||| Get number of rows changed by last statement
 export
-sqlChanges : IO Int
-sqlChanges = primIO prim__sqlChanges
+sqlChanges : SqliteHandle -> IO Int
+sqlChanges _ = primIO prim__sqlChanges
 
 ||| Get last inserted rowid
 export
-sqlLastInsertRowid : IO Int
-sqlLastInsertRowid = primIO prim__sqlLastInsertRowid
+sqlLastInsertRowid : SqliteHandle -> IO Int
+sqlLastInsertRowid _ = primIO prim__sqlLastInsertRowid
 
 -- =============================================================================
--- Prepared Statement API
+-- Prepared Statement API (handle required)
 -- =============================================================================
 
 ||| Prepare SQL statement
 export
-sqlPrepare : String -> IO SqlResult
-sqlPrepare sql = do
+sqlPrepare : SqliteHandle -> String -> IO SqlResult
+sqlPrepare _ sql = do
   sqlWriteString sql
   ptr <- sqlStrPtr
   len <- sqlStrLen
@@ -285,206 +308,123 @@ sqlPrepare sql = do
 
 ||| Execute one step of prepared statement
 export
-sqlStep : IO SqlResult
-sqlStep = do
+sqlStep : SqliteHandle -> IO SqlResult
+sqlStep _ = do
   rc <- primIO prim__sqlStep
   pure (toSqlResult rc)
 
 ||| Reset prepared statement
 export
-sqlReset : IO SqlResult
-sqlReset = do
+sqlReset : SqliteHandle -> IO SqlResult
+sqlReset _ = do
   rc <- primIO prim__sqlReset
   pure (toSqlResult rc)
 
 ||| Finalize prepared statement
 export
-sqlFinalize : IO SqlResult
-sqlFinalize = do
+sqlFinalize : SqliteHandle -> IO SqlResult
+sqlFinalize _ = do
   rc <- primIO prim__sqlFinalize
   pure (toSqlResult rc)
 
 ||| Get number of result columns
 export
-sqlColumnCount : IO Nat
-sqlColumnCount = do
+sqlColumnCount : SqliteHandle -> IO Nat
+sqlColumnCount _ = do
   n <- primIO prim__sqlColumnCount
   pure (cast (max 0 n))
 
 -- =============================================================================
--- Column Accessors
+-- Column Accessors (handle required)
 -- =============================================================================
 
 ||| Get column type
 export
-sqlColumnType : Nat -> IO SqlType
-sqlColumnType idx = do
+sqlColumnType : SqliteHandle -> Nat -> IO SqlType
+sqlColumnType _ idx = do
   t <- primIO $ prim__sqlColumnType (cast idx)
   pure (toSqlType t)
 
 ||| Get integer column value
 export
-sqlColumnInt : Nat -> IO Int
-sqlColumnInt idx = primIO $ prim__sqlColumnInt (cast idx)
+sqlColumnInt : SqliteHandle -> Nat -> IO Int
+sqlColumnInt _ idx = primIO $ prim__sqlColumnInt (cast idx)
 
 ||| Get text column length
 export
-sqlColumnTextLen : Nat -> IO Nat
-sqlColumnTextLen idx = do
+sqlColumnTextLen : SqliteHandle -> Nat -> IO Nat
+sqlColumnTextLen _ idx = do
   n <- primIO $ prim__sqlColumnTextLen (cast idx)
   pure (cast (max 0 n))
 
 ||| Get single byte from text column
 export
-sqlColumnTextByte : Nat -> Nat -> IO Int
-sqlColumnTextByte colIdx byteIdx =
+sqlColumnTextByte : SqliteHandle -> Nat -> Nat -> IO Int
+sqlColumnTextByte _ colIdx byteIdx =
   primIO $ prim__sqlColumnTextByte (cast colIdx) (cast byteIdx)
 
 ||| Get text column value as String
-||| Uses traverse over index list to read bytes
 export
-sqlColumnText : Nat -> IO String
-sqlColumnText idx = do
-  len <- sqlColumnTextLen idx
+sqlColumnText : SqliteHandle -> Nat -> IO String
+sqlColumnText h idx = do
+  len <- sqlColumnTextLen h idx
   case len of
     Z => pure ""
     _ => do
       let indices = [0 .. minus len 1]
-      bytes <- traverse (sqlColumnTextByte idx) indices
+      bytes <- traverse (sqlColumnTextByte h idx) indices
       pure (pack (map cast bytes))
 
 -- =============================================================================
--- Serialization (for stable memory)
+-- High-Level Query Interface (handle required)
 -- =============================================================================
-
-||| Get serialized database size
-export
-sqlSerializeSize : IO Int
-sqlSerializeSize = primIO prim__sqlSerializeSize
-
--- =============================================================================
--- High-Level Query Interface
--- =============================================================================
-
-||| Query result row (simplified - integers only for now)
-public export
-record QueryRow where
-  constructor MkQueryRow
-  columns : List Int
 
 ||| Execute SELECT and collect all rows
-||| Note: This is a simplified interface that only handles integer columns
 covering
 export
-sqlQuery : String -> IO (List QueryRow)
-sqlQuery sql = do
-  rc <- sqlPrepare sql
+sqlQuery : SqliteHandle -> String -> IO (List QueryRow)
+sqlQuery h sql = do
+  rc <- sqlPrepare h sql
   case rc of
     SqlOk => collectRows []
     _ => pure []
   where
     collectRows : List QueryRow -> IO (List QueryRow)
     collectRows acc = do
-      stepResult <- sqlStep
+      stepResult <- sqlStep h
       case stepResult of
         SqlRow => do
-          colCount <- sqlColumnCount
-          cols <- traverse sqlColumnInt [0 .. minus colCount 1]
+          colCount <- sqlColumnCount h
+          cols <- traverse (sqlColumnInt h) [0 .. minus colCount 1]
           collectRows (MkQueryRow cols :: acc)
         SqlDone => do
-          _ <- sqlFinalize
+          _ <- sqlFinalize h
           pure (reverse acc)
         _ => do
-          _ <- sqlFinalize
+          _ <- sqlFinalize h
           pure (reverse acc)
 
 -- =============================================================================
--- Schema Management
+-- Schema Management (handle required)
 -- =============================================================================
-
-||| Schema version (stored in user_version pragma)
-public export
-SchemaVersion : Type
-SchemaVersion = Nat
 
 ||| Get current schema version
 covering
 export
-getSchemaVersion : IO SchemaVersion
-getSchemaVersion = do
-  rows <- sqlQuery "PRAGMA user_version"
+getSchemaVersion : SqliteHandle -> IO SchemaVersion
+getSchemaVersion h = do
+  rows <- sqlQuery h "PRAGMA user_version"
   case rows of
     (MkQueryRow (v :: _) :: _) => pure (cast (max 0 v))
     _ => pure 0
 
 ||| Set schema version
 export
-setSchemaVersion : SchemaVersion -> IO SqlResult
-setSchemaVersion v =
-  sqlExec ("PRAGMA user_version = " ++ show v)
+setSchemaVersion : SqliteHandle -> SchemaVersion -> IO SqlResult
+setSchemaVersion h v =
+  sqlExec h ("PRAGMA user_version = " ++ show v)
 
--- =============================================================================
--- Coupled SQLite + StableStorage API
--- =============================================================================
-
-||| Opaque handle proving SQLite was initialized with StableConfig.
-||| You can only obtain this via `initSqlite`, which requires a StableConfig.
-||| This enforces: no SQL execution without stable storage configuration.
+||| Get serialized database size
 export
-data SqliteHandle = MkSqliteHandle StableConfig
-
-||| Initialize SQLite with stable storage configuration.
-||| This is the ONLY way to obtain a SqliteHandle.
-|||
-||| Opens the in-memory database and stores the config for later use
-||| by stableSave/stableLoad. After post_upgrade, call stableLoad first,
-||| then initSqlite to get a handle for subsequent SQL operations.
-|||
-||| @cfg Stable memory configuration (version, startPage, maxPages)
-export
-initSqlite : StableConfig -> IO SqliteHandle
-initSqlite cfg = do
-  sqlOpen
-  pure (MkSqliteHandle cfg)
-
-||| Wrap an already-open database with a StableConfig.
-||| Use when the C layer (canister_entry.c) has already called sql_ffi_open
-||| and sqlite_stable_load — e.g. in post_upgrade flow.
-||| This preserves the type-level coupling without double-opening the DB.
-|||
-||| @cfg Stable memory configuration
-export
-wrapSqlite : StableConfig -> IO SqliteHandle
-wrapSqlite cfg = pure (MkSqliteHandle cfg)
-
-||| Get the StableConfig from a SqliteHandle
-export
-getStableConfig : SqliteHandle -> StableConfig
-getStableConfig (MkSqliteHandle cfg) = cfg
-
-||| Execute SQL statement with handle proof
-export
-sqlExecH : SqliteHandle -> String -> IO SqlResult
-sqlExecH _ sql = sqlExec sql
-
-||| Execute SELECT with handle proof
-covering
-export
-sqlQueryH : SqliteHandle -> String -> IO (List QueryRow)
-sqlQueryH _ sql = sqlQuery sql
-
-||| Get schema version with handle proof
-covering
-export
-getSchemaVersionH : SqliteHandle -> IO SchemaVersion
-getSchemaVersionH _ = getSchemaVersion
-
-||| Set schema version with handle proof
-export
-setSchemaVersionH : SqliteHandle -> SchemaVersion -> IO SqlResult
-setSchemaVersionH _ v = setSchemaVersion v
-
-||| Prepare statement with handle proof
-export
-sqlPrepareH : SqliteHandle -> String -> IO SqlResult
-sqlPrepareH _ sql = sqlPrepare sql
+sqlSerializeSize : SqliteHandle -> IO Int
+sqlSerializeSize _ = primIO prim__sqlSerializeSize
