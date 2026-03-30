@@ -188,11 +188,13 @@ runGenEntry args = do
                              putStrLn $ "Error reading " ++ opts.cmdMapPath ++ ": " ++ show err
                              exitFailure
                        pure (parseCmdMapEntries content)
-  -- Auto-detect --sql-stable from --init=sql_ffi_open
-  let autoSqlStable = isInfixOf "sql_ffi_open" opts.initFn
+  -- Auto-detect --sql-stable: any --init function implies SQLite usage.
+  -- You can't init a canister DB without needing stable persistence.
+  -- Explicit --sql-stable=false is respected (escape hatch for non-SQLite init).
+  let autoSqlStable = opts.initFn /= ""
       sqlStableFlag = case opts.sqlStable of
-                        Just b  => b
-                        Nothing => autoSqlStable
+                        Just b  => b      -- explicit override
+                        Nothing => autoSqlStable  -- auto: init → stable save
   let methods = parseDidFile didContent
       defs    = parseTypeDefinitions didContent
       genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint opts.timerCmd sqlStableFlag
