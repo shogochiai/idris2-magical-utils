@@ -447,6 +447,16 @@ initSqlite cfg = do
   sqlOpen
   pure (MkSqliteHandle cfg)
 
+||| Wrap an already-open database with a StableConfig.
+||| Use when the C layer (canister_entry.c) has already called sql_ffi_open
+||| and sqlite_stable_load — e.g. in post_upgrade flow.
+||| This preserves the type-level coupling without double-opening the DB.
+|||
+||| @cfg Stable memory configuration
+export
+wrapSqlite : StableConfig -> IO SqliteHandle
+wrapSqlite cfg = pure (MkSqliteHandle cfg)
+
 ||| Get the StableConfig from a SqliteHandle
 export
 getStableConfig : SqliteHandle -> StableConfig
