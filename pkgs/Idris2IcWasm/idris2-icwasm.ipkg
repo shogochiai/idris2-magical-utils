@@ -10,6 +10,7 @@ depends = base, contrib
 modules = IcWasm.SQLite
         , IcWasm.StableStorage
         , IcWasm.InterCanisterCall
+        , IcWasm.EvmAddress
         , IcWasm.Tests.InterCanisterCallTests
         , WasmBuilder.CanisterEntryGen
         , WasmBuilder.WasmBuilder
