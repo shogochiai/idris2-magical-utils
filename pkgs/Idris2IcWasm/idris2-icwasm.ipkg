@@ -11,6 +11,7 @@ modules = IcWasm.SQLite
         , IcWasm.StableStorage
         , IcWasm.InterCanisterCall
         , IcWasm.EvmAddress
+        , IcWasm.Verification
         , IcWasm.Tests.InterCanisterCallTests
         , WasmBuilder.CanisterEntryGen
         , WasmBuilder.WasmBuilder
