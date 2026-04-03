@@ -106,7 +106,7 @@ generate_canister_entry() {
         CANISTER_ENTRY="${CANISTER_ENTRY:-$DEFAULT_CANISTER_ENTRY}"
         return
     fi
-    if [ ${#GEN_ENTRY_ARGS[@]} -eq 0 ]; then
+    if [ "${GEN_ENTRY_ARGS+set}" != "set" ] || [ ${#GEN_ENTRY_ARGS[@]} -eq 0 ]; then
         CANISTER_ENTRY="${CANISTER_ENTRY:-$DEFAULT_CANISTER_ENTRY}"
         return
     fi
@@ -124,7 +124,7 @@ generate_canister_entry() {
         return
     fi
 
-    "$gen_exec" gen-entry "${GEN_ENTRY_ARGS[@]}"
+    "$gen_exec" gen-entry "${GEN_ENTRY_ARGS[@]+"${GEN_ENTRY_ARGS[@]}"}"
     CANISTER_ENTRY="${CANISTER_ENTRY:-$DEFAULT_CANISTER_ENTRY}"
 }
 
@@ -212,7 +212,7 @@ link_canister_wasm() {
     if [ -f "$ICWASM_SUPPORT/ic_tecdsa.c" ]; then
         emcc_inputs+=("$ICWASM_SUPPORT/ic_tecdsa.c")
     fi
-    emcc_inputs+=("${EXTRA_C_FILES[@]}")
+    emcc_inputs+=(${EXTRA_C_FILES[@]+"${EXTRA_C_FILES[@]}"})
 
     local include_dirs=(
         "$MINI_GMP"
@@ -223,10 +223,10 @@ link_canister_wasm() {
     if [ "$ICWASM_SUPPORT" != "$IC0_SUPPORT" ]; then
         include_dirs+=("$ICWASM_SUPPORT")
     fi
-    include_dirs+=("${EXTRA_INCLUDE_DIRS[@]}")
+    include_dirs+=(${EXTRA_INCLUDE_DIRS[@]+"${EXTRA_INCLUDE_DIRS[@]}"})
 
     local force_includes=("$MINI_GMP/gmp.h")
-    force_includes+=("${EXTRA_FORCE_INCLUDES[@]}")
+    force_includes+=(${EXTRA_FORCE_INCLUDES[@]+"${EXTRA_FORCE_INCLUDES[@]}"})
 
     local emcc_flags=(
         -o "$OUTPUT_WASM"
@@ -236,7 +236,7 @@ link_canister_wasm() {
         --no-entry
         -O2
     )
-    emcc_flags+=("${EXTRA_EMCC_FLAGS[@]}")
+    emcc_flags+=(${EXTRA_EMCC_FLAGS[@]+"${EXTRA_EMCC_FLAGS[@]}"})
 
     local include_args=()
     local force_include_args=()
@@ -337,7 +337,7 @@ run_build_pipeline() {
     C_FILE_PATTERN="${C_FILE_PATTERN:-*.c}"
     STUB_WASI_SCRIPT="${STUB_WASI_SCRIPT:-$PROJECT_DIR/../idris2-wasm/tools/stub-wasi.sh}"
 
-    if [ ${#C_FILE_FIND_DIRS[@]} -eq 0 ]; then
+    if [ "${C_FILE_FIND_DIRS+set}" != "set" ] || [ ${#C_FILE_FIND_DIRS[@]} -eq 0 ]; then
         C_FILE_FIND_DIRS=("$BUILD_DIR")
     fi
 

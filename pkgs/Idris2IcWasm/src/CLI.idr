@@ -6,6 +6,7 @@ import System.Directory
 import System.File
 import Data.String
 import Data.List
+import Data.Maybe
 import WasmBuilder.WasmBuilder
 import WasmBuilder.CandidStubs
 import WasmBuilder.CanisterEntryGen
@@ -72,6 +73,7 @@ Usage: idris2-icwasm <command> [OPTIONS]
 
 Commands:
   build       Compile Idris2 to IC WASM canister
+  build-canister  Run shared canister build pipeline from config
   gen-entry   Generate canister_entry.c from a .did file
 
 Build Options:
@@ -99,8 +101,12 @@ Cmd-map Annotations:
   methodName=N @result_fn=FUNC          Use custom result function for reply
   methodName=N @deferred_reply=FUNC     External hook performs async call and replies in callback
 
+Build-canister Options:
+  --config=PATH     Path to canister-build.toml (required)
+
 Example:
   idris2-icwasm build --canister=my_canister --main=src/Main.idr
+  idris2-icwasm build-canister --config=pkgs/Idris2TheWorld/canister-build.toml
   idris2-icwasm gen-entry --did=can.did --prefix=theworld --lib=libic0 --out=build/canister_entry_gen.c
 """
 
@@ -212,36 +218,219 @@ runGenEntry args = do
              (if sqlStableFlag then " [sql-stable]" else "")
 
 -- =============================================================================
+-- build-canister options
+-- =============================================================================
+
+record BuildCanisterOptions where
+  constructor MkBuildCanisterOptions
+  configPath : String
+
+defaultBuildCanisterOptions : BuildCanisterOptions
+defaultBuildCanisterOptions = MkBuildCanisterOptions ""
+
+parseBuildCanisterArgs : List String -> BuildCanisterOptions
+parseBuildCanisterArgs args = go defaultBuildCanisterOptions args
+  where
+    go : BuildCanisterOptions -> List String -> BuildCanisterOptions
+    go opts [] = opts
+    go opts (arg :: rest) =
+      case parseKeyValue arg of
+        Just ("--config", val) => go ({ configPath := val } opts) rest
+        _ => go opts rest
+
+shellQuote : String -> String
+shellQuote str = "'" ++ go (unpack str) ++ "'"
+  where
+    go : List Char -> String
+    go [] = ""
+    go ('\'' :: rest) = "'\\''" ++ go rest
+    go (c :: rest) = strCons c (go rest)
+
+dirnamePath : String -> String
+dirnamePath path =
+  let rev = reverse (unpack path)
+      (fileRev, rest) = break (== '/') rev in
+  case rest of
+    [] => "."
+    (_ :: dirRev) => case reverse dirRev of
+      [] => "/"
+      chars => pack chars
+
+pathExists : String -> IO Bool
+pathExists path = do
+  code <- system $ "test -f " ++ shellQuote path
+  pure (code == 0)
+
+dropLeadingSpaces : String -> String
+dropLeadingSpaces str = pack (dropWhile (\c => c == ' ' || c == '\t') (unpack str))
+
+stripQuotes : String -> Maybe String
+stripQuotes str =
+  case unpack (trim str) of
+    ('"' :: rest) =>
+      Just $ pack $ takeWhile (/= '"') rest
+    ('\'' :: rest) =>
+      Just $ pack $ takeWhile (/= '\'') rest
+    _ => Nothing
+
+extractTomlString : String -> String -> Maybe String
+extractTomlString key content = go (lines content)
+  where
+    go : List String -> Maybe String
+    go [] = Nothing
+    go (line :: rest) =
+      let trimmed = trim line in
+      case break (== '=') trimmed of
+        (lhs, rhs) =>
+          if trim lhs == key && rhs /= ""
+            then stripQuotes (dropLeadingSpaces (assert_total $ strTail rhs))
+            else go rest
+
+resolveAgainstDir : String -> String -> String
+resolveAgainstDir base path =
+  if isPrefixOf "/" path then path else base ++ "/" ++ path
+
+resolveCommandPath : String -> IO (Maybe String)
+resolveCommandPath prog = do
+  let tmpFile = "/tmp/idris2-icwasm-command-path.txt"
+  code <- system $ "command -v " ++ shellQuote prog ++ " > " ++ shellQuote tmpFile ++ " 2>/dev/null"
+  if code /= 0
+    then pure Nothing
+    else do
+      Right content <- readFile tmpFile
+        | Left _ => pure Nothing
+      pure $ Just (trim content)
+
+resolveAbsoluteDir : String -> IO (Maybe String)
+resolveAbsoluteDir path = do
+  let tmpFile = "/tmp/idris2-icwasm-dir-path.txt"
+      cmd = "python3 -c " ++
+            shellQuote "import os, sys; print(os.path.dirname(os.path.abspath(sys.argv[1])))" ++
+            " " ++ shellQuote path ++
+            " > " ++ shellQuote tmpFile ++ " 2>/dev/null"
+  code <- system cmd
+  if code /= 0
+    then pure Nothing
+    else do
+      Right content <- readFile tmpFile
+        | Left _ => pure Nothing
+      pure $ Just (trim content)
+
+firstExisting : List String -> IO (Maybe String)
+firstExisting [] = pure Nothing
+firstExisting (path :: rest) = do
+  exists <- pathExists path
+  if exists then pure (Just path) else firstExisting rest
+
+findBuildCanisterLauncher : String -> IO (Maybe String)
+findBuildCanisterLauncher prog = do
+  let exeDir = dirnamePath prog
+  absExeDir <- resolveAbsoluteDir prog
+  resolvedProg <- resolveCommandPath prog
+  let resolvedExeDir = maybe "" dirnamePath resolvedProg
+  absResolvedExeDir <- case resolvedProg of
+    Just path => resolveAbsoluteDir path
+    Nothing => pure Nothing
+  Just cwd <- currentDir
+    | Nothing => firstExisting
+        [ exeDir ++ "/../../scripts/build-canister-from-config.sh"
+        , maybe "" (\dir => dir ++ "/../../scripts/build-canister-from-config.sh") absExeDir
+        , resolvedExeDir ++ "/../../scripts/build-canister-from-config.sh"
+        , maybe "" (\dir => dir ++ "/../../scripts/build-canister-from-config.sh") absResolvedExeDir
+        , "scripts/build-canister-from-config.sh"
+        , "./scripts/build-canister-from-config.sh"
+        ]
+  firstExisting
+    [ exeDir ++ "/../../scripts/build-canister-from-config.sh"
+    , maybe "" (\dir => dir ++ "/../../scripts/build-canister-from-config.sh") absExeDir
+    , resolvedExeDir ++ "/../../scripts/build-canister-from-config.sh"
+    , maybe "" (\dir => dir ++ "/../../scripts/build-canister-from-config.sh") absResolvedExeDir
+    , cwd ++ "/" ++ exeDir ++ "/../../scripts/build-canister-from-config.sh"
+    , cwd ++ "/scripts/build-canister-from-config.sh"
+    , cwd ++ "/pkgs/Idris2IcWasm/scripts/build-canister-from-config.sh"
+    ]
+
+findBuildCanisterLauncherFromConfig : String -> IO (Maybe String)
+findBuildCanisterLauncherFromConfig configPath = do
+  Right content <- readFile configPath
+    | Left _ => pure Nothing
+  configDir <- resolveAbsoluteDir configPath
+  let localBinary = extractTomlString "local_idris2_icwasm" content
+      supportDir = extractTomlString "icwasm_support" content
+  localBinaryDir <- case (configDir, localBinary) of
+    (Just dir, Just path) => resolveAbsoluteDir (resolveAgainstDir dir path)
+    _ => pure Nothing
+  supportRoot <- case (configDir, supportDir) of
+    (Just dir, Just path) => do
+      supportParent <- resolveAbsoluteDir (resolveAgainstDir dir path)
+      case supportParent of
+        Just p => resolveAbsoluteDir p
+        Nothing => pure Nothing
+    _ => pure Nothing
+  firstExisting $
+    catMaybes
+      [ map (\dir => dir ++ "/../../scripts/build-canister-from-config.sh") localBinaryDir
+      , map (\dir => dir ++ "/scripts/build-canister-from-config.sh") supportRoot
+      ]
+
+runBuildCanister : String -> List String -> IO ()
+runBuildCanister prog args = do
+  let opts = parseBuildCanisterArgs args
+  when (opts.configPath == "") $ do
+    putStrLn "Error: --config=<path> is required"
+    exitFailure
+  launcherFromConfig <- findBuildCanisterLauncherFromConfig opts.configPath
+  launcher <- the (IO (Maybe String)) $
+    case launcherFromConfig of
+      Just path => pure (Just path)
+      Nothing => findBuildCanisterLauncher prog
+  case launcher of
+    Nothing => do
+      putStrLn "Error: build-canister launcher not found."
+      putStrLn "Run from the Idris2IcWasm checkout or point canister-build.toml at the local Idris2IcWasm paths."
+      exitFailure
+    Just launcherPath => do
+      let cmd = "IDRIS2_ICWASM_BINARY=" ++ shellQuote prog ++
+                " bash " ++ shellQuote launcherPath ++
+                " --config=" ++ shellQuote opts.configPath
+      code <- system cmd
+      if code == 0 then exitSuccess else exitFailure
+
+-- =============================================================================
 -- Main
 -- =============================================================================
 
 main : IO ()
 main = do
   args <- getArgs
-  case drop 1 args of  -- drop program name
+  case args of
     [] => putStrLn usage
-    ("build" :: rest) => do
-      let opts = parseArgs rest
-      if opts.showHelp
-        then putStrLn usage
-        else do
-          absProjectDir <- resolveProjectDir opts.projectDir
-          let buildOpts = MkBuildOptions
-                absProjectDir
-                opts.canisterName
-                opts.mainModule
-                opts.packages
-                True   -- generateSourceMap
-                False  -- forTestBuild (CLI doesn't use test builds)
-                Nothing -- testModulePath (CLI doesn't use test builds)
-          result <- buildCanisterAuto buildOpts
-          putStrLn $ show result
-          case result of
-            BuildSuccess _ => exitSuccess
-            BuildError _ => exitFailure
-    ("gen-entry" :: rest) => runGenEntry rest
-    ("--help" :: _) => putStrLn usage
-    ("-h" :: _) => putStrLn usage
-    _ => do
-      putStrLn "Unknown command. Use 'idris2-icwasm build', 'idris2-icwasm gen-entry', or 'idris2-icwasm --help'"
-      exitFailure
+    (prog :: rest) =>
+      case rest of
+        [] => putStrLn usage
+        ("build" :: rest) => do
+          let opts = parseArgs rest
+          if opts.showHelp
+            then putStrLn usage
+            else do
+              absProjectDir <- resolveProjectDir opts.projectDir
+              let buildOpts = MkBuildOptions
+                    absProjectDir
+                    opts.canisterName
+                    opts.mainModule
+                    opts.packages
+                    True   -- generateSourceMap
+                    False  -- forTestBuild (CLI doesn't use test builds)
+                    Nothing -- testModulePath (CLI doesn't use test builds)
+              result <- buildCanisterAuto buildOpts
+              putStrLn $ show result
+              case result of
+                BuildSuccess _ => exitSuccess
+                BuildError _ => exitFailure
+        ("build-canister" :: rest) => runBuildCanister prog rest
+        ("gen-entry" :: rest) => runGenEntry rest
+        ("--help" :: _) => putStrLn usage
+        ("-h" :: _) => putStrLn usage
+        _ => do
+          putStrLn "Unknown command. Use 'idris2-icwasm build', 'idris2-icwasm build-canister', 'idris2-icwasm gen-entry', or 'idris2-icwasm --help'"
+          exitFailure

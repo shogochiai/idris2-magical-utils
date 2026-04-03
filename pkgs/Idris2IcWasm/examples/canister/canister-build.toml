@@ -1,0 +1,16 @@
+[paths]
+project_dir = "."
+ic0_support = "../../support/ic0"
+icwasm_support = "../../support/ic0"
+
+[build]
+label = "canister"
+workdir = "."
+build_dir = "../../build/canister"
+output_name = "canister"
+command = 'CPATH="$MINI_GMP${CPATH:+:$CPATH}" idris2 --codegen refc --build-dir "$BUILD_DIR" -o main Main.idr'
+c_file_find_dirs = ["../../build/canister"]
+c_file_pattern = "*.c"
+
+[wasi]
+stub = false
