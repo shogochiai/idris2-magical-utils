@@ -97,6 +97,7 @@ Cmd-map Annotations:
   methodName=N @inject_const=SLOT:VAL   Inject constant value into arg slot
   methodName=N @inject_time_plus=S:V    Inject ic0_time()/1e9 + V into arg slot
   methodName=N @result_fn=FUNC          Use custom result function for reply
+  methodName=N @deferred_reply=FUNC     External hook performs async call and replies in callback
 
 Example:
   idris2-icwasm build --canister=my_canister --main=src/Main.idr

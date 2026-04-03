@@ -34,6 +34,7 @@ record CmdMapEntry where
   cmdId      : Nat
   injections : List Injection
   resultFn   : Maybe String    -- @result_fn=funcName: custom result function
+  deferredReplyHook : Maybe String -- @deferred_reply=funcName: external hook takes over reply
 
 ||| Options controlling code generation
 public export
@@ -62,33 +63,35 @@ assignCmdIds methods = zip methods (go 0 methods)
 
 ||| Parse annotation tokens from cmd-map line remainder
 ||| e.g. "@inject_time=2 @inject_const=3:900 @result_fn=ic_str_c_get"
-parseAnnotations : List String -> (List Injection, Maybe String)
-parseAnnotations [] = ([], Nothing)
+parseAnnotations : List String -> (List Injection, Maybe String, Maybe String)
+parseAnnotations [] = ([], Nothing, Nothing)
 parseAnnotations (tok :: rest) =
-  let (injs, rfn) = parseAnnotations rest
+  let (injs, rfn, dfn) = parseAnnotations rest
   in if isPrefixOf "@inject_time=" tok
        then case parsePositive {a=Nat} (substr 13 (length tok) tok) of
-              Just n  => (InjectTime n :: injs, rfn)
-              Nothing => (injs, rfn)
+              Just n  => (InjectTime n :: injs, rfn, dfn)
+              Nothing => (injs, rfn, dfn)
      else if isPrefixOf "@inject_const=" tok
        then let val = substr 14 (length tok) tok
             in case break (== ':') (unpack val) of
                  (nPart, ':' :: vPart) =>
                    case (parsePositive {a=Nat} (pack nPart), parseInteger {a=Integer} (pack vPart)) of
-                     (Just n, Just v) => (InjectConst n v :: injs, rfn)
-                     _                => (injs, rfn)
-                 _ => (injs, rfn)
+                     (Just n, Just v) => (InjectConst n v :: injs, rfn, dfn)
+                     _                => (injs, rfn, dfn)
+                 _ => (injs, rfn, dfn)
      else if isPrefixOf "@inject_time_plus=" tok
        then let val = substr 18 (length tok) tok
             in case break (== ':') (unpack val) of
                  (nPart, ':' :: vPart) =>
                    case (parsePositive {a=Nat} (pack nPart), parseInteger {a=Integer} (pack vPart)) of
-                     (Just n, Just v) => (InjectTimePlus n v :: injs, rfn)
-                     _                => (injs, rfn)
-                 _ => (injs, rfn)
+                     (Just n, Just v) => (InjectTimePlus n v :: injs, rfn, dfn)
+                     _                => (injs, rfn, dfn)
+                 _ => (injs, rfn, dfn)
      else if isPrefixOf "@result_fn=" tok
-       then (injs, Just (substr 11 (length tok) tok))
-     else (injs, rfn)
+       then (injs, Just (substr 11 (length tok) tok), dfn)
+     else if isPrefixOf "@deferred_reply=" tok
+       then (injs, rfn, Just (substr 16 (length tok) tok))
+     else (injs, rfn, dfn)
 
 ||| Parse a cmd-map file: lines of "methodName=N [@annotation...]" or "# comment"
 ||| Returns list of (methodName, CmdMapEntry) pairs
@@ -112,8 +115,8 @@ parseCmdMapEntries content =
                                numStr     = trim (pack rest)
                            in case parseInteger {a=Integer} numStr of
                                 Just n  => if n >= 0
-                                  then let (injs, rfn) = parseAnnotations annots
-                                       in Just (methodName, MkCmdMapEntry (cast n) injs rfn)
+                                  then let (injs, rfn, dfn) = parseAnnotations annots
+                                       in Just (methodName, MkCmdMapEntry (cast n) injs rfn dfn)
                                   else Nothing
                                 Nothing => Nothing
                          _ => Nothing
@@ -203,7 +206,7 @@ genArgDecodeCode pfx argTypes =
         "    load_candid_args();\n" ++
         "    if (arg_buf_size < 7) goto arg_done;\n" ++
         "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') goto arg_done;\n" ++
-        "    { int32_t offset=4, new_offset;\n" ++
+        "    int32_t offset=4, new_offset;\n" ++
         "    uint64_t type_count = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
         "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
         "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
@@ -220,7 +223,7 @@ genArgDecodeCode pfx argTypes =
       pair = go 0 argTypes
       decodes = fst pair
       setArgs = snd pair
-      footer = "    arg_done_inner: ; }\n    arg_done: ;\n"
+      footer = "    arg_done_inner: ;\n    arg_done: ;\n"
   in (header ++ decodes ++ footer, setArgs)
 
 -- =============================================================================
@@ -282,6 +285,7 @@ genMethodEntryWithAnnotations opts cmdMapEntries pair =
       entry      = lookup method.name cmdMapEntries
       injections = maybe [] (.injections) entry
       resultFn   = entry >>= (.resultFn)
+      deferredHook = entry >>= (.deferredReplyHook)
       argDecPair = genArgDecodeCode pfx method.argTypes
       setupCode  = fst argDecPair
       setArgCode = snd argDecPair
@@ -297,9 +301,21 @@ genMethodEntryWithAnnotations opts cmdMapEntries pair =
   in "__attribute__((used, visibility(\"default\"), export_name(\"" ++ exportName ++ "\")))\n" ++
      "void " ++ funcName ++ "(void) {\n" ++
      "    debug(\"" ++ pfx ++ ": " ++ method.name ++ "\");\n" ++
-     setupCode ++
-     callCode ++
-     replyCode ++
+     (case deferredHook of
+        Just _ =>
+          "    load_candid_args();\n" ++
+          "    const char* _deferred_err = " ++
+          (case deferredHook of
+             Just hook => hook
+             Nothing => "") ++
+          "(arg_buf, arg_buf_size);\n" ++
+          "    if (_deferred_err != 0) {\n" ++
+          "        reply_candid_text(_deferred_err);\n" ++
+          "    }\n"
+        Nothing =>
+          setupCode ++
+          callCode ++
+          replyCode) ++
      "}\n\n"
 
 ||| Backward-compatible entry generation (no annotations)
@@ -390,6 +406,8 @@ fixedHeader opts cmdMapEntries =
       -- Collect all unique custom result functions from annotations
       customFns = nub $ mapMaybe (\(_, e) => e.resultFn) cmdMapEntries
       customFnDecls = concatMap (\fn => "extern const char* " ++ fn ++ "(void);\n") customFns
+      deferredFns = nub $ mapMaybe (\(_, e) => e.deferredReplyHook) cmdMapEntries
+      deferredFnDecls = concatMap (\fn => "extern const char* " ++ fn ++ "(const uint8_t* arg_buf, int32_t arg_buf_size);\n") deferredFns
   in
     "/*\n" ++
     " * Canister Entry Points - AUTO-GENERATED from can.did\n" ++
@@ -437,6 +455,7 @@ fixedHeader opts cmdMapEntries =
     "extern const char* " ++ pfx ++ "_c_get_result_str(void);\n" ++
     "extern void " ++ pfx ++ "_reset_ffi(void);\n" ++
     (if null customFns then "" else "\n/* Custom result functions */\n" ++ customFnDecls) ++
+    (if null deferredFns then "" else "\n/* Deferred reply hooks */\n" ++ deferredFnDecls) ++
     "\n" ++
     (if opts.sqlStable
        then "/* Forward declarations from SQLite persistence (auto-coupled: --sql-stable) */\n" ++

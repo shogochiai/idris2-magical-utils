@@ -91,7 +91,7 @@ echo ">>> Step 3: Compile to standalone WASM (Emscripten)"
 # STANDALONE_WASM produces a .wasm file that can run without JS glue
 # PURE_WASI=0 and FILESYSTEM=0 to avoid WASI imports that IC doesn't support
 # First build to JS/WASM bundle (avoids WASI completely)
-emcc "$C_FILE" $REFC_C_FILES "$MINI_GMP/mini-gmp.c" "$IC0_SUPPORT/canister_entry.c" \
+emcc "$C_FILE" $REFC_C_FILES "$MINI_GMP/mini-gmp.c" "$IC0_SUPPORT/canister_entry.c" "$IC0_SUPPORT/ic_tecdsa.c" \
     -I"$REFC_SUPPORT" \
     -I"$C_SUPPORT" \
     -I"$MINI_GMP" \
