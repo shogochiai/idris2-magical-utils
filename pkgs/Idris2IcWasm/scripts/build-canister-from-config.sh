@@ -135,6 +135,8 @@ if gen_enabled:
         gen_args.append(f"--cmd-map={path(gen_cfg['cmd_map'])}")
     if "timer_cmd" in gen_cfg and gen_cfg["timer_cmd"] is not None:
         gen_args.append(f"--timer-cmd={gen_cfg['timer_cmd']}")
+    if "heartbeat_checkpoint" in gen_cfg and gen_cfg["heartbeat_checkpoint"] is not None:
+        gen_args.append(f"--heartbeat-checkpoint={gen_cfg['heartbeat_checkpoint']}")
     if "heartbeat_cmd" in gen_cfg and gen_cfg["heartbeat_cmd"] is not None:
         gen_args.append(f"--heartbeat-cmd={gen_cfg['heartbeat_cmd']}")
     if gen_cfg.get("sql_stable", False):
