@@ -45,11 +45,59 @@ ensure_refc_runtime() {
     fi
 }
 
+detect_host_gmp_ldflags() {
+    local candidates=()
+    local prefix=""
+
+    if command -v brew >/dev/null 2>&1; then
+        prefix="$(brew --prefix gmp 2>/dev/null || true)"
+        if [ -n "$prefix" ]; then
+            candidates+=("$prefix/lib")
+        fi
+    fi
+
+    candidates+=(
+        "/opt/homebrew/opt/gmp/lib"
+        "/opt/homebrew/lib"
+        "/usr/local/opt/gmp/lib"
+        "/usr/local/lib"
+    )
+
+    local dir
+    for dir in "${candidates[@]}"; do
+        if [ -f "$dir/libgmp.dylib" ] || [ -f "$dir/libgmp.a" ] || [ -f "$dir/libgmp.so" ] || [ -f "$dir/libgmp.so.10" ]; then
+            HOST_GMP_LDFLAGS="-L$dir"
+            return 0
+        fi
+    done
+
+    HOST_GMP_LDFLAGS=""
+    return 0
+}
+
 run_named_hook() {
     local fn="$1"
     if [ -n "$fn" ] && declare -f "$fn" >/dev/null 2>&1; then
         "$fn"
     fi
+}
+
+find_generated_c_file_quiet() {
+    if [ -n "$C_FILE_EXPECTED" ] && [ -f "$C_FILE_EXPECTED" ]; then
+        C_FILE="$C_FILE_EXPECTED"
+        return 0
+    fi
+
+    local dir candidate
+    for dir in "${C_FILE_FIND_DIRS[@]}"; do
+        [ -d "$dir" ] || continue
+        candidate=$(find "$dir" -name "$C_FILE_PATTERN" 2>/dev/null | head -1)
+        if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+            C_FILE="$candidate"
+            return 0
+        fi
+    done
+    return 1
 }
 
 generate_canister_entry() {
@@ -81,14 +129,32 @@ generate_canister_entry() {
 }
 
 run_idris_build() {
+    local log_file="$BUILD_DIR/idris-refc.log"
+    local status=0
+
+    set +e
     if [ -n "$BUILD_FN" ] && declare -f "$BUILD_FN" >/dev/null 2>&1; then
-        "$BUILD_FN"
-        return
+        "$BUILD_FN" >"$log_file" 2>&1
+        status=$?
+    else
+        echo "Step 2: Generating C with RefC codegen..."
+        cd "$SOURCE_DIR"
+        CPATH="$MINI_GMP${CPATH:+:$CPATH}" idris2 --codegen refc --build-dir "$BUILD_DIR" -o "$DEFAULT_OUTPUT_NAME" Main.idr >"$log_file" 2>&1
+        status=$?
+    fi
+    set -e
+
+    if [ $status -ne 0 ]; then
+        if find_generated_c_file_quiet; then
+            echo "RefC native link failed; continuing with generated C: $C_FILE"
+            tail -n 20 "$log_file"
+            return 0
+        fi
+        cat "$log_file"
+        return $status
     fi
 
-    echo "Step 2: Generating C with RefC codegen..."
-    cd "$SOURCE_DIR"
-    CPATH="$MINI_GMP${CPATH:+:$CPATH}" idris2 --codegen refc --build-dir "$BUILD_DIR" -o "$DEFAULT_OUTPUT_NAME" Main.idr
+    cat "$log_file"
 }
 
 find_generated_c_file() {
@@ -288,6 +354,13 @@ run_build_pipeline() {
 
     mkdir -p "$BUILD_DIR"
     ensure_mini_gmp
+    detect_host_gmp_ldflags
+    if [ -n "$HOST_GMP_LDFLAGS" ]; then
+        export IDRIS2_LDFLAGS="${HOST_GMP_LDFLAGS}${IDRIS2_LDFLAGS:+ $IDRIS2_LDFLAGS}"
+        export LDFLAGS="${HOST_GMP_LDFLAGS}${LDFLAGS:+ $LDFLAGS}"
+        export IDRIS2_LDLIBS="-lgmp${IDRIS2_LDLIBS:+ $IDRIS2_LDLIBS}"
+        export LDLIBS="-lgmp${LDLIBS:+ $LDLIBS}"
+    fi
     run_named_hook "$VALIDATE_FN"
 
     echo ">>> Step 0b: Generating canister_entry_gen.c from can.did"
