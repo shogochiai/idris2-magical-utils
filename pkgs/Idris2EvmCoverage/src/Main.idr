@@ -15,6 +15,7 @@ import EvmCoverage.ProfileParserFSM
 import EvmCoverage.YulInstrumentor as YulInstr
 
 import Data.List
+import Data.List1
 import Data.Maybe
 import Data.String
 import System
@@ -239,6 +240,72 @@ joinField [] = ""
 joinField [x] = x
 joinField (x :: xs) = x ++ "|" ++ joinField xs
 
+isTransientIpkgName : String -> Bool
+isTransientIpkgName name =
+  isPrefixOf "dumpcases-temp-" name || isInfixOf "-yul-" name
+
+isAuxCoverageIpkgName : String -> Bool
+isAuxCoverageIpkgName name =
+  isSuffixOf ".ipkg" name
+    && (isInfixOf "debug" name || isInfixOf "coverage" name)
+    && not (isTransientIpkgName name)
+
+isLikelyTestIpkgName : String -> Bool
+isLikelyTestIpkgName name =
+  name == "tests.ipkg"
+    || isPrefixOf "test-" name
+    || isPrefixOf "test_" name
+
+ipkgBaseName : String -> String
+ipkgBaseName ipkgPath =
+  case reverse (forget (split (== '/') ipkgPath)) of
+    (name :: _) =>
+      if isSuffixOf ".ipkg" name
+         then substr 0 (length name `minus` 5) name
+         else name
+    [] => ipkgPath
+
+findAuxCoverageIpkgs : String -> String -> IO (List String)
+findAuxCoverageIpkgs projectDir primaryIpkgPath = do
+  Right files <- listDir projectDir | Left _ => pure []
+  let primaryName =
+        case reverse (forget (split (== '/') primaryIpkgPath)) of
+          (x :: _) => x
+          [] => primaryIpkgPath
+  pure $
+    map (\f => projectDir ++ "/" ++ f) $
+      sort $
+      filter (\f => f /= primaryName && isAuxCoverageIpkgName f && not (isLikelyTestIpkgName f)) files
+
+branchFuncName : String -> String
+branchFuncName branchId =
+  case reverse (forget (split (== '#') branchId)) of
+    (_ :: prefixRev) => joinBy "#" (reverse prefixRev)
+    [] => branchId
+
+countCoveredFunctions : List String -> Nat
+countCoveredFunctions branchIds = cast {to=Nat} (length (nub (map branchFuncName branchIds)))
+
+combineCoverageAnalyses : YulInstr.CoverageAnalysis -> List YulInstr.CoverageAnalysis -> YulInstr.CoverageAnalysis
+combineCoverageAnalyses primary auxs =
+  let primaryMaterialized = nub primary.materializedBranchIds
+      auxCovered = concatMap (.coveredBranchIds) auxs
+      coveredUnion = filter (\bid => elem bid primaryMaterialized) (nub (primary.coveredBranchIds ++ auxCovered))
+      uncoveredBranchIds = filter (\bid => not (elem bid coveredUnion)) primaryMaterialized
+      uncoveredFns = nub (map branchFuncName uncoveredBranchIds)
+      materializedTotal = length primaryMaterialized
+      hitTotal = length coveredUnion
+      pct =
+        if materializedTotal == 0
+           then 100
+           else cast {to=Nat} (floor (100.0 * cast hitTotal / cast materializedTotal))
+   in { branchHits := hitTotal
+      , functionsHit := countCoveredFunctions coveredUnion
+      , coveragePercent := pct
+      , coveredBranchIds := coveredUnion
+      , uncoveredFunctions := uncoveredFns
+      } primary
+
 findIpkgInDir : String -> IO (Maybe String)
 findIpkgInDir dir = do
   Right files <- listDir dir | Left _ => pure Nothing
@@ -279,7 +346,21 @@ runFullPipelineMode opts =
                   putStrLn "FULL_PIPELINE_ERROR"
                   putStrLn ("message=" ++ err)
                   exitWith (ExitFailure 1)
-                Right analysis => do
+                Right primaryAnalysis => do
+                  auxIpkgs <- findAuxCoverageIpkgs target ipkgPath
+                  auxResults <- traverse
+                    (\auxIpkg => do
+                       auxDump <- runDumpcasesAndParse auxIpkg "/tmp/dumpcases.txt"
+                       case auxDump of
+                         Left _ => pure Nothing
+                         Right auxBranches => do
+                           let auxOutputDir = outputDir ++ "/aux-" ++ ipkgBaseName auxIpkg
+                           auxRun <- YulInstr.runFullPipeline auxIpkg auxOutputDir auxBranches
+                           case auxRun of
+                             Left _ => pure Nothing
+                             Right auxAnalysis => pure (Just auxAnalysis))
+                    auxIpkgs
+                  let analysis = combineCoverageAnalyses primaryAnalysis (mapMaybe id auxResults)
                   putStrLn "FULL_PIPELINE_OK"
                   putStrLn ("static_branches=" ++ show analysis.staticBranches)
                   putStrLn ("materialized_branches=" ++ show analysis.materializedBranches)
