@@ -1,147 +1,140 @@
 # EVM Coverage Architecture
 
-## Formula
+This document describes the current architecture of `Idris2EvmCoverage` as it
+exists today, not the older function-hit approximation.
 
-```
-Coverage = Profiler HitCount (numerator)
-           ────────────────────────────────
-           Dumpcases - Exclusions (denominator)
-```
+## Coverage Layers
+
+The EVM backend now tracks three layers explicitly.
+
+### 1. Canonical branch obligations
+
+These come from static dumpcases analysis.
+
+- source: Idris2 dumpcases text or structured JSON
+- identity: downstream branch obligation IDs, prepared for compiler-issued IDs
+- classes: reachable, excluded, unknown, partial-gap, artifact
+
+This is the largest semantic denominator the backend currently knows about.
+
+### 2. Materialized branch obligations
+
+Not every canonical obligation survives lowering as an independently observable
+runtime branch in generated Yul/EVM code.
+
+The tool therefore computes a second denominator:
+
+- branch obligations that still materialize as labeled runtime branch counters
+
+This is the denominator used for the strongest current runtime branch-level
+claim.
+
+### 3. Runtime observed branches
+
+These are the materialized branch obligations whose counters were actually hit
+during test execution.
 
 ## Pipeline
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   STATIC ANALYSIS (Denominator)                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  idris2-yul --dumpcases cases.txt --build project.ipkg         │
-│                        │                                        │
-│                        ▼                                        │
-│  ┌───────────────────────────────────────────┐                 │
-│  │ DumpcasesParser.parseDumpcases            │                 │
-│  │ → List ClassifiedBranch                   │                 │
-│  │   • BranchId (module, func, branchIdx)    │                 │
-│  │   • BranchClass (Canonical | Excluded)    │                 │
-│  └───────────────────────────────────────────┘                 │
-│                        │                                        │
-│                        ▼                                        │
-│  canonicalCount = |{b | isCanonical(b.branchClass)}|           │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                   DYNAMIC ANALYSIS (Numerator)                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  idris2-yul compile → Yul source + asm.json                    │
-│                        │                                        │
-│  ┌─────────────────────┴─────────────────────┐                 │
-│  │                                           │                  │
-│  ▼                                           ▼                  │
-│  ┌─────────────────┐               ┌─────────────────┐         │
-│  │ Yul Source      │               │ asm.json        │         │
-│  │ /* Mod:L:C */   │               │ PC → YulOffset  │         │
-│  │ comments        │               │                 │         │
-│  └────────┬────────┘               └────────┬────────┘         │
-│           │                                  │                  │
-│           ▼                                  │                  │
-│  ┌─────────────────┐                        │                  │
-│  │ SourceMap       │                        │                  │
-│  │ parseYulComments│                        │                  │
-│  │ → YulComment[]  │                        │                  │
-│  └────────┬────────┘                        │                  │
-│           │                                  │                  │
-│           └──────────────┬──────────────────┘                  │
-│                          │                                      │
-│  idris2-evm-run --trace  │                                      │
-│           │              │                                      │
-│           ▼              │                                      │
-│  ┌─────────────────┐     │                                      │
-│  │ TraceParser     │     │                                      │
-│  │ → (PC, hitCnt)  │     │                                      │
-│  └────────┬────────┘     │                                      │
-│           │              │                                      │
-│           ▼              ▼                                      │
-│  ┌───────────────────────────────────────────┐                 │
-│  │ mapPcToIdris(YulComments, asm, PC)        │                 │
-│  │ → IdrisLoc (module, line)                 │                 │
-│  └───────────────────────────────────────────┘                 │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                      CORRELATION                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  For each IdrisLoc from trace:                                  │
-│    1. Find BranchId where func matches IdrisLoc.module.func     │
-│    2. Mark BranchId as hit                                      │
-│                                                                 │
-│  hitCount = |{b : BranchId | b.hit > 0}|                       │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                      AGGREGATION                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Aggregator.aggregateCoverage(static, testRuns)                │
-│                                                                 │
-│  Coverage% = (hitCount / canonicalCount) × 100                 │
-│                                                                 │
-│  Output: AggregatedCoverage                                     │
-│    • totalCanonical: Nat                                        │
-│    • hitCount: Nat                                              │
-│    • bugsCount: Nat (UnhandledInput)                           │
-│    • coveragePercent: Double                                    │
-│    • uncoveredBranches: List ClassifiedBranch                  │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```text
+Idris2 source
+  -> dumpcases analysis
+  -> branch obligation classification
+  -> idris2-yul / Yul generation
+  -> branch counter instrumentation
+  -> solc runtime bytecode extraction
+  -> bounded idris2-evm-run execution
+  -> trace / label recovery
+  -> counter index -> branch ID mapping
+  -> runtime observed branch set
 ```
 
-## Existing Components
+## Static Side
 
-| Component | File | Status |
-|-----------|------|--------|
-| DumpcasesParser | DumpcasesParser.idr | ✅ Implemented |
-| SourceMap | SourceMap.idr | ✅ Implemented |
-| YulMapper | YulMapper.idr | ✅ Implemented |
-| TraceParser | TraceParser.idr | ✅ Implemented |
-| Aggregator | Aggregator.idr | ✅ Implemented |
-| BranchId ↔ IdrisLoc correlation | - | ⚠️ Needs work |
+Primary modules:
 
-## Missing Piece: Branch-Line Correlation
+- `EvmCoverage.DumpcasesParser`
+- `EvmCoverage.Types`
+- `EvmCoverage.StructuredExport`
 
-Currently:
-- **DumpcasesParser** gives: `BranchId (module, func, branchIdx)`
-- **SourceMap** gives: `IdrisLoc (module, line, col)`
+Responsibilities:
 
-Needed:
-- Map `BranchId → SourceSpan (startLine, endLine)`
-- Then check: `IdrisLoc.line ∈ BranchId.SourceSpan`
+- produce canonical branch obligations
+- preserve obligation classes
+- retain enough identity to swap to compiler-issued branch IDs later
 
-### Options
+## Runtime Side
 
-1. **Modify idris2-yul to emit source spans in dumpcases**
-   - Requires changes to Idris2 compiler
-   - Most accurate
+Primary modules:
 
-2. **Use Yul comments to infer branch locations**
-   - Parse Yul function bodies
-   - Map case expressions to Yul offsets
-   - Infer line ranges from surrounding comments
+- `EvmCoverage.YulInstrumentor`
+- `EvmCoverage.Runtime`
 
-3. **Function-level approximation**
-   - Simpler: just check if function was hit
-   - Less granular but immediately usable
+Responsibilities:
 
-## Recommended Implementation
+- insert branch labels/counters into Yul
+- extract runtime bytecode correctly from `solc --bin`
+- emit runtime label files and diagnostics CSV
+- execute `idris2-evm-run` under a bounded timeout
+- recover covered branch IDs from trace output
 
-Phase 1: Function-level coverage
-- Use existing YulMapper + TraceParser
-- Coverage = hitFunctions / totalProjectFunctions
+## Diagnostics
 
-Phase 2: Branch-level coverage
-- Enhance DumpcasesParser to track source spans
-- Or use Yul-based inference
+The runtime side emits:
+
+- `coverage-trace.csv`
+- `coverage-labels.csv`
+- `branch-counter-diagnostics.csv`
+
+The diagnostics CSV is the fastest way to answer:
+
+- which branch counter corresponds to which branch ID
+- whether a branch is materialized
+- whether a branch was hit
+- whether an uncovered branch is a likely test gap or a mapping problem
+
+## Auxiliary Harness Merge
+
+The CLI can merge coverage from auxiliary harnesses into the same report.
+
+Use this when:
+
+- the main test suite reaches most of the contract
+- but small direct harnesses are needed for branch-heavy helpers
+
+The merge rule is conservative:
+
+- keep the same materialized denominator
+- union only covered branch IDs
+
+## Claim Boundary
+
+The runtime branch-level claim is admissible only when the report can stay on a
+single obligation layer.
+
+In practice that means:
+
+- use materialized branch obligations as the runtime denominator
+- count only runtime observations mapped back to those same materialized branch IDs
+- keep unknown handling explicit
+
+That is why the report can legitimately say:
+
+```text
+Claim admissible (runtime branch-level): True
+```
+
+even when the canonical static denominator is larger than the materialized
+runtime denominator.
+
+## Remaining Upstream Dependency
+
+The backend is already prepared for structured compiler export, but the final
+strong form still depends on Idris2 exposing stable provenance-tagged branch
+obligation IDs.
+
+Until that lands, `Idris2EvmCoverage` remains:
+
+- branch-level
+- highly useful
+- but still downstream in provenance origin

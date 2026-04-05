@@ -1,66 +1,121 @@
 # idris2-magical-utils
 
-Idris2 で構築されたブロックチェーン開発ライブラリ群。
-EVM、ICP (Internet Computer)、Bitcoin Script 向けの型安全なツールチェーンを提供する。
+Typed infrastructure for building and testing Idris2 systems across multiple
+backends.
 
-## Packages
+This repo currently has two major threads:
 
-### Blockchain Backends
+- backend/toolchain packages for EVM, IC WASM, and web-facing runtimes
+- coverage/standardization packages for proof-aware test coverage in Idris2
 
-| Package | Description |
-|---------|-------------|
-| `Idris2Evm` | EVM インタプリタ、Yul codegen、FFI、ABI |
-| `Idris2IcWasm` | Idris2 → IC WASM コンパイルパイプライン |
-| `Idris2IcWasmSQLite` | ICP WASM canister 用 SQLite FFI バインディング |
-| `Idris2Cdk` | Internet Computer Protocol (ICP) 向け CDK |
-| `Idris2Subcontract` | UCS パターンの Subcontract フレームワーク |
-| `Idris2BitcoinScript` | スタック安全な Bitcoin Script DSL (OP_CAT covenant 対応) |
-| `Idris2Scrypt` | Idris2 → Bitcoin Script (sCrypt) コンパイル |
+## Package Map
 
-### Coverage Analysis
+### Execution backends
 
-| Package | Description |
-|---------|-------------|
-| `Idris2CoverageCore` | カバレッジ解析の共通型 |
-| `Idris2Coverage` | Idris2 コードカバレッジ (型駆動解析) |
-| `Idris2EvmCoverage` | EVM セマンティックカバレッジ (Chez Scheme profiler) |
-| `Idris2DfxCoverage` | ICP Canister カバレッジ解析 |
-| `Idris2WebCoverage` | Web フロントエンドカバレッジ |
+| Package | Role |
+| --- | --- |
+| `Idris2Evm` | Idris2 to EVM toolchain and pure EVM runtime support |
+| `Idris2IcWasm` | Idris2 to Internet Computer WASM toolchain |
+| `Idris2IcWasmSQLite` | SQLite support for IC WASM canisters |
+| `Idris2Cdk` | IC canister framework and runtime helpers |
+| `Idris2Subcontract` | EVM-side subcontract/UCS support |
+| `Idris2BitcoinScript` | Typed Bitcoin Script DSL |
+| `Idris2E2eHarness` | Cross-backend end-to-end harness helpers |
 
-### Testing
+### Coverage and standardization
 
-| Package | Description |
-|---------|-------------|
-| `Idris2E2eHarness` | クロスチェーン (EVM/ICP) E2E テストハーネス |
+| Package | Role |
+| --- | --- |
+| `Idris2CoverageCore` | Shared coverage types, obligation maps, and classification helpers |
+| `Idris2Coverage` | Chez/native function-level semantic test obligation coverage |
+| `Idris2DfxCoverage` | IC WASM function-level semantic test obligation coverage |
+| `Idris2EvmCoverage` | EVM branch-level semantic test obligation coverage |
+| `Idris2WebCoverage` | Web/runtime coverage adapters and semantic function-level runner |
+| `Idris2CoverageStandardization` | Draft standard, upstream requirements, and maintainer prep material |
+| `Idris2ExecutionStandardization` | Backend-aware execution value vocabulary (`Cycles`, `Wei`, `ChainId`, etc.) |
 
-## Usage
+## Current Coverage Position
 
-`pack.toml` で依存関係を宣言:
+The coverage packages do not all make the same strength of claim.
 
-```toml
-[custom.all.idris2-evm]
-type   = "github"
-url    = "git@github.com:shogochiai/idris2-magical-utils.git"
-commit = "main"
-ipkg   = "pkgs/Idris2Evm/idris2-evm.ipkg"
-```
+| Backend | Strongest current profile |
+| --- | --- |
+| Chez / `Idris2Coverage` | function-level semantic test obligation coverage |
+| IC WASM / `Idris2DfxCoverage` | function-level semantic test obligation coverage |
+| EVM / `Idris2EvmCoverage` | branch-level semantic test obligation coverage |
+| Web Idris runner | function-level semantic test obligation coverage |
+| Web JS CLI | runtime observation measurement |
 
-`.ipkg` に追加:
+See:
 
-```
-depends = base, idris2-evm
-```
+- [`pkgs/Idris2CoverageStandardization/docs/BACKEND_MEASUREMENT_STRENGTH_MATRIX.md`](pkgs/Idris2CoverageStandardization/docs/BACKEND_MEASUREMENT_STRENGTH_MATRIX.md)
+- [`pkgs/Idris2CoverageStandardization/docs/SEMANTIC_TEST_OBLIGATION_STANDARD.md`](pkgs/Idris2CoverageStandardization/docs/SEMANTIC_TEST_OBLIGATION_STANDARD.md)
 
-## Build
+## Why The Standardization Packages Exist
+
+Dependent-type-aware coverage needs stricter accounting than line coverage.
+The current model in this repo distinguishes:
+
+- what the denominator is
+- which obligations are excluded as unreachable or non-semantic artifacts
+- which runtime observations map back to the same obligation layer
+- whether a numeric measurement is strong enough to be stated as a semantic claim
+
+That last distinction is surfaced as `claim_admissible`.
+
+## Build Notes
+
+Different packages target different backends.
+
+### Native / Chez packages
 
 ```bash
-# 単体パッケージのビルド
-pack build pkgs/Idris2Evm/idris2-evm.ipkg
-
-# 品質チェック (lazy CLI)
-lazy core ask pkgs/Idris2Cdk
+cd /Users/bob/code/idris2-magical-utils
+idris2 --build pkgs/Idris2Coverage/idris2-coverage.ipkg
+idris2 --build pkgs/Idris2CoverageStandardization/idris2-coverage-standardization.ipkg
 ```
 
-## CI
+### EVM packages
 
-GitHub Actions で `lazy core ask --steps=1,2,4` を実行し、`stparity`, `testorphans`, `testandcoverage` を検証する。
+`Idris2EvmCoverage` itself is a native CLI, but it analyzes projects that are
+compiled via the `Idris2Evm` / `idris2-yul` pipeline.
+
+```bash
+cd /Users/bob/code/idris2-magical-utils
+idris2 --build pkgs/Idris2EvmCoverage/idris2-evm-coverage.ipkg
+```
+
+### IC WASM packages
+
+IC packages often need backend-specific build commands rather than plain
+`pack build`. Follow each package README.
+
+## Forked Idris2 Support
+
+Downstream coverage packages can optionally use a forked Idris2 binary that
+emits structured dumpcases JSON.
+
+Typical environment:
+
+```bash
+export IDRIS2_BIN=/path/to/forked/idris2
+export IDRIS2_PACKAGE_PATH=/path/to/installed/idris2/packages
+```
+
+This is especially relevant for `Idris2EvmCoverage`, which is already prepared
+to consume structured case-tree export when upstream support lands.
+
+## Recommended Reading
+
+- [`pkgs/Idris2Coverage/README.md`](pkgs/Idris2Coverage/README.md)
+- [`pkgs/Idris2EvmCoverage/README.md`](pkgs/Idris2EvmCoverage/README.md)
+- [`pkgs/Idris2CoverageStandardization/README.md`](pkgs/Idris2CoverageStandardization/README.md)
+- [`pkgs/Idris2ExecutionStandardization/`](pkgs/Idris2ExecutionStandardization)
+
+## Status
+
+If you need the shortest accurate description of the current work:
+
+- coverage is obligation-aware and conservative
+- EVM is the most advanced branch-level backend
+- upstream Idris2 structured export is still the main remaining external dependency

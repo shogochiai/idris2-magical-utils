@@ -30,6 +30,7 @@ Today the practical downstream target is:
 - explicit profile selection
 - explicit unknown handling
 - explicit `claim_admissible` reporting
+- a shared `measurement` schema across Chez / IC WASM / EVM / Web adapters
 
 That is enough for conservative experiments and CI gating, but not yet enough
 for a compiler-backed final standard.
@@ -58,6 +59,21 @@ fully solve on its own.
 - A merge-ready upstream checklist in
   `docs/IDRIS2_UPSTREAM_MERGE_READY_CHECKLIST.md`
 
+## Current Downstream State
+
+The repo now has concrete downstream implementations that consume this
+vocabulary:
+
+- `Idris2Coverage`: function-level semantic obligations on native/Chez
+- `Idris2DfxCoverage`: function-level semantic obligations on IC WASM
+- `Idris2EvmCoverage`: branch-level semantic obligations on EVM
+- `Idris2WebCoverage`: semantic function-level runner plus weaker JS CLI measurement
+
+These backends share the same high-level reporting shape, but not the same
+measurement strength. The current matrix is in:
+
+- `docs/BACKEND_MEASUREMENT_STRENGTH_MATRIX.md`
+
 ## Recommended Citation Surface
 
 If you need one short concept name, use:
@@ -74,3 +90,15 @@ If you need to be more precise, include the profile:
 ```bash
 idris2 --build idris2-coverage-standardization.ipkg
 ```
+
+## Practical Note
+
+This package intentionally separates:
+
+- a numeric measurement
+- an admissible semantic claim
+
+That is the core discipline behind the current downstream tooling. It allows a
+report to say "here is the observed measurement" while still refusing to state
+that the result is a strong semantic coverage claim when provenance is not yet
+sufficient.

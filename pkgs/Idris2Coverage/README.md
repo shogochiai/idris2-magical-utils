@@ -15,6 +15,8 @@ Current positioning:
 - profile: function-level semantic test obligation coverage
 - implementation style: downstream and proof-aware
 - strong claim policy: only when `claim_admissible = true`
+- common measurement schema: aligned with `Idris2CoverageCore` and
+  `Idris2CoverageStandardization`
 
 This tool may emit a numeric coverage measurement even when compiler provenance
 is incomplete, but it does not treat every measurement as a strong semantic
@@ -71,6 +73,16 @@ Accordingly, the current implementation should be described as:
 - with explicit unknown handling
 - and explicit `claim_admissible` reporting
 
+The current JSON/text reports expose a `measurement` block so downstream tools
+can inspect:
+
+- `denominator_ids`
+- `covered_ids`
+- `excluded_ids`
+- `unknown_ids`
+
+That keeps the observed numerator and the tested obligation layer explicit.
+
 ## Documentation
 
 | Document | Description |
@@ -92,6 +104,9 @@ idris2 --dumpcases  →  Parse case trees  →  Classify branches
                                                     ↓
 Chez Scheme profiler  →  Runtime hits  →  Coverage measurement + claim status
 ```
+
+The strong claim boundary is function-level because that is the layer where the
+current native runtime observations can be mapped back conservatively.
 
 ## What To Cite
 
@@ -115,6 +130,10 @@ If you need implementation status, say:
 
 - Idris2 0.7.0+
 - Chez Scheme (for profiling)
+
+Optional:
+
+- forked Idris2 with structured dumpcases JSON export via `IDRIS2_BIN`
 
 ## Related Projects
 
