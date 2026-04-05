@@ -90,10 +90,19 @@ __toggle_entry呼び出し:
 cat idris2-c.map | jq -r '.names[]' | grep -E "^(Main\.|Prelude\.|PrimIO\.)"
 ```
 
-## Existing Parsers
+## パーサー一覧と使い分け (重要)
 
-- `src/DfxCoverage/IcWasm/ProfilingParser.idr` - `__get_profiling`出力パーサー
-- `src/DfxCoverage/Idris2/DumpcasesParser.idr` - dumpcasesパーサー
+**README.md の "Parser Disambiguation" セクションを必ず読むこと。**
+
+5つのパーサーがあるが全て入力形式が異なる。重複ではない。新しいパーサーを追加してはいけない。
+
+- `IcWasm/ProfilingParser` — `__get_profiling` Candid出力 → `ProfilingResult`
+- `WasmTrace/TraceParser` — wasmtime perf/JSON ファイル → `WasmTraceEntry`
+- `IcWasm/IcpPublicNameParser` — `icp:public name` hex section → `IcpFuncNames`
+- `WasmMapper/NameSection` — WASM標準name section → `FuncMappingTable`
+- `DumpcasesParser` — `idris2 --dumpcases` → `FuncCases`
+
+カバレッジ計算は `CodeCoverageAnalyzer.analyzeCodeCoverage` に集約。ショートカットモジュールを作らないこと。
 
 ## wasm-objdump による関数インデックス取得（推奨）
 
@@ -139,13 +148,6 @@ for idx, name in idris_funcs.items():
         if pattern in name.lower():
             print(f"⚠️ [{idx}] {name} [{pattern}]")
 ```
-
-### FunctionCoverage.idr
-
-`src/DfxCoverage/FunctionCoverage.idr` が以下を提供：
-- `parseWasmFunctions` - wasm-objdumpで関数一覧取得
-- `calculateCoverage` - プロファイリングデータとの突合
-- `findHighImpactTargets` - 未カバー重要関数特定
 
 ## Stable Memory Layout for Profiling
 

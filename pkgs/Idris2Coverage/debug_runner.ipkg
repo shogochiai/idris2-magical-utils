@@ -1,0 +1,7 @@
+package debug-runner
+opts = "--profile --dumpcases /tmp/debug_dumpcases.txt"
+sourcedir = "src"
+main = DebugRunner
+executable = debug-runner
+depends = base, contrib, idris2-coverage
+modules = DebugRunner, Coverage.Tests.AllTests
