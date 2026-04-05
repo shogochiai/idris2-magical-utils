@@ -414,13 +414,15 @@ isIOReturnType retType =
   let trimmed = trim retType
   in isPrefixOf "IO " trimmed || isPrefixOf "IO(" trimmed
 
+isPreferredCoverageEntrypointName : String -> Bool
+isPreferredCoverageEntrypointName fname =
+  fname == "runAllTestsEvm" || fname == "runAllTests"
+
 ||| Skip entrypoints that terminate the generated wrapper early or are
 ||| intended as top-level executables rather than callable coverage probes.
 isWrapperCallableExportName : String -> Bool
 isWrapperCallableExportName fname =
-  not (fname == "main" ||
-       fname == "runAllTests" ||
-       fname == "runAllTestsEvm")
+  fname /= "main"
 
 ||| Helper to split by a multi-char delimiter
 splitByDelim : List Char -> List Char -> List Char -> List (List Char)
@@ -619,6 +621,14 @@ generateComprehensiveWrapper modules funcs =
                        else unlines funcCalls ++ "\n  pure ()"
   in header ++ importSection ++ mainSection ++ callsSection
 
+preferCoverageEntrypoints : List ExportedIOFunc -> List ExportedIOFunc
+preferCoverageEntrypoints funcs =
+  let preferred = concat
+        [ filter (\f => f.funcName == "runAllTestsEvm") funcs
+        , filter (\f => f.funcName == "runAllTests") funcs
+        ]
+  in if null preferred then funcs else preferred
+
 ||| Run idris2-yul --dumpcases and parse output
 ||| EVM coverage requires idris2-yul compiler for EVM FFI support
 ||| Creates a temporary executable ipkg since --dumpcases only works with executables
@@ -653,7 +663,8 @@ runDumpcasesAndParse ipkgPath outputPath = do
   -- This enables comprehensive coverage instead of just test coverage
   let baseDir = if null sourcedir then projectDir else projectDir ++ "/" ++ sourcedir
   allIOFuncs <- traverse (\m => scanModuleForIOFuncs (baseDir ++ "/" ++ moduleToPath m) m) modules
-  let ioFuncs = filter (\f => isWrapperCallableExportName f.funcName) (concat allIOFuncs)
+  let ioFuncs = preferCoverageEntrypoints $
+                  filter (\f => isWrapperCallableExportName f.funcName) (concat allIOFuncs)
 
   -- Generate comprehensive wrapper that calls all exported IO functions
   let tempMainContent = generateComprehensiveWrapper modules ioFuncs

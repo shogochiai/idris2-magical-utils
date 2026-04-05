@@ -404,6 +404,16 @@ record EvmBranchCoverageResult where
   unobservableBranchIds : List String
   materializedBranchIds : List String
 
+public export
+record BranchCounterDiagnostic where
+  constructor MkBranchCounterDiagnostic
+  labelIndex : Nat
+  demangledName : String
+  branchId : String
+  inStaticDenominator : Bool
+  observedCount : Integer
+  wasObserved : Bool
+
 dedupStrings : List String -> List String
 dedupStrings [] = []
 dedupStrings (x :: xs) = if elem x xs then dedupStrings xs else x :: dedupStrings xs
@@ -423,6 +433,46 @@ coveredBranchIdsFromCounters labels counters =
 
 branchFunctionName : LabelEntry -> Maybe String
 branchFunctionName lbl = if lbl.labelKind == LKBranch then Just lbl.demangledName else Nothing
+
+counterAtIndex : Nat -> List (Nat, Integer) -> Integer
+counterAtIndex idx [] = 0
+counterAtIndex idx ((other, cnt) :: rest) =
+  if idx == other then cnt else counterAtIndex idx rest
+
+public export
+buildBranchCounterDiagnostics : List LabelEntry -> List String -> List (Nat, Integer) -> List BranchCounterDiagnostic
+buildBranchCounterDiagnostics labels staticDenominatorIds counters =
+  mapMaybe toDiagnostic (branchLabels labels)
+  where
+    toDiagnostic : LabelEntry -> Maybe BranchCounterDiagnostic
+    toDiagnostic lbl =
+      case lbl.branchId of
+        Nothing => Nothing
+        Just bid =>
+          let observed = counterAtIndex lbl.labelIndex counters in
+          Just $
+            MkBranchCounterDiagnostic
+              lbl.labelIndex
+              lbl.demangledName
+              bid
+              (elem bid staticDenominatorIds)
+              observed
+              (observed > 0)
+
+diagnosticToCsvLine : BranchCounterDiagnostic -> String
+diagnosticToCsvLine d =
+  show d.labelIndex ++ ","
+  ++ d.demangledName ++ ","
+  ++ d.branchId ++ ","
+  ++ show d.inStaticDenominator ++ ","
+  ++ show d.observedCount ++ ","
+  ++ show d.wasObserved
+
+public export
+branchCounterDiagnosticsCsv : List BranchCounterDiagnostic -> String
+branchCounterDiagnosticsCsv diags =
+  "label_index,demangled_name,branch_id,in_static_denominator,observed_count,was_observed\n"
+  ++ unlines (map diagnosticToCsvLine diags)
 
 public export
 buildBranchCoverageResult : List LabelEntry -> List String -> List (Nat, Integer) -> EvmBranchCoverageResult
@@ -472,6 +522,19 @@ analyzeBranchCoverageFromFile tracePath labelPath staticDenominatorIds = do
   Right labels <- loadLabels labelPath
     | Left err => pure (Left err)
   pure $ Right $ analyzeBranchCoverageFromText traceContent labels staticDenominatorIds
+
+public export
+writeBranchCounterDiagnostics : String -> String -> List String -> String -> IO (Either String ())
+writeBranchCounterDiagnostics tracePath labelPath staticDenominatorIds csvPath = do
+  Right traceContent <- readFile tracePath
+    | Left err => pure (Left $ "Failed to read trace file: " ++ show err)
+  Right labels <- loadLabels labelPath
+    | Left err => pure (Left err)
+  let counters = indexCounters (parseProfileFlushCounters traceContent)
+  let diagnostics = buildBranchCounterDiagnostics labels staticDenominatorIds counters
+  Right () <- writeFile csvPath (branchCounterDiagnosticsCsv diagnostics)
+    | Left err => pure (Left $ "Failed to write diagnostics CSV: " ++ show err)
+  pure (Right ())
 
 -- =============================================================================
 -- Library API: Conversion to Core Types

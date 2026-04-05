@@ -887,13 +887,25 @@ compileYulToBytecode yulPath outputDir = do
 -- =============================================================================
 
 ||| Extract runtime bytecode from solc output (skips init code header)
+findRuntimeSeparator : List Char -> Nat -> Maybe Nat
+findRuntimeSeparator [] _ = Nothing
+findRuntimeSeparator [_] _ = Nothing
+findRuntimeSeparator ('f' :: 'e' :: rest) idx = Just idx
+findRuntimeSeparator (_ :: rest) idx = findRuntimeSeparator rest (S idx)
+
+extractRuntimeSegment : String -> String
+extractRuntimeSegment hex =
+  case findRuntimeSeparator (unpack hex) 0 of
+    Just idx => substr (idx + 2) (length hex `minus` (idx + 2)) hex
+    Nothing => hex
+
 extractRuntimeBytecode : String -> String
 extractRuntimeBytecode content =
   -- Find "Binary representation:" line and get next line
   let ls = lines content
       afterBinary = dropWhile (\l => not $ isInfixOf "Binary representation:" l) ls
   in case afterBinary of
-       (_ :: byteLine :: _) => trim byteLine
+       (_ :: byteLine :: _) => extractRuntimeSegment (trim byteLine)
        _ => ""
 
 ||| Run instrumented bytecode via idris2-evm-run and capture trace
@@ -904,20 +916,31 @@ runIdrisEvmTest binPath traceOutput = do
   -- Extract runtime bytecode (skip init code)
   Right content <- readFile binPath
     | Left _ => pure $ Left "Cannot read bytecode file"
-  let fullHex = extractRuntimeBytecode content
-  -- Skip init code: first 24 hex chars (12 bytes) are init code
-  let runtimeHex = substr 24 (length fullHex) fullHex
+  let runtimeHex = extractRuntimeBytecode content
   -- Write runtime bytecode to temp file
   let runtimePath = "/tmp/runtime.bin"
   Right () <- writeFile runtimePath runtimeHex
     | Left _ => pure $ Left "Cannot write runtime bytecode"
-  -- Run with idris2-evm-run
-  let cmd = "idris2-evm-run --trace " ++ runtimePath ++ " --gas 100000000 > " ++ traceOutput ++ " 2>&1"
+  mTimeout <- getEnv "IDRIS2_EVM_RUN_TIMEOUT_SECS"
+  let timeoutSecs = fromMaybe "20" mTimeout
+  let cmd =
+        "python3 -c 'import os,signal,subprocess,sys\n"
+        ++ "out=open(sys.argv[1],\"wb\")\n"
+        ++ "try:\n"
+        ++ " p=subprocess.Popen([\"idris2-evm-run\",\"--trace\",sys.argv[2],\"--gas\",\"100000000\"], stdout=out, stderr=subprocess.STDOUT, start_new_session=True)\n"
+        ++ " sys.exit(p.wait(timeout=int(sys.argv[3])))\n"
+        ++ "except subprocess.TimeoutExpired:\n"
+        ++ " os.killpg(p.pid, signal.SIGKILL)\n"
+        ++ " sys.exit(124)\n"
+        ++ "' \"" ++ traceOutput ++ "\" \"" ++ runtimePath ++ "\" \"" ++ timeoutSecs ++ "\""
   exitCode <- system cmd
-  -- idris2-evm-run may return non-zero on revert/invalid, but trace is still useful
-  Right _ <- readFile traceOutput
+  Right trace <- readFile traceOutput
     | Left _ => pure $ Left "Cannot read trace output"
-  pure $ Right traceOutput
+  if exitCode == 124
+     then if null (trim trace)
+             then pure $ Left ("idris2-evm-run timed out after " ++ timeoutSecs ++ "s with no trace")
+             else pure $ Right traceOutput
+     else pure $ Right traceOutput
 
 -- =============================================================================
 -- Phase 3: Coverage Analysis Result
@@ -1008,6 +1031,8 @@ runFullPipeline ipkgPath outputDir staticBranches = do
                            []
                            uncovered
         Right result => do
+          let diagnosticsCsvPath = outputDir ++ "/branch-counter-diagnostics.csv"
+          _ <- writeBranchCounterDiagnostics tracePath labelPath staticDenominatorIds diagnosticsCsvPath
           let hitFuncs = length result.coveredFunctions
           let totalFuncs = totalFunctionsStatic
           let pct = cast {to=Nat} (floor result.coveragePercent)

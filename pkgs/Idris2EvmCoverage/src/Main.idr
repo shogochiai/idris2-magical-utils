@@ -244,6 +244,12 @@ isTransientIpkgName : String -> Bool
 isTransientIpkgName name =
   isPrefixOf "dumpcases-temp-" name || isInfixOf "-yul-" name
 
+isWrapperCoverageIpkgName : String -> Bool
+isWrapperCoverageIpkgName name =
+  isSuffixOf ".ipkg" name
+    && isPrefixOf "dumpcases-temp-" name
+    && not (isInfixOf "-yul-" name)
+
 isAuxCoverageIpkgName : String -> Bool
 isAuxCoverageIpkgName name =
   isSuffixOf ".ipkg" name
@@ -276,6 +282,17 @@ findAuxCoverageIpkgs projectDir primaryIpkgPath = do
     map (\f => projectDir ++ "/" ++ f) $
       sort $
       filter (\f => f /= primaryName && isAuxCoverageIpkgName f && not (isLikelyTestIpkgName f)) files
+
+findWrapperCoverageIpkg : String -> String -> IO (Maybe String)
+findWrapperCoverageIpkg projectDir primaryIpkgPath = do
+  Right files <- listDir projectDir | Left _ => pure Nothing
+  let primaryName =
+        case reverse (forget (split (== '/') primaryIpkgPath)) of
+          (x :: _) => x
+          [] => primaryIpkgPath
+  case reverse (sort (filter (\f => f /= primaryName && isWrapperCoverageIpkgName f) files)) of
+    [] => pure Nothing
+    (f :: _) => pure (Just (projectDir ++ "/" ++ f))
 
 branchFuncName : String -> String
 branchFuncName branchId =
@@ -347,7 +364,16 @@ runFullPipelineMode opts =
                   putStrLn ("message=" ++ err)
                   exitWith (ExitFailure 1)
                 Right primaryAnalysis => do
+                  mWrapperIpkg <- findWrapperCoverageIpkg target ipkgPath
                   auxIpkgs <- findAuxCoverageIpkgs target ipkgPath
+                  wrapperResults <- traverse
+                    (\wrapperIpkg => do
+                       let auxOutputDir = outputDir ++ "/aux-wrapper"
+                       wrapperRun <- YulInstr.runFullPipeline wrapperIpkg auxOutputDir branches
+                       case wrapperRun of
+                         Left _ => pure Nothing
+                         Right wrapperAnalysis => pure (Just wrapperAnalysis))
+                    mWrapperIpkg
                   auxResults <- traverse
                     (\auxIpkg => do
                        auxDump <- runDumpcasesAndParse auxIpkg "/tmp/dumpcases.txt"
@@ -360,7 +386,12 @@ runFullPipelineMode opts =
                              Left _ => pure Nothing
                              Right auxAnalysis => pure (Just auxAnalysis))
                     auxIpkgs
-                  let analysis = combineCoverageAnalyses primaryAnalysis (mapMaybe id auxResults)
+                  let wrapperAux =
+                        case wrapperResults of
+                          Just (Just x) => [x]
+                          _ => []
+                  let allAux = wrapperAux ++ mapMaybe id auxResults
+                  let analysis = combineCoverageAnalyses primaryAnalysis allAux
                   putStrLn "FULL_PIPELINE_OK"
                   putStrLn ("static_branches=" ++ show analysis.staticBranches)
                   putStrLn ("materialized_branches=" ++ show analysis.materializedBranches)
@@ -371,6 +402,7 @@ runFullPipelineMode opts =
                   putStrLn ("covered_branch_ids=" ++ joinField analysis.coveredBranchIds)
                   putStrLn ("unobservable_branch_ids=" ++ joinField analysis.unobservableBranchIds)
                   putStrLn ("materialized_branch_ids=" ++ joinField analysis.materializedBranchIds)
+                  putStrLn ("branch_diagnostics_csv=" ++ outputDir ++ "/branch-counter-diagnostics.csv")
                   putStrLn ("uncovered_functions=" ++ joinField analysis.uncoveredFunctions)
 
 -- =============================================================================
