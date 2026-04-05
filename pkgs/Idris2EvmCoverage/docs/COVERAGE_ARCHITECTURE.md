@@ -78,6 +78,30 @@ Responsibilities:
 - execute `idris2-evm-run` under a bounded timeout
 - recover covered branch IDs from trace output
 
+## Instrumentation Overhead
+
+The runtime side is not free.
+
+Branch-level coverage currently works by inserting explicit runtime
+instrumentation. That can increase:
+
+- instruction count
+- gas / interpreter cost
+- generated code size
+- trace volume
+
+Because of that, the backend must keep two operational modes distinct:
+
+- production artifact
+  no branch coverage instrumentation
+- coverage artifact
+  branch counters / labels enabled
+
+This is a semantic and operational boundary, not just a packaging preference.
+Coverage instrumentation is allowed to change runtime cost, so the branch-level
+coverage path must stay guarded and must not silently become the default
+production artifact.
+
 ## Diagnostics
 
 The runtime side emits:
@@ -138,3 +162,14 @@ Until that lands, `Idris2EvmCoverage` remains:
 - branch-level
 - highly useful
 - but still downstream in provenance origin
+
+## Remaining Backend Milestones
+
+The backend still needs all of the following to be considered complete:
+
+1. stable compiler-issued branch obligation IDs from Idris2
+2. stronger provenance preservation through Idris2Evm / Yul lowering
+3. explicit production-vs-coverage artifact separation in user-facing build flows
+4. documented instrumentation overhead expectations
+5. guarded enablement so runtime branch instrumentation is never silently used
+   for production deployment

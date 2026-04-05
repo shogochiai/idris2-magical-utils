@@ -88,6 +88,26 @@ export IDRIS2_PACKAGE_PATH=/path/to/packages
 If the interpreter times out, the tool keeps any partial trace it can recover
 and reports a lower-bound measurement rather than silently pretending success.
 
+## Instrumentation Cost And Build Separation
+
+Runtime branch coverage is implemented with explicit instrumentation.
+That means:
+
+- extra runtime instructions
+- larger generated code
+- higher execution cost during coverage runs
+
+For EVM this cost is real gas / interpreter work. The branch-level runtime path
+is therefore intended for coverage builds, not production deployments.
+
+The intended operating model is:
+
+- production artifact: no branch coverage instrumentation
+- coverage artifact: branch counters / labels enabled
+
+This distinction is not optional polish. It is part of the backend milestone
+for making branch-level coverage operationally safe.
+
 ## Diagnostics
 
 Full-pipeline runs now emit branch diagnostics data:
@@ -187,6 +207,17 @@ What remains upstream-sensitive:
 
 - stable compiler-issued obligation IDs
 - fully provenance-tagged branch identity through lowering
+
+## Milestones
+
+The remaining milestones for the EVM backend are:
+
+1. upstream structured dumpcases export with stable branch obligation IDs
+2. stronger lowering provenance from Idris2 / idris2-yul
+3. explicit production vs coverage artifact split in build workflows
+4. documented instrumentation overhead budget and expected runtime cost
+5. guarded enablement so branch-level runtime coverage never silently affects
+   production deployments
 
 ## Related Docs
 
