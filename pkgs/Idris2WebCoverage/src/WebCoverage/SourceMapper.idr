@@ -9,6 +9,7 @@ import Data.List1
 import Data.Maybe
 import Data.String
 import System.File
+import Execution.Standardization.Web
 import WebCoverage.Types
 
 %default covering
@@ -255,7 +256,7 @@ mapCoverageToSource sm jsCode v8Cov =
     collectCoveredLines cov js =
       let allRanges = concatMap (.ranges) cov.functions
           coveredRanges = filter (\r => r.count > 0) allRanges
-      in map (\r => offsetToLine js r.startOffset) coveredRanges
+      in map (\r => offsetToLine js (toNatJsByteOffset r.startOffset)) coveredRanges
 
     groupByFile : List SourceMapping -> List (String, List Nat)
     groupByFile [] = []

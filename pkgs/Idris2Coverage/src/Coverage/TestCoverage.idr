@@ -16,6 +16,8 @@ import Coverage.DumpcasesParser
 import Coverage.Collector
 import Coverage.UnifiedRunner
 import Coverage.Exclusions
+import Coverage.Classification.BranchClass
+import Coverage.Standardization.Types
 
 import Data.List
 import Data.List1
@@ -67,11 +69,7 @@ splitIpkgPath path =
 public export
 analyzeProject : (ipkgPath : String) -> IO (Either String TestAnalysis)
 analyzeProject ipkgPath = do
-  -- Extract directory and ipkg name
-  let (dir, ipkgName) = splitIpkgPath ipkgPath
-
-  -- Run dumpcases
-  result <- runDumpcasesDefault dir ipkgName
+  result <- runProjectDumpcasesWithTempIpkg ipkgPath
   case result of
     Left err => pure $ Left err
     Right content => do
@@ -85,8 +83,7 @@ analyzeProject ipkgPath = do
 public export
 analyzeProjectFunctions : (ipkgPath : String) -> IO (Either String (List CompiledFunction))
 analyzeProjectFunctions ipkgPath = do
-  let (dir, ipkgName) = splitIpkgPath ipkgPath
-  result <- runDumpcasesDefault dir ipkgName
+  result <- runProjectDumpcasesWithTempIpkg ipkgPath
   case result of
     Left err => pure $ Left err
     Right content => pure $ Right $ parseDumpcasesFile content
@@ -109,10 +106,10 @@ analyzeProjectWithHits : (ipkgPath : String)
                        -> (testModules : List String)
                        -> IO (Either String TestCoverage)
 analyzeProjectWithHits ipkgPath testModules = do
-  let (projectDir, ipkgName) = splitIpkgPath ipkgPath
+  let (projectDir, _) = splitIpkgPath ipkgPath
 
   -- Step 1: Get static analysis from --dumpcases
-  dumpResult <- runDumpcasesDefault projectDir ipkgName
+  dumpResult <- runProjectDumpcasesWithTempIpkg ipkgPath
   case dumpResult of
     Left err => pure $ Left $ "Dumpcases failed: " ++ err
     Right dumpContent => do
@@ -294,6 +291,62 @@ runtimeHitToTestCoverageSimple hit =
        0
        0
        0
+
+-- =============================================================================
+-- Function-Level Obligation Mapping
+-- =============================================================================
+
+||| Convert compiled functions to function-level semantic obligations.
+public export
+compiledFunctionsToFunctionObligations : List CompiledFunction -> List CoverageObligation
+compiledFunctionsToFunctionObligations funcs =
+  map (staticFunctionToCoverageObligation . toStaticFunctionAnalysis) funcs
+
+||| Build the runtime aliases that may identify a Chez-observed function.
+|||
+||| We include both the logical Idris name and the generated Scheme name because
+||| the profiler/runtime side may surface either representation.
+public export
+chezRuntimeAliasesForObligation : CoverageObligation -> List RuntimeUnitRef
+chezRuntimeAliasesForObligation ob =
+  [ runtimeFunctionName ob.obligationId
+  , generatedFunctionName (idrisFuncToSchemePattern ob.obligationId)
+  ]
+
+||| Resolve covered function-level obligation IDs from per-function runtime hits.
+public export
+coveredFunctionObligationIdsFromRuntimeHits : List CompiledFunction
+                                          -> List FunctionRuntimeHit
+                                          -> List String
+coveredFunctionObligationIdsFromRuntimeHits funcs hits =
+  let obligations = compiledFunctionsToFunctionObligations funcs
+      obligationMap = buildFunctionObligationMap obligations chezRuntimeAliasesForObligation
+      runtimeUnits = concatMap hitUnits hits
+  in resolveCoveredDenominatorIds obligations obligationMap runtimeUnits
+  where
+    hitUnits : FunctionRuntimeHit -> List RuntimeUnitRef
+    hitUnits hit =
+      if hit.executedCount > 0
+         then [runtimeFunctionName hit.funcName, generatedFunctionName hit.schemeFunc]
+         else []
+
+||| Produce a semantic coverage measurement from compiled functions and runtime hits.
+||| This keeps the denominator and numerator aligned at the function-level
+||| obligation layer.
+public export
+functionCoverageMeasurementFromRuntimeHits : List CompiledFunction
+                                         -> List FunctionRuntimeHit
+                                         -> CoverageMeasurement
+functionCoverageMeasurementFromRuntimeHits funcs hits =
+  let obligations = compiledFunctionsToFunctionObligations funcs
+      denominatorIds =
+        map (.obligationId) $ filter (\ob => countsAsDenominator ob.classification) obligations
+      excludedIds =
+        map (.obligationId) $ filter (\ob => mustBeExcluded ob.classification) obligations
+      unknownIds =
+        map (.obligationId) $ filter (\ob => ob.classification == UnknownClassification) obligations
+      coveredIds = coveredFunctionObligationIdsFromRuntimeHits funcs hits
+  in MkCoverageMeasurement denominatorIds coveredIds excludedIds unknownIds
 
 -- =============================================================================
 -- High Impact Targets (imported from Coverage.Core.HighImpact via Coverage.Types)
@@ -549,6 +602,9 @@ formatTestAnalysis a = unlines
   , "  Optimizer artifacts (Nat): " ++ show a.totalOptimizerArtifacts
   , "  Unknown CRASHes: " ++ show a.totalUnknown
   , "  Functions with CRASH: " ++ show a.functionsWithCrash
+  , "  Coverage model: " ++ a.coverageModel
+  , "  Unknown policy: " ++ a.unknownPolicy
+  , "  Claim admissible: " ++ show a.claimAdmissible
   ]
 
 ||| Generate test coverage with hits as text
@@ -580,6 +636,9 @@ testAnalysisToJson a = unlines
   , "  \"total_bugs\": " ++ show a.totalBugs ++ ","
   , "  \"total_optimizer_artifacts\": " ++ show a.totalOptimizerArtifacts ++ ","
   , "  \"total_unknown\": " ++ show a.totalUnknown ++ ","
+  , "  \"coverage_model\": \"" ++ a.coverageModel ++ "\","
+  , "  \"unknown_policy\": \"" ++ a.unknownPolicy ++ "\","
+  , "  \"claim_admissible\": " ++ show a.claimAdmissible ++ ","
   , "  \"exclusion_breakdown\": {"
   , "    \"compiler_generated\": " ++ show a.exclusionBreakdown.compilerGenerated ++ ","
   , "    \"standard_library\": " ++ show a.exclusionBreakdown.standardLibrary ++ ","
@@ -606,6 +665,42 @@ testCoverageToJson sc =
     , "}"
     ]
 
+jsonStringArray : List String -> String
+jsonStringArray xs =
+  "[" ++ fastConcat (intersperse ", " (map (\x => "\"" ++ escapeJson x ++ "\"") xs)) ++ "]"
+  where
+    escapeJson : String -> String
+    escapeJson s = fastConcat $ map escapeChar (unpack s)
+      where
+        escapeChar : Char -> String
+        escapeChar '\n' = "\\n"
+        escapeChar '"'  = "\\\""
+        escapeChar '\\' = "\\\\"
+        escapeChar c    = singleton c
+
+||| Render a coverage measurement as JSON.
+public export
+coverageMeasurementToJson : CoverageMeasurement -> String
+coverageMeasurementToJson m = unlines
+  [ "{"
+  , "  \"denominator_ids\": " ++ jsonStringArray m.denominatorIds ++ ","
+  , "  \"covered_ids\": " ++ jsonStringArray m.coveredIds ++ ","
+  , "  \"excluded_ids\": " ++ jsonStringArray m.excludedIds ++ ","
+  , "  \"unknown_ids\": " ++ jsonStringArray m.unknownIds
+  , "}"
+  ]
+
+||| Human-readable summary of a function-level semantic coverage measurement.
+public export
+formatCoverageMeasurementSummary : CoverageMeasurement -> String
+formatCoverageMeasurementSummary m = unlines
+  [ "Function-level semantic measurement:"
+  , "  denominator_ids: " ++ show (length m.denominatorIds)
+  , "  covered_ids:     " ++ show (length m.coveredIds)
+  , "  excluded_ids:    " ++ show (length m.excludedIds)
+  , "  unknown_ids:     " ++ show (length m.unknownIds)
+  ]
+
 -- =============================================================================
 -- High Impact Targets JSON Output
 -- =============================================================================
@@ -626,6 +721,9 @@ coverageReportToJson analysis targets = unlines
   , "    \"total_bugs\": " ++ show analysis.totalBugs ++ ","
   , "    \"total_optimizer_artifacts\": " ++ show analysis.totalOptimizerArtifacts ++ ","
   , "    \"total_unknown\": " ++ show analysis.totalUnknown ++ ","
+  , "    \"coverage_model\": \"" ++ analysis.coverageModel ++ "\","
+  , "    \"unknown_policy\": \"" ++ analysis.unknownPolicy ++ "\","
+  , "    \"claim_admissible\": " ++ show analysis.claimAdmissible ++ ","
   , "    \"exclusion_breakdown\": {"
   , "      \"compiler_generated\": " ++ show analysis.exclusionBreakdown.compilerGenerated ++ ","
   , "      \"standard_library\": " ++ show analysis.exclusionBreakdown.standardLibrary ++ ","
@@ -646,6 +744,52 @@ coverageReportToJson analysis targets = unlines
         escapeChar '"'  = "\\\""
         escapeChar '\\' = "\\\\"
         escapeChar c    = singleton c
+
+||| Full coverage report with an explicit function-level semantic measurement.
+public export
+coverageReportToJsonWithMeasurement : TestAnalysis
+                                  -> CoverageMeasurement
+                                  -> List HighImpactTarget
+                                  -> String
+coverageReportToJsonWithMeasurement analysis measurement targets = unlines
+  [ "{"
+  , "  \"reading_guide\": \"" ++ escapeJson Coverage.Core.HighImpact.coverageReadingGuide ++ "\","
+  , "  \"summary\": {"
+  , "    \"total_functions\": " ++ show analysis.totalFunctions ++ ","
+  , "    \"total_canonical\": " ++ show analysis.totalCanonical ++ ","
+  , "    \"total_excluded\": " ++ show analysis.totalExcluded ++ ","
+  , "    \"total_bugs\": " ++ show analysis.totalBugs ++ ","
+  , "    \"total_optimizer_artifacts\": " ++ show analysis.totalOptimizerArtifacts ++ ","
+  , "    \"total_unknown\": " ++ show analysis.totalUnknown ++ ","
+  , "    \"coverage_model\": \"" ++ analysis.coverageModel ++ "\","
+  , "    \"unknown_policy\": \"" ++ analysis.unknownPolicy ++ "\","
+  , "    \"claim_admissible\": " ++ show analysis.claimAdmissible ++ ","
+  , "    \"exclusion_breakdown\": {"
+  , "      \"compiler_generated\": " ++ show analysis.exclusionBreakdown.compilerGenerated ++ ","
+  , "      \"standard_library\": " ++ show analysis.exclusionBreakdown.standardLibrary ++ ","
+  , "      \"type_constructors\": " ++ show analysis.exclusionBreakdown.typeConstructors ++ ","
+  , "      \"dependencies\": " ++ show analysis.exclusionBreakdown.dependencies ++ ","
+  , "      \"test_code\": " ++ show analysis.exclusionBreakdown.testCode
+  , "    }"
+  , "  },"
+  , "  \"measurement\": " ++ replaceLeadingSpaces (coverageMeasurementToJson measurement) ++ ","
+  , "  \"high_impact_targets\": " ++ Coverage.Core.HighImpact.targetsToJsonArray targets
+  , "}"
+  ]
+  where
+    escapeJson : String -> String
+    escapeJson s = fastConcat $ map escapeChar (unpack s)
+      where
+        escapeChar : Char -> String
+        escapeChar '\n' = "\\n"
+        escapeChar '"'  = "\\\""
+        escapeChar '\\' = "\\\\"
+        escapeChar c    = singleton c
+
+    replaceLeadingSpaces : String -> String
+    replaceLeadingSpaces s =
+      let ls = lines s
+      in fastConcat $ intersperse "\n" $ map ("  " ++) ls
 
 -- =============================================================================
 -- OR Aggregation API (BranchId-based)
@@ -680,10 +824,10 @@ analyzeProjectWithAggregatedHits : (ipkgPath : String)
                                   -> (testModules : List String)
                                   -> IO (Either String AggregatedCoverage)
 analyzeProjectWithAggregatedHits ipkgPath testModules = do
-  let (projectDir, ipkgName) = splitIpkgPath ipkgPath
+  let (projectDir, _) = splitIpkgPath ipkgPath
 
   -- Step 1: Get static analysis with BranchIds from --dumpcases
-  dumpResult <- runDumpcasesDefault projectDir ipkgName
+  dumpResult <- runProjectDumpcasesWithTempIpkg ipkgPath
   case dumpResult of
     Left err => pure $ Left $ "Dumpcases failed: " ++ err
     Right dumpContent => do

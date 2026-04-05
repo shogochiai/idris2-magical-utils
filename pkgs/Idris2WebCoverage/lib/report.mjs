@@ -8,10 +8,16 @@
  */
 export function formatReport(result, options = {}) {
   const lines = [];
+  const measurement = result.measurement ?? null;
 
   lines.push('# Web Coverage Report');
   lines.push(`Coverage: ${result.totalCovered}/${result.totalLines} (${result.totalPercentage}%)`);
   lines.push(`Functions: ${result.coveredFunctions}/${result.totalFunctions}`);
+  if (measurement) {
+    lines.push(
+      `Measurement: denominator=${measurement.denominator_ids?.length ?? 0}, covered=${measurement.covered_ids?.length ?? 0}, excluded=${measurement.excluded_ids?.length ?? 0}, unknown=${measurement.unknown_ids?.length ?? 0}`
+    );
+  }
   lines.push('');
 
   // Group by file type
@@ -51,7 +57,7 @@ export function formatReport(result, options = {}) {
  * Compatible with idris2-coverage JSON output
  */
 export function formatJson(result) {
-  return JSON.stringify({
+  const payload = {
     timestamp: Date.now(),
     coverage: {
       lines: {
@@ -74,5 +80,11 @@ export function formatJson(result) {
       coveredLines: f.coveredLines,
       uncoveredLines: f.uncoveredLines
     }))
-  }, null, 2);
+  };
+
+  if (result.measurement) {
+    payload.measurement = result.measurement;
+  }
+
+  return JSON.stringify(payload, null, 2);
 }

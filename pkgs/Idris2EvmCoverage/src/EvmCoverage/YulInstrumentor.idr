@@ -25,6 +25,8 @@ import System.File
 import System
 
 import EvmCoverage.Runtime
+import EvmCoverage.Types
+import EvmCoverage.YulMapper
 
 %default covering
 
@@ -170,6 +172,9 @@ generateCounterIncrement idx =
   in "        // PROFILE: increment counter " ++ show idx ++ "\n" ++
      "        mstore(" ++ offset ++ ", add(mload(" ++ offset ++ "), 1))\n"
 
+generateCounterIncrementLines : Nat -> List String
+generateCounterIncrementLines idx = lines (generateCounterIncrement idx)
+
 -- =============================================================================
 -- Profile Flush Function Generation
 -- =============================================================================
@@ -180,17 +185,15 @@ generateFlushFunction : Nat -> String
 generateFlushFunction numCounters =
   let counterReads = generateCounterReads numCounters
       eventEmit = generateEventEmit numCounters
-  in """
-      // @source: ProfileInstrumentation:0:0--0:0
-      function __profile_flush(v0) -> result {
-        // Copy counters to memory starting at 0x2000 for event data
-        // Format: offset (32) + length (32) + data (numCounters * 32)
-""" ++ counterReads ++ """
-        // Emit ProfileFlush event
-""" ++ eventEmit ++ """
-        result := 0
-      }
-"""
+  in "      // @source: ProfileInstrumentation:0:0--0:0\n" ++
+     "      function __profile_flush(__profile_arg0) -> __profile_result {\n" ++
+     "        // Copy counters to memory starting at 0x2000 for event data\n" ++
+     "        // Format: offset (32) + length (32) + data (numCounters * 32)\n" ++
+     counterReads ++
+     "        // Emit ProfileFlush event\n" ++
+     eventEmit ++
+     "        __profile_result := 0\n" ++
+     "      }\n"
   where
     generateCounterReads : Nat -> String
     generateCounterReads Z = ""
@@ -222,39 +225,313 @@ instrumentFunction funcIdx lineNum line =
 
 ||| Instrument entire Yul content
 ||| Adds counter increments at function entries and adds flush function
-instrumentYul : String -> String
-instrumentYul content =
+shortStaticFuncName : String -> String
+shortStaticFuncName funcName =
+  case reverse (forget $ split (== '.') funcName) of
+    (x :: _) => x
+    [] => funcName
+
+lastSegmentBy : Char -> String -> String
+lastSegmentBy ch s =
+  case reverse (forget $ split (== ch) s) of
+    (x :: _) => x
+    [] => s
+
+dropLeadingUPrefix : String -> String
+dropLeadingUPrefix s =
+  if isPrefixOf "u_" s
+     then substr 2 (length s `minus` 2) s
+     else s
+
+normalizeStaticFuncName : String -> String
+normalizeStaticFuncName funcName =
+  case reverse (forget $ split (== '.') funcName) of
+    [] => lastSegmentBy ':' funcName
+    (rawFunc :: revModules) =>
+      let baseFunc = lastSegmentBy ':' rawFunc
+          modulePath = joinBy "." (reverse revModules)
+      in if null modulePath then baseFunc else modulePath ++ "." ++ baseFunc
+
+operatorAliases : String -> String -> String -> List String
+operatorAliases mangled modulePath name =
+  if (modulePath == "Prelude.Types" || modulePath == "Prelude.EqOrd") && isInfixOf "Eq" name
+     then ["=="]
+  else if modulePath == "Prelude.EqOrd" && isInfixOf "_u____Ord_" mangled
+     then [">="]
+  else if modulePath == "Prelude.EqOrd" && isInfixOf "_u___Ord_" mangled
+     then [">"]
+  else if modulePath == "Prelude.Types.SnocList" && name == "___"
+     then ["(<>>)"]
+  else if modulePath == "Prelude.Interfaces.Bool.Semigroup" && isInfixOf "Semigroup" name
+     then ["<+>"]
+  else []
+
+specializationBase : String -> List String
+specializationBase name =
+  if isPrefixOf "prim__" name
+     then []
+     else case forget (split (== '_') name) of
+            (base :: _) =>
+              if base /= name && not (null base)
+                 then [base]
+                 else []
+            [] => []
+
+runtimeNameCandidates : String -> List String
+runtimeNameCandidates mangled =
+  case parseYulFuncName mangled of
+    Nothing => [mangled]
+    Just f =>
+      let base = dropLeadingUPrefix f.funcName
+          shortNames = [base, f.funcName] ++ operatorAliases mangled f.modulePath base ++ specializationBase base
+          qualify : String -> String
+          qualify nm =
+            if null f.modulePath then nm else f.modulePath ++ "." ++ nm
+          qualifiedNames = map qualify shortNames
+      in nub $ filter (not . null) (qualifiedNames ++ shortNames)
+
+data BranchTag = BTCase0 | BTCase1 | BTDefault | BTUnknown
+
+Eq BranchTag where
+  BTCase0 == BTCase0 = True
+  BTCase1 == BTCase1 = True
+  BTDefault == BTDefault = True
+  BTUnknown == BTUnknown = True
+  _ == _ = False
+
+record QueuedBranch where
+  constructor MkQueuedBranch
+  branchId : String
+  branchTag : BranchTag
+  materializable : Bool
+
+branchPatternLabel : String -> String
+branchPatternLabel pattern =
+  let beforeSpan = fst (break (== '@') pattern)
+      beforeOrigin = fst (break (== '[') beforeSpan)
+  in trim beforeOrigin
+
+tagFromBranchLabel : String -> BranchTag
+tagFromBranchLabel raw =
+  let label = trim raw in
+  if label == "1" || label == "True"
+     then BTCase1
+  else if label == "0" || label == "False"
+     then BTCase0
+  else if label == "default"
+     then BTDefault
+  else if label == "_builtin.JUST" || label == "_builtin.CONS"
+       || label == "Prelude.Types.Right"
+       || label == "Subcontract.Core.Outcome.Fail"
+     then BTCase1
+  else if label == "_builtin.NOTHING" || label == "_builtin.NIL"
+       || label == "Prelude.Types.Left"
+       || label == "Subcontract.Core.Outcome.Ok"
+     then BTCase0
+  else BTUnknown
+
+tagForBranch : ClassifiedBranch -> BranchTag
+tagForBranch branch = tagFromBranchLabel (branchPatternLabel branch.pattern)
+
+isMaterializableBranchLabel : String -> Bool
+isMaterializableBranchLabel raw =
+  let label = trim raw in
+  label == "1" || label == "0" || label == "default" || label == "True" || label == "False"
+
+isMaterializableBranch : ClassifiedBranch -> Bool
+isMaterializableBranch branch = isMaterializableBranchLabel (branchPatternLabel branch.pattern)
+
+lineBranchTag : String -> BranchTag
+lineBranchTag line =
+  let trimmed = ltrim line in
+  if isPrefixOf "case 1 {" trimmed
+     then BTCase1
+  else if isPrefixOf "case 0 {" trimmed
+     then BTCase0
+  else if isPrefixOf "default {" trimmed
+     then BTDefault
+  else BTUnknown
+
+insertQueuedBranch : String -> QueuedBranch -> List (String, List QueuedBranch) -> List (String, List QueuedBranch)
+insertQueuedBranch fn q [] = [(fn, [q])]
+insertQueuedBranch fn q ((k, vs) :: rest) =
+  if k == fn then (k, vs ++ [q]) :: rest
+  else (k, vs) :: insertQueuedBranch fn q rest
+
+buildStaticBranchQueues : List ClassifiedBranch -> List (String, List QueuedBranch)
+buildStaticBranchQueues branches =
+  foldl addQueue [] branches
+  where
+    addQueue : List (String, List QueuedBranch) -> ClassifiedBranch -> List (String, List QueuedBranch)
+    addQueue acc branch =
+      if isCanonical branch.branchClass
+         then insertQueuedBranch
+                (normalizeStaticFuncName branch.branchId.funcName)
+                (MkQueuedBranch (show branch.branchId) (tagForBranch branch) (isMaterializableBranch branch))
+                acc
+         else acc
+
+lookupQueue : String -> List (String, List QueuedBranch) -> List QueuedBranch
+lookupQueue _ [] = []
+lookupQueue fn ((k, vs) :: rest) = if fn == k then vs else lookupQueue fn rest
+
+selectQueueKey : List String -> List (String, List QueuedBranch) -> Maybe String
+selectQueueKey [] _ = Nothing
+selectQueueKey (candidate :: rest) queues =
+  if null (lookupQueue candidate queues)
+     then selectQueueKey rest queues
+     else Just candidate
+
+takeMatchingBranch : BranchTag -> List QueuedBranch -> (Maybe QueuedBranch, List QueuedBranch)
+takeMatchingBranch wanted [] = (Nothing, [])
+takeMatchingBranch wanted (x :: xs) =
+  if x.branchTag == wanted
+     then (Just x, xs)
+  else let (found, rest) = takeMatchingBranch wanted xs in
+       (found, x :: rest)
+
+takeFirstBranch : List QueuedBranch -> (Maybe QueuedBranch, List QueuedBranch)
+takeFirstBranch [] = (Nothing, [])
+takeFirstBranch (x :: xs) = (Just x, xs)
+
+takeBestBranch : BranchTag -> List QueuedBranch -> (Maybe QueuedBranch, List QueuedBranch)
+takeBestBranch wanted vs =
+  let (exact, restExact) = takeMatchingBranch wanted vs in
+  case exact of
+    Just q => (Just q, restExact)
+    Nothing =>
+      case wanted of
+        BTDefault =>
+          let (zeroLike, restZeroLike) = takeMatchingBranch BTCase0 vs in
+          case zeroLike of
+            Just q => (Just q, restZeroLike)
+            Nothing => takeFirstBranch vs
+        _ => takeFirstBranch vs
+
+consumeQueue : String -> BranchTag -> List (String, List QueuedBranch) -> (Maybe QueuedBranch, List (String, List QueuedBranch))
+consumeQueue _ _ [] = (Nothing, [])
+consumeQueue fn wanted ((k, vs) :: rest) =
+  if fn == k
+     then let (picked, remaining) = takeBestBranch wanted vs in
+          (picked, (k, remaining) :: rest)
+     else let (bid, updated) = consumeQueue fn wanted rest in (bid, (k, vs) :: updated)
+
+consumeFirstQueue : String -> List (String, List QueuedBranch) -> (Maybe QueuedBranch, List (String, List QueuedBranch))
+consumeFirstQueue _ [] = (Nothing, [])
+consumeFirstQueue fn ((k, vs) :: rest) =
+  if fn == k
+     then let (picked, remaining) = takeFirstBranch vs in
+          (picked, (k, remaining) :: rest)
+     else let (bid, updated) = consumeFirstQueue fn rest in (bid, (k, vs) :: updated)
+
+isCaseBranchLine : String -> Bool
+isCaseBranchLine line =
+  let trimmed = ltrim line
+  in isPrefixOf "case " trimmed || isPrefixOf "default {" trimmed
+
+demangledShortName : String -> String
+demangledShortName mangled =
+  case parseYulFuncName mangled of
+    Just f => f.funcName
+    Nothing => mangled
+
+record BranchRuntimeLabel where
+  constructor MkBranchRuntimeLabel
+  labelIndex : Nat
+  mangledName : String
+  demangledName : String
+  branchId : String
+
+formatBranchLabel : BranchRuntimeLabel -> String
+formatBranchLabel lbl =
+  show lbl.labelIndex ++ ",branch," ++ lbl.mangledName ++ "," ++ lbl.demangledName ++ "," ++ lbl.branchId
+
+generateBranchLabelMap : List BranchRuntimeLabel -> String
+generateBranchLabelMap labels =
+  "index,kind,mangled_name,demangled_name,branch_id\n" ++
+  unlines (map formatBranchLabel labels)
+
+instrumentBranchLines : List String ->
+                        List (String, List QueuedBranch) ->
+                        Maybe (String, String, String) ->
+                        Nat ->
+                        (List String, List BranchRuntimeLabel)
+instrumentBranchLines [] _ _ _ = ([], [])
+instrumentBranchLines (line :: rest) queues current nextIdx =
+  if isFunctionDef line
+     then let mangled = extractFuncName line
+              candidates = runtimeNameCandidates mangled
+              selectedKey = selectQueueKey candidates queues
+              demangled = fromMaybe (demangledShortName mangled) selectedKey
+              queue = maybe [] (\key => lookupQueue key queues) selectedKey
+              (mbid, queues') =
+                if length queue == 1
+                   then maybe (Nothing, queues) (\key => consumeFirstQueue key queues) selectedKey
+                   else (Nothing, queues)
+              (restOut, restLabels) =
+                instrumentBranchLines rest queues' (map (\key => (mangled, demangled, key)) selectedKey)
+                                     (case mbid of
+                                        Just qb => if qb.materializable then S nextIdx else nextIdx
+                                        Nothing => nextIdx)
+              thisLines =
+                case mbid of
+                  Just qb => if qb.materializable then line :: generateCounterIncrementLines nextIdx else [line]
+                  Nothing => [line]
+              thisLabels =
+                case mbid of
+                  Just qb => if qb.materializable then [MkBranchRuntimeLabel nextIdx mangled demangled qb.branchId] else []
+                  Nothing => []
+          in (thisLines ++ restOut, thisLabels ++ restLabels)
+     else if isCaseBranchLine line
+             then case current of
+                    Just (mangled, demangled, queueKey) =>
+                      let (mbid, queues') = consumeQueue queueKey (lineBranchTag line) queues
+                          (restOut, restLabels) =
+                            instrumentBranchLines rest queues' current
+                              (case mbid of
+                                 Just qb => if qb.materializable then S nextIdx else nextIdx
+                                 Nothing => nextIdx)
+                          thisLines =
+                            case mbid of
+                              Just qb => if qb.materializable then line :: generateCounterIncrementLines nextIdx else [line]
+                              Nothing => [line]
+                          thisLabels =
+                            case mbid of
+                              Just qb => if qb.materializable then [MkBranchRuntimeLabel nextIdx mangled demangled qb.branchId] else []
+                              Nothing => []
+                      in (thisLines ++ restOut, thisLabels ++ restLabels)
+                    Nothing =>
+                      let (restOut, restLabels) = instrumentBranchLines rest queues current nextIdx
+                      in (line :: restOut, restLabels)
+             else let (restOut, restLabels) = instrumentBranchLines rest queues current nextIdx
+                  in (line :: restOut, restLabels)
+
+instrumentYul : List ClassifiedBranch -> String -> (String, String)
+instrumentYul staticBranches content =
   let parseResult = parseYul content
-      funcs = parseResult.functions
-      numFuncs = length funcs
+      staticQueues = buildStaticBranchQueues staticBranches
       ls = lines content
-      -- FIRST: Add flush call before revert() (must be done before counter instrumentation
-      -- to preserve line structure for pattern matching)
-      withRevertFlush = insertFlushBeforeRevert ls
+      -- FIRST: Add flush calls on hard exits in runtime primitives before counter
+      -- instrumentation to preserve line structure for branch matching.
+      withExitFlush = insertFlushBeforeExit ls Nothing
       -- Re-split to flatten any embedded newlines from flush insertion
-      flattenedLines = lines (unlines withRevertFlush)
+      flattenedLines = lines (unlines withExitFlush)
       -- Re-parse after modification (line numbers may have shifted)
       parseResult2 = parseYul (unlines flattenedLines)
-      funcLines = map (\f => f.startLine) parseResult2.functions
-      -- Instrument each line with counter increments
-      instrumentedLines = instrumentLines flattenedLines funcLines 0 0
-      -- Add flush function before the closing of runtime
-      withFlush = insertFlushFunction instrumentedLines parseResult2.runtimeEnd numFuncs
+      (instrumentedLines, branchLabels) = instrumentBranchLines flattenedLines staticQueues Nothing 0
+      numLabels = length branchLabels
+      -- Add flush function near the top of the runtime code block so it is in scope
+      -- before any call sites.
+      flushInsertAt = S parseResult2.runtimeStart
+      withFlush = insertFlushFunction instrumentedLines flushInsertAt numLabels
       -- Add flush call in runtime entry block after main
       withFlushCall = insertFlushCall withFlush
-  in unlines withFlushCall
+  in (unlines withFlushCall, generateBranchLabelMap branchLabels)
   where
-    instrumentLines : List String -> List Nat -> Nat -> Nat -> List String
-    instrumentLines [] _ _ _ = []
-    instrumentLines (l :: rest) funcStarts lineNum funcIdx =
-      if lineNum `elem` funcStarts
-        then (l ++ "\n" ++ generateCounterIncrement funcIdx) ::
-             instrumentLines rest funcStarts (S lineNum) (S funcIdx)
-        else l :: instrumentLines rest funcStarts (S lineNum) funcIdx
-
     insertFlushFunction : List String -> Nat -> Nat -> List String
     insertFlushFunction ls insertAt numFuncs =
-      -- Insert AFTER the closing brace of the last function (insertAt + 1)
+      -- Insert after the selected line. For runtime instrumentation this should be the
+      -- `code {` line so the helper is in scope before any calls.
       let (before, after) = splitAt (S insertAt) ls
           flushFunc = lines $ generateFlushFunction numFuncs
       in before ++ flushFunc ++ after
@@ -270,16 +547,19 @@ instrumentYul content =
             then line ++ "\n                pop(__profile_flush(0))"
             else line
 
-    -- Insert flush call before revert() inside EVM_Primitives_u_prim__revert
-    insertFlushBeforeRevert : List String -> List String
-    insertFlushBeforeRevert ls = map addFlushIfRevert ls
-      where
-        addFlushIfRevert : String -> String
-        addFlushIfRevert l =
-          let trimmed = ltrim l
-          in if isPrefixOf "revert(" trimmed
-               then "        pop(__profile_flush(0))\n" ++ l
-               else l
+    insertFlushBeforeExit : List String -> Maybe String -> List String
+    insertFlushBeforeExit [] _ = []
+    insertFlushBeforeExit (l :: rest) current =
+      let trimmed = ltrim l in
+      if isFunctionDef l
+         then let fname = extractFuncName l
+              in l :: insertFlushBeforeExit rest (Just fname)
+      else if trim l == "}" && isPrefixOf "      }" l
+         then l :: insertFlushBeforeExit rest Nothing
+      else if (current == Just "EVM_Primitives_u_prim__revert" && isPrefixOf "revert(" trimmed)
+              || (current == Just "EVM_Primitives_u_prim__return" && isPrefixOf "return(" trimmed)
+         then "        pop(__profile_flush(0))" :: l :: insertFlushBeforeExit rest current
+      else l :: insertFlushBeforeExit rest current
 
 -- =============================================================================
 -- Function Label Mapping
@@ -306,19 +586,18 @@ generateLabelMap content =
 ||| Instrument a Yul file for profiling
 ||| Returns: (instrumented Yul, label map CSV)
 export
-instrumentYulFile : String -> IO (Either String (String, String))
-instrumentYulFile path = do
+instrumentYulFile : String -> List ClassifiedBranch -> IO (Either String (String, String))
+instrumentYulFile path staticBranches = do
   Right content <- readFile path
     | Left err => pure $ Left $ "Failed to read: " ++ show err
-  let instrumented = instrumentYul content
-  let labelMap = generateLabelMap content
+  let (instrumented, labelMap) = instrumentYul staticBranches content
   pure $ Right (instrumented, labelMap)
 
 ||| Write instrumented Yul and label map to files
 export
-writeInstrumentedYul : String -> String -> String -> IO (Either String ())
-writeInstrumentedYul inputPath outputPath labelMapPath = do
-  Right (instrumented, labelMap) <- instrumentYulFile inputPath
+writeInstrumentedYul : String -> String -> String -> List ClassifiedBranch -> IO (Either String ())
+writeInstrumentedYul inputPath outputPath labelMapPath staticBranches = do
+  Right (instrumented, labelMap) <- instrumentYulFile inputPath staticBranches
     | Left err => pure $ Left err
   Right () <- writeFile outputPath instrumented
     | Left err => pure $ Left $ "Failed to write Yul: " ++ show err
@@ -382,6 +661,17 @@ getProjectDir path =
       dirParts = fromMaybe [] (init' parts)
   in if null dirParts then "." else joinBy "/" dirParts
 
+||| Make output path relative to the package root when possible.
+||| idris2-yul interprets --output-dir from the package build context, so
+||| passing a repo-relative path like "pkgs/Foo/build/exec" from inside
+||| "pkgs/Foo" creates a nested "pkgs/Foo/pkgs/Foo/build/exec" tree.
+stripProjectPrefix : String -> String -> String
+stripProjectPrefix projectDir outputDir =
+  let projectPrefix = projectDir ++ "/"
+  in if isPrefixOf projectPrefix outputDir
+       then substr (length projectPrefix) (length outputDir `minus` length projectPrefix) outputDir
+       else outputDir
+
 ||| Find pack install base directory
 ||| Pack installs to ~/.local/state/pack/install/<hash>/
 findPackInstallBase : IO (Maybe String)
@@ -409,6 +699,12 @@ buildPackagePath basePath = do
     | Left _ => pure ""
   let paths = filter (not . null) $ map trim $ lines content
   pure $ joinBy ":" paths
+
+readLogTail : String -> IO String
+readLogTail path = do
+  Right log <- readFile path | Left _ => pure ""
+  let ls = lines log
+  pure $ unlines $ reverse $ take 20 $ reverse ls
 
 ||| Discover package paths from pack install directory
 ||| Falls back to idris2 --list-packages if pack not found
@@ -446,7 +742,8 @@ discoverPackagePaths = do
 findLatestTempIpkg : String -> IO (Maybe String)
 findLatestTempIpkg projectDir = do
   let tmpFile = "/tmp/latest-temp-ipkg.txt"
-  let cmd = "ls -t " ++ projectDir ++ "/dumpcases-temp-*.ipkg 2>/dev/null | head -1 > " ++ tmpFile
+  let cmd = "ls -t " ++ projectDir ++ "/dumpcases-temp-*.ipkg 2>/dev/null"
+         ++ " | grep -v -- '-yul-' | head -1 > " ++ tmpFile
   _ <- system cmd
   Right content <- readFile tmpFile
     | Left _ => pure Nothing
@@ -454,6 +751,41 @@ findLatestTempIpkg projectDir = do
   if null path
     then pure Nothing
     else pure $ Just path
+
+sanitizeIpkgForYul : String -> IO (Either String String)
+sanitizeIpkgForYul ipkgPath = do
+  Right content <- readFile ipkgPath
+    | Left err => pure $ Left $ "Failed to read build ipkg: " ++ show err
+  t <- time
+  let yulIpkgPath = substr 0 (length ipkgPath `minus` 5) ipkgPath ++ "-yul-" ++ show t ++ ".ipkg"
+  let sanitized =
+        unlines $
+          filter (\line => not (isPrefixOf "opts =" (trim line))) (lines content)
+  Right () <- writeFile yulIpkgPath sanitized
+    | Left err => pure $ Left $ "Failed to write Yul build ipkg: " ++ show err
+  pure $ Right yulIpkgPath
+
+hasExecutableMain : String -> IO Bool
+hasExecutableMain ipkgPath = do
+  Right content <- readFile ipkgPath
+    | Left _ => pure False
+  let ls = map trim (lines content)
+  pure (any (isPrefixOf "main =") ls && any (isPrefixOf "executable =") ls)
+
+cleanupYulArtifacts : String -> IO ()
+cleanupYulArtifacts outputDir = do
+  _ <- system $ "rm -f " ++ outputDir ++ "/*.yul " ++ outputDir ++ "/*.anf"
+  pure ()
+
+findLatestGeneratedYul : String -> IO (Maybe String)
+findLatestGeneratedYul outputDir = do
+  let tmpFile = "/tmp/latest-generated-yul.txt"
+  let cmd = "ls -t " ++ outputDir ++ "/*.yul 2>/dev/null | grep -v -- '-instrumented.yul' | head -1 > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure Nothing
+  let path = trim content
+  if null path then pure Nothing else pure (Just path)
 
 ||| Generate Yul from Idris2 project using idris2-yul --codegen yul
 ||| Note: idris2-yul is a custom compiler with yul backend built-in
@@ -465,35 +797,55 @@ generateYul : String -> String -> IO (Either String String)
 generateYul ipkgPath outputDir = do
   -- Extract project directory from ipkg path
   let projectDir = getProjectDir ipkgPath
-  -- Find the temp ipkg generated by Phase 1 (dumpcases)
-  -- This has the DumpcasesWrapper main that calls all functions
-  mTempIpkg <- findLatestTempIpkg projectDir
+  originalHasMain <- hasExecutableMain ipkgPath
+  -- Runtime coverage should prefer the project's real executable when it exists.
+  -- Fall back to the dumpcases wrapper only for library-style packages with no main.
+  mTempIpkg <- if originalHasMain then pure Nothing else findLatestTempIpkg projectDir
   let actualIpkg = fromMaybe ipkgPath mTempIpkg
-  -- The yul file will be named after the package, which is "dumpcases-temp"
-  let yulPath = outputDir ++ "/dumpcases-temp.yul"
+  Right yulIpkg <- sanitizeIpkgForYul actualIpkg
+    | Left err => pure $ Left err
+  let buildIpkg = getBaseName yulIpkg ++ ".ipkg"
+  let outputDirRel = stripProjectPrefix projectDir outputDir
+  let outputDirForBuild = if null outputDirRel then "." else outputDirRel
   -- Discover package paths from pack's idris2 installation
   paths <- discoverPackagePaths
   let pkgPath = joinBy ":" paths
+  cleanupYulArtifacts outputDir
   -- Set IDRIS2_PACKAGE_PATH and call idris2-yul
+  let buildLog = outputDir ++ "/idris2-yul-build.log"
   let cmd = if null pkgPath
-              then "idris2-yul --codegen yul --output-dir " ++ outputDir ++ " --build " ++ actualIpkg
-              else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" idris2-yul --codegen yul --output-dir " ++ outputDir ++ " --build " ++ actualIpkg
+              then "mkdir -p " ++ outputDir
+                   ++ " && cd " ++ projectDir
+                   ++ " && idris2-yul --codegen yul --output-dir " ++ outputDirForBuild ++ " --build " ++ buildIpkg
+                   ++ " > " ++ buildLog ++ " 2>&1"
+              else "mkdir -p " ++ outputDir
+                   ++ " && cd " ++ projectDir
+                   ++ " && IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" idris2-yul --codegen yul --output-dir " ++ outputDirForBuild ++ " --build " ++ buildIpkg
+                   ++ " > " ++ buildLog ++ " 2>&1"
   exitCode <- system cmd
   if exitCode == 0
-    then pure $ Right yulPath
-    else pure $ Left $ "Yul generation failed (exit " ++ show exitCode ++ ")"
+    then do
+      mYulPath <- findLatestGeneratedYul outputDir
+      case mYulPath of
+        Just yulPath => pure $ Right yulPath
+        Nothing => pure $ Left "Yul generation succeeded but no .yul file was produced"
+    else do
+      logTail <- readLogTail buildLog
+      pure $ Left $
+        "Yul generation failed (exit " ++ show exitCode ++ ")"
+        ++ (if null logTail then "" else "\nYul build log tail:\n" ++ logTail)
 
 ||| Full pipeline: Generate Yul → Instrument → Write output files
 ||| Returns: (instrumented yul path, label map path)
 export
-generateAndInstrumentYul : String -> String -> IO (Either String (String, String))
-generateAndInstrumentYul ipkgPath outputDir = do
+generateAndInstrumentYul : String -> String -> List ClassifiedBranch -> IO (Either String (String, String))
+generateAndInstrumentYul ipkgPath outputDir staticBranches = do
   Right yulPath <- generateYul ipkgPath outputDir
     | Left err => pure $ Left err
   let baseName = substr 0 (length yulPath `minus` 4) yulPath  -- Remove .yul
   let instrPath = baseName ++ "-instrumented.yul"
   let labelPath = baseName ++ "-labels.csv"
-  Right () <- writeInstrumentedYul yulPath instrPath labelPath
+  Right () <- writeInstrumentedYul yulPath instrPath labelPath staticBranches
     | Left err => pure $ Left err
   pure $ Right (instrPath, labelPath)
 
@@ -508,22 +860,27 @@ compileYulToBytecode : String -> String -> IO (Either String String)
 compileYulToBytecode yulPath outputDir = do
   let baseName = getBaseName yulPath
   let binPath = outputDir ++ "/" ++ baseName ++ ".bin"
+  let solcLog = outputDir ++ "/solc-build.log"
   -- For strict-assembly mode, solc outputs to stdout, redirect to file
-  let cmd = "solc --strict-assembly --optimize " ++ yulPath ++ " --bin 2>&1 > " ++ binPath
+  let cmd = "solc --strict-assembly --optimize " ++ yulPath ++ " --bin > " ++ binPath ++ " 2> " ++ solcLog
   -- First check for syntax errors
-  let checkCmd = "solc --strict-assembly " ++ yulPath ++ " 2>&1"
+  let checkCmd = "solc --strict-assembly " ++ yulPath ++ " > /dev/null 2> " ++ solcLog
   checkResult <- system checkCmd
   if checkResult /= 0
     then do
-      -- Get the actual error message
-      let errCmd = "solc --strict-assembly " ++ yulPath ++ " 2>&1 | head -10"
-      _ <- system errCmd
-      pure $ Left $ "Yul syntax error (instrumentation bug)"
+      logTail <- readLogTail solcLog
+      pure $ Left $
+        "Yul syntax error (instrumentation bug)"
+        ++ (if null logTail then "" else "\nsolc log tail:\n" ++ logTail)
     else do
       exitCode <- system cmd
       if exitCode == 0
         then pure $ Right binPath
-        else pure $ Left $ "solc compilation failed (exit " ++ show exitCode ++ ")"
+        else do
+          logTail <- readLogTail solcLog
+          pure $ Left $
+            "solc compilation failed (exit " ++ show exitCode ++ ")"
+            ++ (if null logTail then "" else "\nsolc log tail:\n" ++ logTail)
 
 -- =============================================================================
 -- Phase 2.4: Idris2 EVM Test Execution
@@ -571,47 +928,97 @@ public export
 record CoverageAnalysis where
   constructor MkCoverageAnalysis
   staticBranches : Nat
+  materializedBranches : Nat
+  branchHits : Nat
   functionsHit : Nat
   totalFunctions : Nat
   coveragePercent : Nat
+  coveredBranchIds : List String
+  unobservableBranchIds : List String
+  materializedBranchIds : List String
   uncoveredFunctions : List String
 
 ||| Run full coverage pipeline: Yul生成 → 計装 → solc → test → gap analysis
+groupStaticFunctions : List ClassifiedBranch -> List String
+groupStaticFunctions branches =
+  foldl addFn [] (filter (\b => isCanonical b.branchClass) branches)
+  where
+    addFn : List String -> ClassifiedBranch -> List String
+    addFn acc branch =
+      let fn = shortStaticFuncName branch.branchId.funcName
+      in if elem fn acc then acc else fn :: acc
+
 export
-runFullPipeline : String -> String -> List (String, Nat) -> IO (Either String CoverageAnalysis)
-runFullPipeline ipkgPath outputDir staticFuncs = do
+runFullPipeline : String -> String -> List ClassifiedBranch -> IO (Either String CoverageAnalysis)
+runFullPipeline ipkgPath outputDir staticBranches = do
+  let canonicalBranches = filter (\b => isCanonical b.branchClass) staticBranches
+  let staticDenominatorIds = map (show . (.branchId)) canonicalBranches
+  let totalFunctionsStatic = length (groupStaticFunctions canonicalBranches)
+  putStrLn $ "[runFullPipeline] canonical_branches=" ++ show (length canonicalBranches)
+  putStrLn "[runFullPipeline] stage=generate_and_instrument"
   -- Step 1: Generate and instrument Yul
-  Right (instrPath, labelPath) <- generateAndInstrumentYul ipkgPath outputDir
+  Right (instrPath, labelPath) <- generateAndInstrumentYul ipkgPath outputDir canonicalBranches
     | Left err => pure $ Left $ "Instrumentation failed: " ++ err
 
+  putStrLn $ "[runFullPipeline] generated=" ++ instrPath
+  putStrLn "[runFullPipeline] stage=compile"
   -- Step 2: Compile with solc
   Right _ <- compileYulToBytecode instrPath outputDir
     | Left err => pure $ Left $ "Compilation failed: " ++ err
 
+  putStrLn "[runFullPipeline] stage=execute"
   -- Step 3: Run instrumented bytecode with idris2-evm-run
   let binPath = instrPath ++ ".bin"
   let traceOutput = outputDir ++ "/coverage-trace.csv"
   testResult <- runIdrisEvmTest binPath traceOutput
 
+  putStrLn "[runFullPipeline] stage=parse"
   -- Step 4: Parse events and analyze gaps
   case testResult of
     Left err => do
       -- No test execution, return static-only analysis
-      let uncovered = map fst staticFuncs
-      pure $ Right $ MkCoverageAnalysis (length staticFuncs) 0 (length staticFuncs) 0 uncovered
+      let uncovered = groupStaticFunctions canonicalBranches
+      pure $ Right $ MkCoverageAnalysis
+                       (length canonicalBranches)
+                       0
+                       0
+                       0
+                       totalFunctionsStatic
+                       0
+                       []
+                       staticDenominatorIds
+                       []
+                       uncovered
     Right tracePath => do
       -- Parse ProfileFlush events from trace output
-      coverageResult <- analyzeCoverageFromFile tracePath labelPath
+      coverageResult <- analyzeBranchCoverageFromFile tracePath labelPath staticDenominatorIds
       case coverageResult of
         Left err => do
           putStrLn $ "Coverage analysis error: " ++ err
-          let uncovered = map fst staticFuncs
-          pure $ Right $ MkCoverageAnalysis (length staticFuncs) 0 (length staticFuncs) 0 uncovered
+          let uncovered = groupStaticFunctions canonicalBranches
+          pure $ Right $ MkCoverageAnalysis
+                           (length canonicalBranches)
+                           0
+                           0
+                           0
+                           totalFunctionsStatic
+                           0
+                           []
+                           staticDenominatorIds
+                           []
+                           uncovered
         Right result => do
-          -- Convert CoverageResult to CoverageAnalysis
-          let hitFuncs = result.hitFunctions
-          let totalFuncs = result.totalFunctions
+          let hitFuncs = length result.coveredFunctions
+          let totalFuncs = totalFunctionsStatic
           let pct = cast {to=Nat} (floor result.coveragePercent)
-          -- Find uncovered functions (hit count = 0)
-          let uncovered = map (.funcName) $ filter (\h => h.executedCount == 0) result.hits
-          pure $ Right $ MkCoverageAnalysis (length staticFuncs) hitFuncs totalFuncs pct uncovered
+          pure $ Right $ MkCoverageAnalysis
+                           (length canonicalBranches)
+                           result.materializedTotalBranches
+                           result.hitBranches
+                           hitFuncs
+                           totalFuncs
+                           pct
+                           result.coveredBranchIds
+                           result.unobservableBranchIds
+                           result.materializedBranchIds
+                           result.uncoveredFunctions

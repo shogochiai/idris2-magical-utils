@@ -110,37 +110,86 @@ pathToModuleName path =
 ||| Generate test Main.idr content that imports the specified test module
 ||| This is written to /tmp, never touches the original Main.idr
 generateTestMainContent : String -> String
-generateTestMainContent testModuleName = unlines
-  [ "||| Auto-generated test entry point for coverage analysis"
-  , "module Main"
-  , ""
-  , "import " ++ testModuleName  -- Import test module (not public to avoid name clashes)
-  , ""
-  , "%default covering"
-  , ""
-  , "-- FFI bridge for code retention"
-  , "%foreign \"C:ic_ffi_get_arg,libic0\""
-  , "prim__ic_ffi_get_arg : Int -> PrimIO Int"
-  , ""
-  , "||| Run all tests - exported for Candid call"
-  , "||| Wraps " ++ testModuleName ++ ".runAllTests with IO for canister compatibility"
-  , "export"
-  , "runTests : IO (Int, Int)"
-  , "runTests = do"
-  , "  let (passed, failed) = " ++ testModuleName ++ ".runAllTests"
-  , "  pure (cast passed, cast failed)"
-  , ""
-  , "||| Force code retention to prevent DCE"
-  , "forceRetain : IO ()"
-  , "forceRetain = do"
-  , "  v <- primIO $ prim__ic_ffi_get_arg 7"
-  , "  when (v == (-999999)) $ do"
-  , "    _ <- Main.runTests"  -- Explicit to avoid clash with Tests.AllTests.runTests
-  , "    pure ()"
-  , ""
-  , "main : IO ()"
-  , "main = forceRetain"
-  ]
+generateTestMainContent testModuleName =
+  let maxTestSlots : Int
+      maxTestSlots = 256
+      batchSizes : List Int
+      batchSizes = [8, 4, 2, 1]
+      batchSpecs : List (Int, Int)
+      batchSpecs =
+        concatMap
+          (\size =>
+            let batchCount = maxTestSlots `div` size
+            in map (\idx => (size, idx * size)) [0 .. batchCount - 1])
+          batchSizes
+      runChunkLines =
+        [ "runChunk : Nat -> Nat -> IO (Int, Int)"
+        , "runChunk start count = do"
+        , "  let batch = take count (drop start " ++ testModuleName ++ ".allTests)"
+        , "  if null batch then pure (0, 0) else do"
+        , "    rs <- traverse (\\(_, t) => t) batch"
+        , "    let passed = length (filter id rs)"
+        , "        failed = length (filter not rs)"
+        , "    pure (cast passed, cast failed)"
+        ]
+      batchExportLines =
+        concatMap
+          (\(size, start) =>
+            [ ""
+            , "export"
+            , "runTestBatch" ++ show size ++ "_" ++ show start ++ " : IO (Int, Int)"
+            , "runTestBatch" ++ show size ++ "_" ++ show start ++ " = runChunk " ++ show start ++ " " ++ show size
+            ])
+          batchSpecs
+      retainBatchLines =
+        map (\(size, start) => "    _ <- Main.runTestBatch" ++ show size ++ "_" ++ show start) batchSpecs
+  in unlines $
+       [ "||| Auto-generated test entry point for coverage analysis"
+       , "module Main"
+       , ""
+       , "import " ++ testModuleName  -- Import test module (not public to avoid name clashes)
+       , "import Data.List"
+       , ""
+       , "%default covering"
+       , ""
+       , "-- FFI bridge for code retention"
+       , "%foreign \"C:ic_ffi_get_arg,libic0\""
+       , "prim__ic_ffi_get_arg : Int -> PrimIO Int"
+       , ""
+       , "||| Run all tests - exported for Candid call"
+       , "||| Uses the standardized canister test entrypoint from " ++ testModuleName
+       , "export"
+       , "runTests : IO (Int, Int)"
+       , "runTests = " ++ testModuleName ++ ".runTests"
+       , ""
+       , "export"
+       , "runMinimalTests : IO (Int, Int)"
+       , "runMinimalTests = " ++ testModuleName ++ ".runMinimalTests"
+       , ""
+       , "export"
+       , "runTrivialTest : IO (Int, Int)"
+       , "runTrivialTest = " ++ testModuleName ++ ".runTrivialTest"
+       , ""
+       ]
+       ++ runChunkLines
+       ++ batchExportLines
+       ++
+       [ ""
+       , "||| Force code retention to prevent DCE"
+       , "forceRetain : IO ()"
+       , "forceRetain = do"
+       , "  v <- primIO $ prim__ic_ffi_get_arg 7"
+       , "  when (v == (-999999)) $ do"
+       , "    _ <- Main.runTests"  -- Explicit to avoid clash with Tests.AllTests.runTests
+       , "    _ <- Main.runMinimalTests"
+       , "    _ <- Main.runTrivialTest"
+       ]
+       ++ retainBatchLines ++
+       [ "    pure ()"
+       , ""
+       , "main : IO ()"
+       , "main = forceRetain"
+       ]
 
 -- =============================================================================
 -- Export Function Parsing (for canister_entry.c generation)
@@ -158,6 +207,25 @@ record ExportedFunc where
 public export
 Show ExportedFunc where
   show ef = ef.name ++ " : " ++ ef.returnType ++ " [" ++ (if ef.isQuery then "query" else "update") ++ "]" ++ (if ef.fromDid then " (stub)" else "")
+
+isTestHarnessExport : String -> Bool
+isTestHarnessExport name =
+  name == "runTests" ||
+  name == "runMinimalTests" ||
+  name == "runTrivialTest" ||
+  isPrefixOf "runTestBatch" name
+
+||| RefC-level arity for generated top-level symbols.
+||| We use this instead of guessing from Idris types because `IO a`
+||| may compile either to a unary world-accepting symbol or to a nullary
+||| symbol returning a closure that must later be applied to the world.
+public export
+data RefCArity = RefCNullary | RefCUnary
+
+public export
+Show RefCArity where
+  show RefCNullary = "nullary"
+  show RefCUnary = "unary"
 
 ||| Convert DidMethod to ExportedFunc for stub generation
 ||| Used when building test canisters that need all .did methods as entry points
@@ -222,8 +290,8 @@ parseExportedFunctions content =
 ||| @ef Exported function info from Idris
 ||| @didMethods Parsed .did methods for Candid-aware reply generation
 ||| @typeDefs Parsed .did type definitions for dynamic Candid encoding
-generateFuncEntry : String -> ExportedFunc -> List DidMethod -> List TypeDef -> String
-generateFuncEntry modulePrefix ef didMethods typeDefs =
+generateFuncEntry : String -> List (String, RefCArity) -> ExportedFunc -> List DidMethod -> List TypeDef -> String
+generateFuncEntry modulePrefix cArities ef didMethods typeDefs =
   let queryOrUpdate = if ef.isQuery then "query" else "update"
       cFuncName = modulePrefix ++ "_" ++ ef.name  -- RefC mangling: Module_function
       replyCode = generateReplyCode ef didMethods typeDefs
@@ -246,13 +314,27 @@ generateFuncEntry modulePrefix ef didMethods typeDefs =
     -- Generate code to actually call the Idris function (for profiling)
     generateFuncCall : String -> String -> String
     generateFuncCall funcName retType =
-      -- Call the Idris function via trampoline to trigger internal function traces
-      unlines
-        [ "    // Actually call Idris function for profiling"
-        , "    void* _world = idris2_newReference((void*)0);"
-        , "    void* _result = idris2_trampoline(" ++ funcName ++ "(_world));"
-        , "    (void)_result; // TODO: Extract actual return value"
-        ]
+      case lookup funcName cArities of
+        Just RefCUnary =>
+          unlines
+            [ "    // RefC unary symbol: accepts world directly and returns final value"
+            , "    void* _world = idris2_newReference((void*)0);"
+            , "    void* _result = idris2_trampoline(" ++ funcName ++ "(_world));"
+            , "    (void)_result;"
+            ]
+        Just RefCNullary =>
+          unlines
+            [ "    // RefC nullary symbol: returns an IO closure, then apply world"
+            , "    void* _world = idris2_newReference((void*)0);"
+            , "    void* _action = idris2_trampoline(" ++ funcName ++ "());"
+            , "    void* _result = idris2_apply_closure(_action, _world);"
+            , "    (void)_result;"
+            ]
+        Nothing =>
+          unlines
+            [ "    debug_log(\"Unsupported RefC arity for " ++ funcName ++ "\");"
+            , "    ic0_trap((int32_t)\"Unsupported RefC arity\", 22);"
+            ]
   where
     -- Generate Candid reply code based on .did return type if available
     generateReplyCode : ExportedFunc -> List DidMethod -> List TypeDef -> String
@@ -265,7 +347,7 @@ generateFuncEntry modulePrefix ef didMethods typeDefs =
         Nothing =>
           -- Fallback to heuristic based on Idris return type
           if isInfixOf "(Int, Int)" func.returnType || isInfixOf "(Nat, Nat)" func.returnType
-            then "reply_text(\"42,0\"); // DEBUG: Simple string reply"
+            then "int32_t _passed = 0; int32_t _failed = 0; extract_int_pair(_result, &_passed, &_failed); reply_int_pair(_passed, _failed);"
             else if isInfixOf "String" func.returnType
               then "reply_text(\"ok\"); // String result"
               else "reply_text(\"done\"); // Generic result (no .did match)"
@@ -275,15 +357,23 @@ generateFuncEntry modulePrefix ef didMethods typeDefs =
 ||| @exports List of exported functions from Idris
 ||| @didMethods Parsed .did methods for Candid-aware reply generation
 ||| @typeDefs Parsed .did type definitions for dynamic Candid encoding
-generateCanisterEntryC : String -> List ExportedFunc -> List DidMethod -> List TypeDef -> String
-generateCanisterEntryC modulePrefix exports didMethods typeDefs =
-  let funcEntries = fastConcat $ map (\ef => generateFuncEntry modulePrefix ef didMethods typeDefs) exports
+generateCanisterEntryC : String -> List (String, RefCArity) -> List ExportedFunc -> List DidMethod -> List TypeDef -> String
+generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs =
+  let funcEntries = fastConcat $ map (\ef => generateFuncEntry modulePrefix cArities ef didMethods typeDefs) exports
       header = canisterEntryHeader
       -- Generate extern declarations only for actual Idris functions (not .did stubs)
       idrisExports = filter (\ef => not ef.fromDid) exports
-      funcExterns = unlines $ map (\ef => "extern void* " ++ modulePrefix ++ "_" ++ ef.name ++ "(void*);") idrisExports
+      funcExterns = unlines $ map mkExtern idrisExports
   in header ++ "\n/* Idris Function Externs */\n" ++ funcExterns ++ "\n" ++ funcEntries
   where
+    mkExtern : ExportedFunc -> String
+    mkExtern ef =
+      let funcName = modulePrefix ++ "_" ++ ef.name
+      in case lookup funcName cArities of
+           Just RefCUnary => "extern void* " ++ funcName ++ "(void*);"
+           Just RefCNullary => "extern void* " ++ funcName ++ "(void);"
+           Nothing => "/* missing RefC arity: " ++ funcName ++ " */"
+
     canisterEntryHeader : String
     canisterEntryHeader = unlines
       [ "/*"
@@ -292,6 +382,7 @@ generateCanisterEntryC modulePrefix exports didMethods typeDefs =
       , " */"
       , "#include <stdint.h>"
       , "#include <string.h>"
+      , "#include <stdio.h>"
       , ""
       , "/* IC0 Imports */"
       , "extern void ic0_msg_reply(void);"
@@ -316,7 +407,9 @@ generateCanisterEntryC modulePrefix exports didMethods typeDefs =
       , "typedef void* Value;"
       , "extern void* __mainExpression_0(void);"
       , "extern void* idris2_trampoline(void*);"
+      , "extern void* idris2_apply_closure(void*, void*);"
       , "extern void* idris2_newReference(void*);"
+      , "extern int idris2_extractInt(void*);"
       , ""
       , "static int idris2_initialized = 0;"
       , ""
@@ -348,11 +441,7 @@ generateCanisterEntryC modulePrefix exports didMethods typeDefs =
       , ""
       , "/* RefC Value extraction helpers */"
       , "static int32_t extract_int(void* v) {"
-      , "    if (idris2_vp_is_unboxed(v)) {"
-      , "        return idris2_vp_to_Int32(v);"
-      , "    }"
-      , "    // Boxed Int32 - skip 4-byte header"
-      , "    return *((int32_t*)((char*)v + 4));"
+      , "    return (int32_t)idris2_extractInt(v);"
       , "}"
       , ""
       , "static void extract_int_pair(void* v, int32_t* a, int32_t* b) {"
@@ -361,33 +450,11 @@ generateCanisterEntryC modulePrefix exports didMethods typeDefs =
       , "    *b = extract_int(con->args[1]);"
       , "}"
       , ""
-      , "/* Reply with Candid record { passed : int; failed : int } */"
+      , "/* Reply with text \"passed,failed\" so dfx can always decode it */"
       , "static void reply_int_pair(int32_t passed, int32_t failed) {"
-      , "    uint8_t buf[64];"
-      , "    int pos = 0;"
-      , "    // DIDL magic"
-      , "    buf[pos++] = 'D'; buf[pos++] = 'I'; buf[pos++] = 'D'; buf[pos++] = 'L';"
-      , "    // Type table: 1 type (record)"
-      , "    buf[pos++] = 0x01;"
-      , "    buf[pos++] = 0x6c; // record type"
-      , "    buf[pos++] = 0x02; // 2 fields"
-      , "    // Field 'failed' hash = 0xa2a7d6c4 (must be sorted by hash)"
-      , "    buf[pos++] = 0xc4; buf[pos++] = 0xd6; buf[pos++] = 0xa7; buf[pos++] = 0xa2;"
-      , "    buf[pos++] = 0x75; // int type"
-      , "    // Field 'passed' hash = 0xc7c6e1c6"
-      , "    buf[pos++] = 0xc6; buf[pos++] = 0xe1; buf[pos++] = 0xc6; buf[pos++] = 0xc7;"
-      , "    buf[pos++] = 0x75; // int type"
-      , "    // Args: 1 arg of type 0"
-      , "    buf[pos++] = 0x01; buf[pos++] = 0x00;"
-      , "    // Values in field hash order: failed, passed"
-      , "    int32_t v = failed;"
-      , "    do { buf[pos++] = (v & 0x7f) | ((v >> 7) ? 0x80 : 0); v >>= 7; } while (v > 0);"
-      , "    if (pos == 21) buf[pos++] = 0; // ensure at least 1 byte for 0"
-      , "    v = passed;"
-      , "    do { buf[pos++] = (v & 0x7f) | ((v >> 7) ? 0x80 : 0); v >>= 7; } while (v > 0);"
-      , "    if (failed == 0 && passed == 0) { buf[pos-1] = 0; } // fix zero case"
-      , "    ic0_msg_reply_data_append((int32_t)buf, pos);"
-      , "    ic0_msg_reply();"
+      , "    char buf[64];"
+      , "    snprintf(buf, sizeof(buf), \"%d,%d\", passed, failed);"
+      , "    reply_text(buf);"
       , "}"
       , ""
       , "/* Canister Lifecycle */"
@@ -525,22 +592,32 @@ compileToRefC opts buildDir = do
     compileWithIpkg : BuildOptions -> String -> IO (Either String String)
     compileWithIpkg opts' ipkg = do
       -- For test builds, ipkg is in temp dir (e.g., /tmp/idris2-icwasm-test-xxx/test_build.ipkg)
-      -- Build output goes to that directory's build/ folder
+      -- RefC codegen may still emit C under the project build dir even when the
+      -- ipkg lives in a temp directory, so search both locations.
       let ipkgDir = dirname ipkg
-      let buildSearchDir = if ipkgDir /= opts'.projectDir && not (null ipkgDir)
-            then ipkgDir ++ "/build"
-            else opts'.projectDir ++ "/build"
+      let candidateDirs =
+            if ipkgDir /= opts'.projectDir && not (null ipkgDir)
+               then [opts'.projectDir ++ "/build", ipkgDir ++ "/build"]
+               else [opts'.projectDir ++ "/build"]
+      let findCmd =
+            "sh -c 'find "
+            ++ joinBy " " candidateDirs
+            ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
+      let clearCmd =
+            "sh -c 'find "
+            ++ joinBy " " candidateDirs
+            ++ " -name \"*.c\" -delete 2>/dev/null || true'"
 
       -- Use pack (not bare idris2) so pack.toml dependencies are resolved
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
                 "pack --cg refc build " ++ ipkg
 
+      _ <- executeCommand clearCmd
       -- RefC generates C file then tries native compile (which fails without GMP)
       -- We ignore the exit code and just check if C file was generated
       _ <- executeCommand cmd
 
-      -- Find generated C file in build directory
-      let findCmd = "sh -c 'find " ++ buildSearchDir ++ " -name \"*.c\" 2>/dev/null | head -1'"
+      -- Find generated C file in either the project build dir or temp build dir
       (_, cFile, _) <- executeCommand findCmd
       if null (trim cFile)
         then pure $ Left "No C file generated by RefC"
@@ -559,8 +636,10 @@ compileToRefC opts buildDir = do
                 "--source-dir src " ++
                 "-o main " ++
                 opts'.mainModule
+      let clearCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" -delete 2>/dev/null || true'"
+      _ <- executeCommand clearCmd
       _ <- executeCommand cmd
-      let findCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" 2>/dev/null | head -1'"
+      let findCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
       (_, cFile, _) <- executeCommand findCmd
       if null (trim cFile)
         then pure $ Left "No C file generated by RefC"
@@ -856,10 +935,71 @@ findDidFile projectDir = do
       (_, result2, _) <- executeCommand $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.did' 2>/dev/null | head -1"
       pure $ if null (trim result2) then Nothing else Just (trim result2)
 
+||| Infer the RefC-level arity of generated top-level symbols from the RefC C output.
+||| This is required because top-level `IO a` exports may compile either as:
+||| - unary symbols accepting the world directly, or
+||| - nullary symbols returning an IO closure
+parseRefCExportArities : String -> String -> List ExportedFunc -> List (String, RefCArity)
+parseRefCExportArities modulePrefix cContent exports =
+  let ls = lines cContent
+  in mapMaybe (parseOne ls) exports
+  where
+    targetName : ExportedFunc -> String
+    targetName ef = modulePrefix ++ "_" ++ ef.name
+
+    classifyFollowing : List String -> Maybe RefCArity
+    classifyFollowing [] = Nothing
+    classifyFollowing [line] =
+      let t = trim line
+      in if t == "(void)" then Just RefCNullary
+         else if t == "(" then Nothing
+         else if isPrefixOf "Value *" t then Just RefCUnary
+         else Nothing
+    classifyFollowing (line1 :: line2 :: _) =
+      let t1 = trim line1
+          t2 = trim line2
+      in if t1 == "(void)" then Just RefCNullary
+         else if t1 == "(" && isPrefixOf "Value *" t2 then Just RefCUnary
+         else if isPrefixOf "(Value *" t1 then Just RefCUnary
+         else Nothing
+
+    classifySignature : String -> String -> List String -> Maybe RefCArity
+    classifySignature target line rest =
+      let sameLineVoid = "Value *" ++ target ++ "(void)"
+          sameLineUnary = "Value *" ++ target ++ "("
+          plainHeader = "Value *" ++ target
+      in if line == sameLineVoid
+            then Just RefCNullary
+         else if line == plainHeader
+            then classifyFollowing rest
+         else if line == sameLineUnary
+            then classifyFollowing rest
+         else Nothing
+
+    findSignature : String -> List String -> Maybe (String, RefCArity)
+    findSignature target [] = Nothing
+    findSignature target [line] =
+      case classifySignature target (trim line) [] of
+        Just arity => Just (target, arity)
+        Nothing => Nothing
+    findSignature target (line :: rest) =
+      case classifySignature target (trim line) rest of
+        Just arity => Just (target, arity)
+        Nothing => findSignature target rest
+
+    parseOne : List String -> ExportedFunc -> Maybe (String, RefCArity)
+    parseOne ls ef = findSignature (targetName ef) ls
+
+allRealExportsHaveArities : String -> List ExportedFunc -> List (String, RefCArity) -> Bool
+allRealExportsHaveArities modulePrefix exports arities =
+  let names = map fst arities
+      required = map (\ef => modulePrefix ++ "_" ++ ef.name) (filter (\ef => not ef.fromDid) exports)
+  in all (\name => name `elem` names) required
+
 ||| Generate canister_entry.c from Main.idr exports
 ||| Writes to temp file and returns path
-generateCanisterEntry : BuildOptions -> String -> IO (Either String String)
-generateCanisterEntry opts ic0Support = do
+generateCanisterEntry : BuildOptions -> String -> String -> IO (Either String String)
+generateCanisterEntry opts cFile ic0Support = do
   -- Determine Main.idr content
   mainContent <- if opts.forTestBuild
     then do
@@ -905,24 +1045,39 @@ generateCanisterEntry opts ic0Support = do
                  newFromDid = filter (\e => not (e.name `elem` existingNames)) didExports
              in exports ++ newFromDid
         else exports
+  let normalizedExports =
+        if opts.forTestBuild
+           then map (\ef =>
+                       if isTestHarnessExport ef.name
+                          then { isQuery := False } ef
+                          else ef)
+                    effectiveExports
+           else effectiveExports
 
   -- Determine module prefix: "Main" for both prod and test builds
   -- (test builds generate a temp Main.idr that re-exports from Tests.AllTests)
   let modulePrefix = "Main"
 
-  if null effectiveExports
+  Right cContent <- readFile cFile
+    | Left err => pure $ Left $ "Failed to read generated RefC C file: " ++ show err
+
+  let cArities = parseRefCExportArities modulePrefix cContent normalizedExports
+
+  if null normalizedExports
     then do
       -- No exports found, use static canister_entry.c
       pure $ Right (ic0Support ++ "/canister_entry.c")
+    else if not (allRealExportsHaveArities modulePrefix normalizedExports cArities)
+      then pure $ Left $ "Failed to infer RefC arity for one or more exports"
     else do
       -- Generate dynamic canister_entry.c with Candid-aware stubs
-      let entryC = generateCanisterEntryC modulePrefix effectiveExports didMethods typeDefs
+      let entryC = generateCanisterEntryC modulePrefix cArities normalizedExports didMethods typeDefs
       let tempEntryPath = "/tmp/canister_entry_generated.c"
       Right () <- writeFile tempEntryPath entryC
         | Left err => pure $ Left $ "Failed to write canister_entry.c: " ++ show err
       when opts.forTestBuild $
         putStrLn $ "        Test build: merged " ++ show (length exports) ++ " Idris exports + " ++ show (length didMethods) ++ " .did methods"
-      putStrLn $ "        Generated canister_entry.c with " ++ show (length effectiveExports) ++ " entry points"
+      putStrLn $ "        Generated canister_entry.c with " ++ show (length normalizedExports) ++ " entry points"
       pure $ Right tempEntryPath
 
 ||| Build complete canister WASM from Idris2 source
@@ -949,7 +1104,7 @@ buildCanister opts ic0Support = do
     | Left err => pure $ BuildError err
 
   -- Step 2.5: Generate canister_entry.c from Main.idr exports
-  Right canisterEntryPath <- generateCanisterEntry opts ic0Support
+  Right canisterEntryPath <- generateCanisterEntry opts cFile ic0Support
     | Left err => pure $ BuildError err
 
   -- Step 3: C → WASM (use generated canister_entry.c)

@@ -10,6 +10,9 @@ import Data.String
 -- Re-export core types for compatibility
 import public Coverage.Core.Types
 import public Coverage.Core.Stats
+import public Coverage.Standardization.Types
+import Execution.Standardization.Model
+import Execution.Standardization.Web
 
 %default total
 
@@ -40,8 +43,8 @@ Show SourceMapping where
 public export
 record V8Range where
   constructor MkV8Range
-  startOffset : Nat   -- Byte offset in JS source
-  endOffset : Nat     -- Byte offset in JS source
+  startOffset : JsByteOffset   -- Byte offset in JS source
+  endOffset : JsByteOffset     -- Byte offset in JS source
   count : Nat         -- Execution count
 
 public export
@@ -124,15 +127,81 @@ public export
 record WebCoverageReport where
   constructor MkWebCoverageReport
   functionHits : List WebFunctionHit
+  functionObligations : List CoverageObligation
+  measurement : CoverageMeasurement
+  coveredObligationIds : List String
   fileSummaries : List FileCoverageSummary
-  totalCanonical : Nat
-  totalExecuted : Nat
+  totalFunctionObligations : Nat
+  coveredFunctionObligations : Nat
+  totalCanonicalBranchesEstimate : Nat
+  executedCanonicalBranchesEstimate : Nat
   overallPercentage : Double
+  coverageModel : String
+  executionProfile : String
+  unknownPolicy : String
+  claimAdmissible : Bool
 
 public export
 Show WebCoverageReport where
-  show r = "WebCoverage: " ++ show r.totalExecuted ++ "/" ++
-           show r.totalCanonical ++ " (" ++
+  show r = "WebCoverage: " ++ show r.coveredFunctionObligations ++ "/" ++
+           show r.totalFunctionObligations ++ " obligations (" ++
            show (cast {to=Int} r.overallPercentage) ++ "%) " ++
            show (length r.functionHits) ++ " functions, " ++
-           show (length r.fileSummaries) ++ " files"
+           show (length r.fileSummaries) ++ " files, " ++
+           "profile=" ++ r.executionProfile ++ ", claimAdmissible=" ++ show r.claimAdmissible
+
+public export
+reportFunctionHits : WebCoverageReport -> List WebFunctionHit
+reportFunctionHits = functionHits
+
+public export
+reportFunctionObligations : WebCoverageReport -> List CoverageObligation
+reportFunctionObligations = functionObligations
+
+public export
+reportMeasurement : WebCoverageReport -> CoverageMeasurement
+reportMeasurement = measurement
+
+public export
+reportCoveredObligationIds : WebCoverageReport -> List String
+reportCoveredObligationIds = coveredObligationIds
+
+public export
+reportTotalFunctionObligations : WebCoverageReport -> Nat
+reportTotalFunctionObligations = totalFunctionObligations
+
+public export
+reportCoveredFunctionObligations : WebCoverageReport -> Nat
+reportCoveredFunctionObligations = coveredFunctionObligations
+
+public export
+reportTotalCanonicalBranchesEstimate : WebCoverageReport -> Nat
+reportTotalCanonicalBranchesEstimate = totalCanonicalBranchesEstimate
+
+public export
+reportExecutedCanonicalBranchesEstimate : WebCoverageReport -> Nat
+reportExecutedCanonicalBranchesEstimate = executedCanonicalBranchesEstimate
+
+public export
+reportOverallPercentage : WebCoverageReport -> Double
+reportOverallPercentage = overallPercentage
+
+public export
+reportCoverageModel : WebCoverageReport -> String
+reportCoverageModel = coverageModel
+
+public export
+reportExecutionProfile : WebCoverageReport -> String
+reportExecutionProfile = executionProfile
+
+public export
+reportUnknownPolicy : WebCoverageReport -> String
+reportUnknownPolicy = unknownPolicy
+
+public export
+reportClaimAdmissible : WebCoverageReport -> Bool
+reportClaimAdmissible = claimAdmissible
+
+public export
+defaultWebExecutionProfileName : String
+defaultWebExecutionProfileName = webExecutionProfileName

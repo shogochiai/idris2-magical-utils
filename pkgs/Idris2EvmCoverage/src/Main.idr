@@ -12,6 +12,7 @@ import EvmCoverage.EvmCoverage
 import EvmCoverage.Runtime as Runtime
 import EvmCoverage.ProfileParserLinear
 import EvmCoverage.ProfileParserFSM
+import EvmCoverage.YulInstrumentor as YulInstr
 
 import Data.List
 import Data.Maybe
@@ -19,6 +20,7 @@ import Data.String
 import System
 import System.Clock
 import System.File
+import System.Directory
 
 %default covering
 
@@ -43,9 +45,10 @@ record Options where
   benchV2Mode  : Bool    -- Benchmark extractHitsFSM (V2)
   runtimeTrace : Maybe String  -- Path to trace.csv for runtime analysis
   runtimeLabels : Maybe String -- Path to labels.csv for runtime analysis
+  fullPipeline : Bool
 
 defaultOptions : Options
-defaultOptions = MkOptions Nothing Nothing Nothing Text 80.0 False False False False False False False False Nothing Nothing
+defaultOptions = MkOptions Nothing Nothing Nothing Text 80.0 False False False False False False False False Nothing Nothing False
 
 -- =============================================================================
 -- Argument Parsing
@@ -69,6 +72,7 @@ parseArgs ("--bench-v1" :: rest) opts = parseArgs rest ({ benchV1Mode := True } 
 parseArgs ("--bench-v2" :: rest) opts = parseArgs rest ({ benchV2Mode := True } opts)
 parseArgs ("--runtime-trace" :: t :: rest) opts = parseArgs rest ({ runtimeTrace := Just t } opts)
 parseArgs ("--runtime-labels" :: l :: rest) opts = parseArgs rest ({ runtimeLabels := Just l } opts)
+parseArgs ("--full-pipeline" :: rest) opts = parseArgs rest ({ fullPipeline := True } opts)
 parseArgs ("--threshold" :: t :: rest) opts =
   let th = fromMaybe 80.0 (parseDouble t)
   in parseArgs rest ({ threshold := th } opts)
@@ -113,6 +117,7 @@ OPTIONS:
   --ipkg <path>       Path to .ipkg file
   --runtime-trace <file>   Path to trace.csv for runtime analysis
   --runtime-labels <file>  Path to labels.csv for runtime analysis
+  --full-pipeline          Run static dumpcases + runtime Yul instrumentation pipeline
 
 EXAMPLES:
   # Analyze a project
@@ -124,9 +129,14 @@ EXAMPLES:
   # Static analysis only
   idris2-evm-cov --dumpcases ~/code/idris2-evm
 
+  # Full runtime branch pipeline
+  idris2-evm-cov --full-pipeline --ipkg pkg.ipkg ~/code/project
+
 COVERAGE MODEL:
   Denominator: Canonical branches from --dumpcases (excludes void/uninhabited)
   Numerator:   Branches hit during test execution (Chez profiler)
+  Standard:    semantic test obligation coverage (branch-level profile)
+  Unknowns:    block strong claim unless classified
 
   Branch Classifications:
     - Canonical:        Reachable branches (included in coverage %)
@@ -224,12 +234,71 @@ runRuntimeAnalysis tracePath labelPath opts = do
         Right cov => do printRuntimeCoverage cov
                         putStrLn $ "Done"
 
+joinField : List String -> String
+joinField [] = ""
+joinField [x] = x
+joinField (x :: xs) = x ++ "|" ++ joinField xs
+
+findIpkgInDir : String -> IO (Maybe String)
+findIpkgInDir dir = do
+  Right files <- listDir dir | Left _ => pure Nothing
+  let ipkgs = filter (\f => isSuffixOf ".ipkg" f) files
+  case ipkgs of
+    f :: _ => pure (Just (dir ++ "/" ++ f))
+    [] => pure Nothing
+
+runFullPipelineMode : Options -> IO ()
+runFullPipelineMode opts =
+  case opts.targetPath of
+    Nothing => do
+      putStrLn "FULL_PIPELINE_ERROR"
+      putStrLn "message=No target path specified"
+      exitWith (ExitFailure 1)
+    Just target => do
+      mIpkg <- case opts.ipkgPath of
+                 Just p => pure (Just p)
+                 Nothing => findIpkgInDir target
+      case mIpkg of
+        Nothing => do
+          putStrLn "FULL_PIPELINE_ERROR"
+          putStrLn "message=No .ipkg file found"
+          exitWith (ExitFailure 1)
+        Just ipkgPath => do
+          let outputPath = "/tmp/dumpcases.txt"
+          dres <- runDumpcasesAndParse ipkgPath outputPath
+          case dres of
+            Left err => do
+              putStrLn "FULL_PIPELINE_ERROR"
+              putStrLn ("message=" ++ err)
+              exitWith (ExitFailure 1)
+            Right branches => do
+              let outputDir = fromMaybe (target ++ "/build/exec") opts.outputDir
+              pres <- YulInstr.runFullPipeline ipkgPath outputDir branches
+              case pres of
+                Left err => do
+                  putStrLn "FULL_PIPELINE_ERROR"
+                  putStrLn ("message=" ++ err)
+                  exitWith (ExitFailure 1)
+                Right analysis => do
+                  putStrLn "FULL_PIPELINE_OK"
+                  putStrLn ("static_branches=" ++ show analysis.staticBranches)
+                  putStrLn ("materialized_branches=" ++ show analysis.materializedBranches)
+                  putStrLn ("branch_hits=" ++ show analysis.branchHits)
+                  putStrLn ("functions_hit=" ++ show analysis.functionsHit)
+                  putStrLn ("total_functions=" ++ show analysis.totalFunctions)
+                  putStrLn ("coverage_percent=" ++ show analysis.coveragePercent)
+                  putStrLn ("covered_branch_ids=" ++ joinField analysis.coveredBranchIds)
+                  putStrLn ("unobservable_branch_ids=" ++ joinField analysis.unobservableBranchIds)
+                  putStrLn ("materialized_branch_ids=" ++ joinField analysis.materializedBranchIds)
+                  putStrLn ("uncovered_functions=" ++ joinField analysis.uncoveredFunctions)
+
 -- =============================================================================
 -- Main Execution
 -- =============================================================================
 
 runMain : Options -> IO ()
 runMain opts =
+  if opts.fullPipeline then runFullPipelineMode opts else
   -- Check if runtime analysis mode
   case (opts.runtimeTrace, opts.runtimeLabels) of
     (Just trace, Just labels) => runRuntimeAnalysis trace labels opts

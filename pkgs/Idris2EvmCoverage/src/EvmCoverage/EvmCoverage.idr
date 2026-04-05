@@ -30,7 +30,8 @@ findIpkg : String -> IO (Maybe String)
 findIpkg dir = do
   Right files <- listDir dir
     | Left _ => pure Nothing
-  let ipkgs = filter (isSuffixOf ".ipkg") files
+  let ipkgs =
+        filter (\f => isSuffixOf ".ipkg" f && not (isPrefixOf "dumpcases-temp-" f)) files
   case ipkgs of
     [] => pure Nothing
     (f :: _) => pure $ Just (dir ++ "/" ++ f)
@@ -165,6 +166,13 @@ analyzeCoverage config = do
                       static.bugsCount
                       static.unknownCount
                       0.0
+                      defaultEvmExecutionProfileName
+                      (coverageMeasurementForBranches static.allBranches [])
+                      evmCoverageModelName
+                      evmUnknownPolicyName
+                      (coverageClaimAdmissibleForBranches static.allBranches)
+                      (topKTargetsFromBranches 10 (filter (\b => isCanonical b.branchClass) static.allBranches))
+                      (buildFunctionSummaries static [])
                       (filter (\b => isCanonical b.branchClass) static.allBranches)
 
           pure $ Right cov
@@ -186,16 +194,25 @@ analyzeFromDumpcases : String -> IO (Either String AggregatedCoverage)
 analyzeFromDumpcases dumpcasesPath = do
   Right content <- readFile dumpcasesPath
     | Left err => pure $ Left $ "Failed to read dumpcases: " ++ show err
-  let branches = parseDumpcases content
-  let static = analyzeStatic branches
-  let cov = MkAggregatedCoverage
-              static.canonicalCount
-              0
-              static.bugsCount
-              static.unknownCount
-              0.0
-              (filter (\b => isCanonical b.branchClass) static.allBranches)
-  pure $ Right cov
+  case parseStaticExport content of
+    Left err => pure $ Left err
+    Right parsedBranches => do
+      let static = analyzeStatic parsedBranches
+      let cov = MkAggregatedCoverage
+                  static.canonicalCount
+                  0
+                  static.bugsCount
+                  static.unknownCount
+                  0.0
+                  defaultEvmExecutionProfileName
+                  (coverageMeasurementForBranches static.allBranches [])
+                  evmCoverageModelName
+                  evmUnknownPolicyName
+                  (coverageClaimAdmissibleForBranches static.allBranches)
+                  (topKTargetsFromBranches 10 (filter (\b => isCanonical b.branchClass) static.allBranches))
+                  (buildFunctionSummaries static [])
+                  (filter (\b => isCanonical b.branchClass) static.allBranches)
+      pure $ Right cov
 
 -- =============================================================================
 -- Runtime Analysis (ProfileFlush events from trace)

@@ -3,6 +3,7 @@
 module EvmCoverage.DumpcasesParser
 
 import EvmCoverage.Types
+import EvmCoverage.StructuredExport
 import Data.List
 import Data.List1
 import Data.String
@@ -50,6 +51,38 @@ countOccurrences needle haystack = go 0 (unpack haystack)
       if isPrefixOf needleChars rest
         then go (S acc) (drop (length needleChars) rest)
         else go acc xs
+
+containsChar : Char -> String -> Bool
+containsChar c str = elem c (unpack str)
+
+dirnameOf : String -> Maybe String
+dirnameOf str =
+  if containsChar '/' str
+     then let rev = reverse (unpack str)
+              suffix = dropWhile (/= '/') rev
+          in case suffix of
+               [] => Nothing
+               (_ :: rest) => Just (pack (reverse rest))
+     else Nothing
+
+export
+resolveIdris2Command : IO String
+resolveIdris2Command = do
+  mcmd <- getEnv "IDRIS2_BIN"
+  pure $ fromMaybe "idris2" mcmd
+
+hasExplicitIdris2Override : IO Bool
+hasExplicitIdris2Override = do
+  mcmd <- getEnv "IDRIS2_BIN"
+  pure $ isJust mcmd
+
+supportsDumpcasesJson : String -> IO Bool
+supportsDumpcasesJson cmd = do
+  t <- time
+  let probe = "/tmp/idris2-dumpcases-json-probe-" ++ show t ++ ".json"
+  exitCode <- system $ cmd ++ " --dumpcases-json " ++ probe ++ " --version >/dev/null 2>&1"
+  _ <- system $ "rm -f " ++ probe
+  pure $ exitCode == 0
 
 -- =============================================================================
 -- CRASH Reason Classification
@@ -198,7 +231,7 @@ countCaseBranches line =
 ||| Make a canonical branch
 makeBranch : String -> Nat -> Nat -> ClassifiedBranch
 makeBranch fName baseIdx i =
-  let bid = MkBranchId "" fName (baseIdx + i)
+  let bid = mkLegacyBranchId "" fName (baseIdx + i)
   in MkClassifiedBranch bid BCCanonical ("case branch " ++ show i)
 
 ||| Parse branches from function body lines
@@ -207,7 +240,7 @@ parseBranches _ [] _ = []
 parseBranches fName (l :: ls) idx =
   if isCrashLine l
     then let crashClass = parseCrashReason (extractCrashMsg l)
-             bid = MkBranchId "" fName idx
+             bid = mkLegacyBranchId "" fName idx
              branch = MkClassifiedBranch bid crashClass l
          in branch :: parseBranches fName ls (S idx)
     else if isCaseLine l
@@ -247,6 +280,16 @@ parseDumpcases content =
   let allBranches = parseFunctions (lines content) []
   in filter (\b => isProjectFunction b.branchId.funcName) allBranches
 
+||| Parse either legacy --dumpcases text or future structured case-tree JSON.
+||| This is the downstream cutover seam: once Idris2 exposes structured export,
+||| EVM coverage can consume it without changing report or LazyEvm layers.
+export
+parseStaticExport : String -> Either String (List ClassifiedBranch)
+parseStaticExport content =
+  if looksLikeStructuredExport content
+    then parseStructuredExport content
+    else Right (parseDumpcases content)
+
 ||| Extract directory and filename from path
 splitPath : String -> (String, String)
 splitPath path =
@@ -262,6 +305,12 @@ generateUid = do
   t <- time
   pure $ show t
 
+readLogTail : String -> IO String
+readLogTail path = do
+  Right log <- readFile path | Left _ => pure ""
+  let ls = lines log
+  pure $ unlines $ reverse $ take 20 $ reverse ls
+
 ||| Read ipkg and extract modules list
 parseModulesFromIpkg : String -> List String
 parseModulesFromIpkg content =
@@ -270,8 +319,22 @@ parseModulesFromIpkg content =
       inModules = dropWhile (not . isInfixOf "modules") ls
   in case inModules of
        [] => []
-       (_ :: rest) => mapMaybe extractModule (take 50 rest)
+       (modsLine :: rest) =>
+         let sameLine = extractModulesLine modsLine
+             continuation = mapMaybe extractModule (take 50 rest)
+         in sameLine ++ continuation
   where
+    extractModulesLine : String -> List String
+    extractModulesLine line =
+      let trimmed = trim line
+      in case break (== '=') (unpack trimmed) of
+           (_, []) => []
+           (_, _ :: rest) =>
+             let value = trim $ pack rest
+             in if null value
+                   then []
+                   else [trim $ pack $ filter (\c => c /= ',') (unpack value)]
+
     extractModule : String -> Maybe String
     extractModule line =
       let trimmed = trim line
@@ -351,6 +414,14 @@ isIOReturnType retType =
   let trimmed = trim retType
   in isPrefixOf "IO " trimmed || isPrefixOf "IO(" trimmed
 
+||| Skip entrypoints that terminate the generated wrapper early or are
+||| intended as top-level executables rather than callable coverage probes.
+isWrapperCallableExportName : String -> Bool
+isWrapperCallableExportName fname =
+  not (fname == "main" ||
+       fname == "runAllTests" ||
+       fname == "runAllTestsEvm")
+
 ||| Helper to split by a multi-char delimiter
 splitByDelim : List Char -> List Char -> List Char -> List (List Char)
 splitByDelim _ [] acc = [reverse acc]
@@ -389,6 +460,33 @@ extractArgTypes sig =
               [_] => []  -- Only return type, no args
               xs => initList xs  -- All but the last (return type)
 
+||| Coverage wrappers can only synthesize first-order dummy arguments.
+||| Skip exported IO functions that require higher-order callbacks or constraints.
+isWrapperCallableArg : String -> Bool
+isWrapperCallableArg ty =
+  let trimmed = trim ty
+  in not (isInfixOf "->" trimmed)
+     && not (isInfixOf "=>" trimmed)
+     && (isPrefixOf "Integer" trimmed
+         || isPrefixOf "Nat" trimmed
+         || isPrefixOf "Int" trimmed
+         || isPrefixOf "String" trimmed
+         || isPrefixOf "Bool" trimmed
+         || isPrefixOf "List" trimmed
+         || isPrefixOf "Maybe" trimmed
+         || isPrefixOf "(" trimmed)
+
+hasNestedArrow : List Char -> Nat -> Bool
+hasNestedArrow [] _ = False
+hasNestedArrow ('(' :: rest) depth = hasNestedArrow rest (S depth)
+hasNestedArrow (')' :: rest) depth = hasNestedArrow rest (minus depth 1)
+hasNestedArrow ('-' :: '>' :: rest) depth =
+  if depth > 0 then True else hasNestedArrow rest depth
+hasNestedArrow (_ :: rest) depth = hasNestedArrow rest depth
+
+hasHigherOrderArg : String -> Bool
+hasHigherOrderArg sig = hasNestedArrow (unpack sig) 0
+
 ||| Parse a function signature line (without export keyword) to check if it's an IO function
 ||| Only matches functions where the RETURN TYPE is IO, not functions containing IO in args
 ||| Looks for patterns like:
@@ -398,7 +496,7 @@ extractArgTypes sig =
 parseIOFuncSignature : String -> String -> Maybe ExportedIOFunc
 parseIOFuncSignature modName line =
   let trimmed = trim line
-  in if not (isInfixOf " : " trimmed)
+  in if not (isInfixOf " : " trimmed) || hasHigherOrderArg trimmed || isInfixOf "=>" trimmed
        then Nothing
        else
          let retType = getReturnType trimmed
@@ -410,8 +508,11 @@ parseIOFuncSignature modName line =
                 in case parts of
                      (fname :: ":" :: _) =>
                        let args = extractArgTypes trimmed
-                       in Just $ MkExportedIOFunc modName fname args
+                       in if isWrapperCallableExportName fname && all isWrapperCallableArg args
+                            then Just $ MkExportedIOFunc modName fname args
+                            else Nothing
                      _ => Nothing
+
 
 ||| Check if a line is an export visibility modifier
 ||| Returns True for "export" or "public export" on its own line
@@ -531,6 +632,11 @@ runDumpcasesAndParse : String -> String -> IO (Either String (List ClassifiedBra
 runDumpcasesAndParse ipkgPath outputPath = do
   let (projectDir, ipkgName) = splitPath ipkgPath
   uid <- generateUid
+  idris2Cmd <- resolveIdris2Command
+  explicitOverride <- hasExplicitIdris2Override
+  preferJson <- supportsDumpcasesJson idris2Cmd
+  let actualOutputPath = if preferJson then outputPath ++ ".json" else outputPath
+  let dumpcasesFlag = if preferJson then "--dumpcases-json " else "--dumpcases "
 
   -- Read original ipkg to get modules and depends
   Right ipkgContent <- readFile ipkgPath
@@ -538,8 +644,8 @@ runDumpcasesAndParse ipkgPath outputPath = do
 
   -- Extract sourcedir and create temp main in correct location
   let sourcedir = extractSourcedir ipkgContent
-  let modules = parseModulesFromIpkg ipkgContent
   let tempMainName = "DumpcasesWrapper"
+  let modules = filter (/= tempMainName) (parseModulesFromIpkg ipkgContent)
   let tempMainDir = if null sourcedir then projectDir else projectDir ++ "/" ++ sourcedir
   let tempMainPath = tempMainDir ++ "/" ++ tempMainName ++ ".idr"
 
@@ -547,7 +653,7 @@ runDumpcasesAndParse ipkgPath outputPath = do
   -- This enables comprehensive coverage instead of just test coverage
   let baseDir = if null sourcedir then projectDir else projectDir ++ "/" ++ sourcedir
   allIOFuncs <- traverse (\m => scanModuleForIOFuncs (baseDir ++ "/" ++ moduleToPath m) m) modules
-  let ioFuncs = concat allIOFuncs
+  let ioFuncs = filter (\f => isWrapperCallableExportName f.funcName) (concat allIOFuncs)
 
   -- Generate comprehensive wrapper that calls all exported IO functions
   let tempMainContent = generateComprehensiveWrapper modules ioFuncs
@@ -576,7 +682,7 @@ runDumpcasesAndParse ipkgPath outputPath = do
         , dependsSection
         , "main = " ++ tempMainName
         , "executable = \"dumpcases-temp\""
-        , "opts = \"--dumpcases " ++ outputPath ++ "\""
+        , "opts = \"" ++ dumpcasesFlag ++ actualOutputPath ++ "\""
         , "modules = " ++ tempMainName
         , "        , " ++ modulesStr
         ]
@@ -590,18 +696,40 @@ runDumpcasesAndParse ipkgPath outputPath = do
   -- Note: For EVM contracts, codegen may fail (EVM FFI needs idris2-yul), but
   -- --dumpcases outputs case trees DURING type-checking before codegen.
   -- So we check if output exists first, ignoring exit code if output is valid.
-  let cmd = "cd " ++ projectDir ++ " && pack build " ++ tempIpkgName ++ " 2>&1"
+  let buildLog = projectDir ++ "/build/exec/dumpcases-pack-build.log"
+  let cmd =
+        if explicitOverride
+           then "mkdir -p " ++ projectDir ++ "/build/exec"
+             ++ " && cd " ++ projectDir
+             ++ " && " ++ idris2Cmd ++ " --build " ++ tempIpkgName
+             ++ " > " ++ buildLog ++ " 2>&1"
+           else "mkdir -p " ++ projectDir ++ "/build/exec"
+             ++ " && cd " ++ projectDir
+             ++ " && pack build " ++ tempIpkgName
+             ++ " > " ++ buildLog ++ " 2>&1"
   _ <- system cmd  -- Exit code may be non-zero for EVM FFI, but dumpcases may still succeed
 
   -- DEBUG: Don't cleanup temp files to inspect them
   -- _ <- system $ "rm -f " ++ tempMainPath ++ " " ++ tempIpkgPath
 
   -- Check if dumpcases output exists (may succeed even if codegen fails)
-  Right content <- readFile outputPath
-    | Left err => pure $ Left $ "Failed to read dumpcases: " ++ show err
+  Right content <- readFile actualOutputPath
+    | Left err => do
+        logTail <- readLogTail buildLog
+        pure $ Left $ "Failed to read dumpcases: " ++ show err
+                   ++ (if null logTail then "" else "\nBuild log tail:\n" ++ logTail)
   if null (trim content)
-    then pure $ Left "No dumpcases output generated (type-checking may have failed)"
-    else pure $ Right $ parseDumpcases content
+    then do
+      logTail <- readLogTail buildLog
+      pure $ Left $
+        "No dumpcases output generated (type-checking may have failed)"
+        ++ (if null logTail then "" else "\nBuild log tail:\n" ++ logTail)
+    else case parseStaticExport content of
+           Right parsed => pure $ Right parsed
+           Left err =>
+             pure $ Left $
+               "Failed to parse dumpcases output: " ++ err
+               ++ "\nOutput path: " ++ actualOutputPath
 
 -- =============================================================================
 -- Static Analysis

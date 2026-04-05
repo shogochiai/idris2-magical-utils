@@ -196,6 +196,9 @@ record TestAnalysis where
   totalUnknown         : Nat   -- Unknown CRASHes - never exclude, show separately
   exclusionBreakdown   : ExclusionBreakdown  -- Detailed breakdown of excluded functions
   functionsWithCrash   : Nat
+  coverageModel        : String
+  unknownPolicy        : String
+  claimAdmissible      : Bool
 
 public export
 Show TestAnalysis where
@@ -212,6 +215,9 @@ Show TestAnalysis where
     , "    Standard library: " ++ show a.exclusionBreakdown.standardLibrary
     , "    Type constructors: " ++ show a.exclusionBreakdown.typeConstructors
     , "  Functions with CRASH: " ++ show a.functionsWithCrash
+    , "  Coverage model: " ++ a.coverageModel
+    , "  Unknown policy: " ++ a.unknownPolicy
+    , "  Claim admissible: " ++ show a.claimAdmissible
     ]
 
 ||| Legacy accessor for backward compatibility
@@ -546,6 +552,7 @@ aggregateAnalysisWithConfig : ExclusionConfig -> List CompiledFunction -> TestAn
 aggregateAnalysisWithConfig config funcs =
   let -- Filter out all excluded functions (including test code)
       userFuncs = filter (\f => not (shouldExcludeFunctionWithConfig config f) && not (isTestCodeFunction f)) funcs
+      userBranches = concatMap (\f => map (toClassifiedBranchWithFuncName f.fullName) f.cases) userFuncs
       -- Count excluded cases by category
       compGenCases = sum (map countCompilerGeneratedCases funcs)
       stdlibCases  = sum (map countStandardLibraryCases funcs)
@@ -562,6 +569,9 @@ aggregateAnalysisWithConfig config funcs =
     (sum $ map countUnknownCases funcs)
     breakdown
     (length $ filter hasAnyCrash funcs)
+    standardCoverageModelName
+    standardUnknownPolicyName
+    (isStandardCoverageClaimAdmissible userBranches)
 
 ||| Aggregate analysis over all functions (default empty config)
 public export
@@ -618,13 +628,22 @@ runDumpcases : (projectDir : String)
              -> (outputFile : String)
              -> IO (Either String String)
 runDumpcases projectDir ipkgName outputFile = do
-  -- Build using pack with dumpcases flag via IDRIS2_OPTS
-  -- pack respects local pack.toml for custom package paths
-  let cmd = "cd " ++ projectDir ++ " && IDRIS2_OPTS='--dumpcases " ++ outputFile
-         ++ "' pack build " ++ ipkgName ++ " 2>/dev/null"
+  -- Prefer a stable installed Idris2 environment resolved from a neutral directory.
+  -- This avoids local pack.toml / uncommitted dependency issues during downstream analysis.
+  let installedCmd =
+        "APP=\"$(cd /tmp && pack app-path idris2)\""
+        ++ " && export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
+        ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
+        ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
+        ++ " && cd " ++ projectDir
+        ++ " && \"$APP\" --dumpcases " ++ outputFile ++ " --build " ++ ipkgName
+        ++ " 2>/dev/null"
+  let packCmd =
+        "cd " ++ projectDir ++ " && pack --extra-args='--dumpcases " ++ outputFile
+        ++ "' build " ++ ipkgName ++ " 2>/dev/null"
 
-  -- Execute the command
-  exitCode <- system cmd
+  exitCode <- system installedCmd
+  finalExit <- if exitCode == 0 then pure exitCode else system packCmd
 
   -- Read the generated output file
   result <- readFile outputFile
@@ -632,7 +651,9 @@ runDumpcases projectDir ipkgName outputFile = do
     Left err => pure $ Left $ "Failed to read dumpcases output: " ++ show err
     Right content =>
       if null (trim content)
-        then pure $ Left "No dumpcases output generated (build may have failed)"
+        then if finalExit == 0
+               then pure $ Left "No dumpcases output generated (build may have failed)"
+               else pure $ Left "Build with --dumpcases failed"
         else pure $ Right content
 
 ||| Convenience wrapper with default output file

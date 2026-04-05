@@ -15,6 +15,7 @@ import Coverage.TestHint
 import Coverage.Aggregator
 import Coverage.TestRunner
 import Coverage.UnifiedRunner
+import Coverage.TestCoverage
 import Coverage.Config
 import Coverage.DumpcasesParser
 import Data.List
@@ -824,6 +825,17 @@ test_UNI_005 = do
   -- Only non-test function should remain
   pure $ length filtered == 1 && fst (fromMaybe ("", 0) (head' filtered)) == "CoverageC-45Collector-parse"
 
+||| REQ_COV_UNI_004: Temp wrapper dumpcases path works for library packages
+covering
+test_UNI_006 : IO Bool
+test_UNI_006 = do
+  result <- runProjectDumpcasesWithTempIpkg "idris2-coverage.ipkg"
+  pure $ case result of
+    Left _ => False
+    Right content =>
+      let funcs = parseDumpcasesFile content
+      in not (null funcs)
+
 -- =============================================================================
 -- ChezMangle Tests (MGL_001-004)
 -- =============================================================================
@@ -986,6 +998,7 @@ allTests =
   , ("REQ_COV_UNI_001", test_UNI_003)
   , ("REQ_COV_UNI_002", test_UNI_004)
   , ("REQ_COV_UNI_003", test_UNI_005)
+  , ("REQ_COV_UNI_004", test_UNI_006)
   , ("REQ_COV_MGL_001", test_MGL_001)
   , ("REQ_COV_MGL_002", test_MGL_002)
   , ("REQ_COV_MGL_003", test_MGL_003)

@@ -15,6 +15,7 @@ import Data.List1
 import Data.Maybe
 import Data.String
 import Data.Nat
+import Execution.Standardization.Web
 
 %default covering
 
@@ -28,8 +29,8 @@ record JSFunctionDef where
   constructor MkJSFunctionDef
   idrisName : String      -- Original Idris name (e.g., "OucDashboard.Update.update")
   jsName : String         -- JS name (e.g., "OucDashboard_Update_update")
-  startOffset : Nat       -- Byte offset where function starts
-  endOffset : Nat         -- Byte offset where function ends (approximate)
+  startOffset : JsByteOffset       -- Byte offset where function starts
+  endOffset : JsByteOffset         -- Byte offset where function ends (approximate)
   lineNumber : Nat        -- Line number in JS file (1-indexed)
 
 public export
@@ -151,7 +152,7 @@ parseJSFunctions content =
                    Just jsName =>
                      let startOff = findLineOffset nextLineNum offsets
                          endOff = estimateEndOffset nextLineNum offsets (length content)
-                         def = MkJSFunctionDef idrisName jsName startOff endOff nextLineNum
+                         def = MkJSFunctionDef idrisName jsName (jsByteOffsetFromNat startOff) (jsByteOffsetFromNat endOff) nextLineNum
                      in def :: go ((nextLineNum, nextLine) :: rest) offsets
             else go ((nextLineNum, nextLine) :: rest) offsets
 
@@ -161,10 +162,10 @@ parseJSFunctions content =
 
 ||| Find which function contains a given byte offset
 export
-findFunctionAtOffset : List JSFunctionDef -> Nat -> Maybe JSFunctionDef
+findFunctionAtOffset : List JSFunctionDef -> JsByteOffset -> Maybe JSFunctionDef
 findFunctionAtOffset [] _ = Nothing
 findFunctionAtOffset (f :: fs) offset =
-  if offset >= f.startOffset && offset < f.endOffset
+  if offsetGE offset f.startOffset && offsetLT offset f.endOffset
     then Just f
     else findFunctionAtOffset fs offset
 
@@ -179,18 +180,18 @@ record FuncRangeMatch where
 ||| Match V8 ranges to JS functions and count coverage per function
 export
 matchRangesToFunctions : List JSFunctionDef
-                       -> List (Nat, Nat, Nat)  -- (startOffset, endOffset, count)
+                       -> List (JsByteOffset, JsByteOffset, Nat)  -- (startOffset, endOffset, count)
                        -> List FuncRangeMatch
 matchRangesToFunctions funcs ranges =
   filter (\m => m.totalRanges > 0) (map countFunc funcs)
   where
-    rangeInFunc : JSFunctionDef -> Nat -> Bool
-    rangeInFunc f rangeStart = rangeStart >= f.startOffset && rangeStart < f.endOffset
+    rangeInFunc : JSFunctionDef -> JsByteOffset -> Bool
+    rangeInFunc f rangeStart = offsetGE rangeStart f.startOffset && offsetLT rangeStart f.endOffset
 
-    getStart : (Nat, Nat, Nat) -> Nat
+    getStart : (JsByteOffset, JsByteOffset, Nat) -> JsByteOffset
     getStart (s, _, _) = s
 
-    getCount : (Nat, Nat, Nat) -> Nat
+    getCount : (JsByteOffset, JsByteOffset, Nat) -> Nat
     getCount (_, _, c) = c
 
     countFunc : JSFunctionDef -> FuncRangeMatch

@@ -1,0 +1,14 @@
+package idris2-execution-standardization
+version = 0.1.0
+authors = "lazy-idris team"
+brief = "Backend-aware execution value standardization for IC WASM, EVM, and Web"
+
+sourcedir = "src"
+
+depends = base, contrib
+
+modules = Execution.Standardization.Types
+        , Execution.Standardization.Model
+        , Execution.Standardization.IcWasm
+        , Execution.Standardization.Evm
+        , Execution.Standardization.Web

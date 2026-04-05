@@ -12,6 +12,7 @@ import public Coverage.Classification.BranchClass
 
 -- Re-export shared runtime hit types from core
 import public Coverage.Core.RuntimeHit
+import public Coverage.Core.ObligationMap
 import public Coverage.Core.HighImpact
 
 %default total

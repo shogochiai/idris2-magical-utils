@@ -21,12 +21,48 @@ import WebCoverage.V8Runner
 import WebCoverage.PlaywrightRunner
 import WebCoverage.SourceMapper
 import WebCoverage.JSFunctionParser
+import Execution.Standardization.Web
 
 -- idris2-coverage-core classification
 import Coverage.Classification.BranchClass
 import Coverage.Core.Exclusions
+import Coverage.Core.ObligationMap
+import Coverage.DumpcasesParser as CovDump
 
 %default covering
+
+installedIdrisPrelude : String
+installedIdrisPrelude =
+  "export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
+  ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
+  ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
+
+removeFileIfExistsSafe : String -> IO ()
+removeFileIfExistsSafe path = do
+  _ <- removeFile path
+  pure ()
+
+buildTempWebIpkg : String -> String -> IO (Either String ())
+buildTempWebIpkg projectDir ipkgName = do
+  let logPath = projectDir ++ "/.idris2-web-coverage-build.log"
+  removeFileIfExistsSafe logPath
+  let clearCmd = "rm -rf " ++ projectDir ++ "/build/ttc/*/TempWebRunner_* 2>/dev/null; true"
+  _ <- system clearCmd
+  let buildCmd = installedIdrisPrelude
+              ++ " && cd " ++ projectDir
+              ++ " && idris2-sm --build " ++ ipkgName ++ " > " ++ logPath ++ " 2>&1"
+  buildExit <- system buildCmd
+  if buildExit == 0
+     then do
+       removeFileIfExistsSafe logPath
+       pure $ Right ()
+     else do
+       logContent <- readFile logPath
+       removeFileIfExistsSafe logPath
+       pure $ Left $
+         either (\err => "unable to read build log: " ++ show err)
+                trim
+                logContent
 
 -- =============================================================================
 -- Temporary File Generation
@@ -146,6 +182,117 @@ cleanupTempFiles : List String -> IO ()
 cleanupTempFiles = traverse_ removeFileIfExists
 
 -- =============================================================================
+-- Static Obligation Helpers
+-- =============================================================================
+
+isDomMvcLibraryFunc : String -> Bool
+isDomMvcLibraryFunc name =
+     isPrefixOf "Text.HTML." name
+  || isPrefixOf "Web.MVC." name
+  || isPrefixOf "JS." name
+  || isPrefixOf "Control.Monad.Dom." name
+  || isPrefixOf "Text.CSS." name
+  || isPrefixOf "Web.Raw." name
+
+isTestFunc : String -> Bool
+isTestFunc name = isInfixOf ".Tests." name || isInfixOf "Test." name
+               || isPrefixOf "test_" name
+
+isExcludedFunc : String -> Bool
+isExcludedFunc name = shouldExcludeFunctionName name
+                   || isExcludedReason (determineExclusionReason defaultExclusions name)
+                   || isDomMvcLibraryFunc name
+                   || isTestFunc name
+
+filterUserFuncs : List FuncCases -> List FuncCases
+filterUserFuncs = filter (\fc => not (isExcludedFunc fc.funcName))
+
+filterUserCompiledFuncs : List CovDump.CompiledFunction -> List CovDump.CompiledFunction
+filterUserCompiledFuncs = filter (\f => not (isExcludedFunc f.fullName))
+
+canonicalBranchCount : StaticFunctionAnalysis -> Nat
+canonicalBranchCount sfa =
+  length $ filter (\cb => cb.branchClass == BCCanonical) sfa.branches
+
+totalBranchCount : StaticFunctionAnalysis -> Nat
+totalBranchCount = length . (.branches)
+
+lookupStaticFunction : List StaticFunctionAnalysis -> String -> Maybe StaticFunctionAnalysis
+lookupStaticFunction analyses name = find (\sfa => sfa.fullName == name) analyses
+
+analysisToFunctionObligation : StaticFunctionAnalysis -> CoverageObligation
+analysisToFunctionObligation sfa =
+  MkCoverageObligation
+    sfa.fullName
+    ElaboratedCaseTree
+    FunctionLevel
+    sfa.fullName
+    Nothing
+    (functionObligationClass sfa.branches)
+
+normalizeHitWithStatic : List StaticFunctionAnalysis -> WebFunctionHit -> WebFunctionHit
+normalizeHitWithStatic analyses hit =
+  case lookupStaticFunction analyses hit.funcName of
+    Nothing => hit
+    Just sfa =>
+      let canonical = canonicalBranchCount sfa
+          executed = min hit.executedCount canonical
+      in MkWebFunctionHit
+           hit.funcName
+           hit.jsName
+           canonical
+           executed
+           (totalBranchCount sfa)
+           (min executed (totalBranchCount sfa))
+
+coveredFunctionObligationIds : List CoverageObligation -> List WebFunctionHit -> List String
+coveredFunctionObligationIds obligations hits =
+  let obligationMap =
+        buildFunctionObligationMap obligations (\ob => [runtimeFunctionName ob.obligationId])
+      runtimeUnits =
+        map (runtimeFunctionName . (.funcName)) $
+          filter (\h => h.executedCount > 0) hits
+  in resolveCoveredDenominatorIds obligations obligationMap runtimeUnits
+
+buildWebCoverageReport : List WebFunctionHit -> List StaticFunctionAnalysis -> WebCoverageReport
+buildWebCoverageReport hits analyses =
+  let obligations = map analysisToFunctionObligation analyses
+      coveredIds = coveredFunctionObligationIds obligations hits
+      excludedIds =
+        map (.obligationId) $
+          filter (\ob => mustBeExcluded ob.classification) obligations
+      unknownIds =
+        map (.obligationId) $
+          filter (\ob => ob.classification == UnknownClassification) obligations
+      denominatorIds =
+        map (.obligationId) $
+          filter (\ob => countsAsDenominator ob.classification) obligations
+      measurement =
+        MkCoverageMeasurement denominatorIds coveredIds excludedIds unknownIds
+      denominatorCount = length $ filter (\ob => countsAsDenominator ob.classification) obligations
+      coveredCount = length coveredIds
+      pct = if denominatorCount == 0
+               then 100.0
+               else cast coveredCount / cast denominatorCount * 100.0
+      totalCanonical = sum $ map (.canonicalCount) hits
+      totalExecuted = sum $ map (\h => min h.executedCount h.canonicalCount) hits
+  in MkWebCoverageReport
+       hits
+       obligations
+       measurement
+       coveredIds
+       []
+       denominatorCount
+       coveredCount
+       totalCanonical
+       totalExecuted
+       pct
+       standardFunctionCoverageModelName
+       defaultWebExecutionProfileName
+       standardUnknownPolicyName
+       (isStandardFunctionCoverageClaimAdmissible analyses)
+
+-- =============================================================================
 -- Main Entry Point
 -- =============================================================================
 
@@ -157,11 +304,11 @@ cleanupTempFiles = traverse_ removeFileIfExists
 ||| @testModules - List of test module names
 ||| @timeout - Max seconds for build+run
 export
-runTestsWithWebCoverage : (projectDir : String)
-                        -> (testModules : List String)
-                        -> (timeout : Nat)
-                        -> IO (Either String (List WebFunctionHit))
-runTestsWithWebCoverage projectDir testModules timeout = do
+runTestsWithWebCoverageDetailed : (projectDir : String)
+                               -> (testModules : List String)
+                               -> (timeout : Nat)
+                               -> IO (Either String (List WebFunctionHit, List StaticFunctionAnalysis))
+runTestsWithWebCoverageDetailed projectDir testModules timeout = do
   case testModules of
     [] => pure $ Left "No test modules specified"
     _ => do
@@ -196,90 +343,43 @@ runTestsWithWebCoverage projectDir testModules timeout = do
             removeFileIfExists tempIdrPath
             pure $ Left $ "Failed to write temp ipkg: " ++ show err
 
-      -- Build with idris2 directly (pack ignores ipkg opts field)
-      -- First install dependencies via pack, then build with idris2
-      let installCmd = "cd " ++ projectDir ++ " && pack install-deps " ++ tempExecName ++ ".ipkg 2>&1"
-      _ <- system installCmd
-      -- Clear build cache for temp module to force recompilation with opts
-      let clearCmd = "rm -rf " ++ projectDir ++ "/build/ttc/*/TempWebRunner_* 2>/dev/null; true"
-      _ <- system clearCmd
-      -- NOTE: Using `idris2-sm` instead of `idris2` for source map support with --cg javascript
-      --
-      -- Background:
-      --   - Standard idris2 (as of 2025-01) only supports source maps for --cg node, not --cg javascript
-      --   - The feature/es-source-maps branch adds source map support for --cg javascript (browser JS)
-      --   - `idris2-sm` is a wrapper pointing to the locally installed feature branch version
-      --
-      -- When to change back to `idris2`:
-      --   - After PR https://github.com/idris-lang/Idris2/pull/XXXX is merged
-      --   - Or when Idris2 releases a version with --cg javascript source map support
-      --   - At that point, simply change `idris2-sm` back to `idris2` for portability
-      let buildCmd = "cd " ++ projectDir ++ " && idris2-sm --build " ++ tempExecName ++ ".ipkg 2>&1"
-      buildResult <- system buildCmd
-      if buildResult /= 0
-        then do
+      buildResult <- buildTempWebIpkg projectDir (tempExecName ++ ".ipkg")
+      case buildResult of
+        Left err => do
           cleanupTempFiles [tempIdrPath, tempIpkgPath, dumpcasesPath]
-          pure $ Left "Build failed"
-        else do
+          pure $ Left $ "Build failed: " ++ err
+        Right () => do
           -- Parse dumpcases for static analysis
           Right dumpContent <- readFile dumpcasesPath
             | Left _ => do
                 cleanupTempFiles [tempIdrPath, tempIpkgPath, dumpcasesPath]
                 pure $ Left "Failed to read dumpcases"
 
-          let allFuncs = parseDumpcases dumpContent
-          -- Filter to user functions using idris2-coverage-core exclusions
-          let funcs = filterUserFuncs allFuncs
+          let compiledFuncs = filterUserCompiledFuncs (CovDump.parseDumpcasesFile dumpContent)
+          let staticFunctions = map CovDump.toStaticFunctionAnalysis compiledFuncs
+          let funcs = filterUserFuncs (parseDumpcases dumpContent)
 
           -- Collect coverage via Playwright (browser-based)
-          v8Result <- runDomTestCoverage jsPath
+          v8Result <- runDomTestCoverage projectDir jsPath
 
           case v8Result of
-            Left _ => do
-              -- No V8 coverage, return static-only data
+            Left err => do
               cleanupTempFiles [tempIdrPath, tempIpkgPath, dumpcasesPath]
-              let staticHits = map funcToHit funcs
-              pure $ Right staticHits
+              pure $ Left err
             Right v8Cov => do
               -- Read JS file for function-level matching
               Right jsCode <- readFile jsPath
                 | Left _ => do
                     cleanupTempFiles [tempIdrPath, tempIpkgPath, dumpcasesPath]
                     -- Fallback: use proportional byte coverage
-                    let hits = matchFuncsWithV8Proportional funcs v8Cov
-                    pure $ Right hits
+                    let hits = map (normalizeHitWithStatic staticFunctions) (matchFuncsWithV8Proportional funcs v8Cov)
+                    pure $ Right (hits, staticFunctions)
 
               -- Parse JS functions and match with V8 coverage
-              let hits = matchFuncsWithV8AndJS funcs v8Cov jsCode
+              let hits = map (normalizeHitWithStatic staticFunctions) (matchFuncsWithV8AndJS funcs v8Cov jsCode)
               cleanupTempFiles [tempIdrPath, tempIpkgPath, dumpcasesPath]
-              pure $ Right hits
+              pure $ Right (hits, staticFunctions)
   where
-    -- | Check if function is from dom-mvc libraries (idris2-dom, idris2-dom-mvc)
-    isDomMvcLibraryFunc : String -> Bool
-    isDomMvcLibraryFunc name =
-         isPrefixOf "Text.HTML." name
-      || isPrefixOf "Web.MVC." name
-      || isPrefixOf "JS." name
-      || isPrefixOf "Control.Monad.Dom." name
-      || isPrefixOf "Text.CSS." name
-      || isPrefixOf "Web.Raw." name
-
-    -- | Check if function is a test function
-    isTestFunc : String -> Bool
-    isTestFunc name = isInfixOf ".Tests." name || isInfixOf "Test." name
-                   || isPrefixOf "test_" name
-
-    -- | Check if function should be excluded from coverage (using idris2-coverage-core)
-    isExcludedFunc : String -> Bool
-    isExcludedFunc name = shouldExcludeFunctionName name
-                       || isExcludedReason (determineExclusionReason defaultExclusions name)
-                       || isDomMvcLibraryFunc name
-                       || isTestFunc name
-
-    -- | Filter to user functions only (exclude Prelude, prim__, {csegen:*}, etc.)
-    filterUserFuncs : List FuncCases -> List FuncCases
-    filterUserFuncs = filter (\fc => not (isExcludedFunc fc.funcName))
-
     funcToHit : FuncCases -> WebFunctionHit
     funcToHit fc = MkWebFunctionHit fc.funcName fc.funcName
                      fc.totalBranches 0 (length fc.cases) 0
@@ -290,7 +390,7 @@ runTestsWithWebCoverage projectDir testModules timeout = do
       let allRanges = concatMap (.ranges) v8Cov.functions
           executedRanges = filter (\r => r.count > 0) allRanges
           -- Simple sum of range sizes (may overcount overlapping ranges, but good estimate)
-      in sum $ map (\r => minus r.endOffset r.startOffset) executedRanges
+      in sum $ map (\r => toNatJsByteLength (offsetMinus r.endOffset r.startOffset)) executedRanges
 
     -- | Calculate total code bytes from V8 coverage (all ranges)
     calcTotalBytes : V8ScriptCoverage -> Nat
@@ -299,7 +399,7 @@ runTestsWithWebCoverage projectDir testModules timeout = do
       in case allRanges of
            [] => 0
            _  => -- Use max endOffset as total code size
-                 foldl max 0 (map (.endOffset) allRanges)
+                 toNatJsByteOffset (foldl maxOffset zeroJsByteOffset (map (.endOffset) allRanges))
 
     -- | Fallback: Byte-based proportional coverage matching
     -- Used when JS file cannot be read
@@ -353,8 +453,8 @@ runTestsWithWebCoverage projectDir testModules timeout = do
     -- | Count V8 ranges that overlap with a JS function's byte range
     countRangesInFunc : JSFunctionDef -> List V8Range -> (Nat, Nat)
     countRangesInFunc jf ranges =
-      let funcRanges = filter (\r => r.startOffset >= jf.startOffset
-                                  && r.startOffset < jf.endOffset) ranges
+      let funcRanges = filter (\r => offsetGE r.startOffset jf.startOffset
+                                  && offsetLT r.startOffset jf.endOffset) ranges
           execCount = length $ filter (\r => r.count > 0) funcRanges
           totCount = length funcRanges
       in (execCount, totCount)
@@ -400,6 +500,18 @@ runTestsWithWebCoverage projectDir testModules timeout = do
                    fc.totalBranches finalExec (length fc.cases)
                    (min finalExec (length fc.cases))
 
+||| Run tests with web coverage and return per-function hits
+|||
+||| Compatibility API that projects the detailed report down to runtime hits.
+export
+runTestsWithWebCoverage : (projectDir : String)
+                        -> (testModules : List String)
+                        -> (timeout : Nat)
+                        -> IO (Either String (List WebFunctionHit))
+runTestsWithWebCoverage projectDir testModules timeout = do
+  result <- runTestsWithWebCoverageDetailed projectDir testModules timeout
+  pure $ map fst result
+
 -- =============================================================================
 -- Convenience API
 -- =============================================================================
@@ -411,12 +523,7 @@ runWebCoverageReport : (projectDir : String)
                      -> (timeout : Nat)
                      -> IO (Either String WebCoverageReport)
 runWebCoverageReport projectDir testModules timeout = do
-  result <- runTestsWithWebCoverage projectDir testModules timeout
+  result <- runTestsWithWebCoverageDetailed projectDir testModules timeout
   case result of
     Left err => pure $ Left err
-    Right hits =>
-      let totalCanon = sum $ map (.canonicalCount) hits
-          totalExec = sum $ map (.executedCount) hits
-          pct = if totalCanon == 0 then 100.0
-                else cast totalExec / cast totalCanon * 100.0
-      in pure $ Right $ MkWebCoverageReport hits [] totalCanon totalExec pct
+    Right (hits, analyses) => pure $ Right $ buildWebCoverageReport hits analyses

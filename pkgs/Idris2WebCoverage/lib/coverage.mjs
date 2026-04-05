@@ -9,6 +9,38 @@ import { spawn } from 'child_process';
 import { mkdirSync, rmSync } from 'fs';
 import path from 'path';
 
+function unique(items) {
+  return [...new Set(items)];
+}
+
+function v8FunctionObservationId(func, index = 0) {
+  const name = typeof func?.functionName === 'string' && func.functionName.trim().length > 0
+    ? func.functionName.trim()
+    : '<anonymous>';
+  const startOffset = func?.ranges?.[0]?.startOffset ?? 0;
+  return `js:${name}@${startOffset}:${index}`;
+}
+
+function buildMeasurement(coverage) {
+  const functions = coverage?.functions ?? [];
+  const denominatorIds = unique(
+    functions.map((func, index) => v8FunctionObservationId(func, index))
+  );
+  const coveredIds = unique(
+    functions
+      .map((func, index) => ({ func, id: v8FunctionObservationId(func, index) }))
+      .filter(({ func }) => func.ranges?.some(r => r.count > 0))
+      .map(({ id }) => id)
+  );
+
+  return {
+    denominator_ids: denominatorIds,
+    covered_ids: coveredIds,
+    excluded_ids: [],
+    unknown_ids: []
+  };
+}
+
 /**
  * Find JS and map files from a path
  */
@@ -241,6 +273,7 @@ export async function collectCoverage(targetPath, options = {}) {
     totalPercentage: totalLines > 0 ? Math.round((totalCovered / totalLines) * 100) : 0,
     totalFunctions: coverage?.functions?.length || 0,
     coveredFunctions: coverage?.functions?.filter(f => f.ranges.some(r => r.count > 0)).length || 0,
+    measurement: buildMeasurement(coverage),
     byFile,
     output
   };

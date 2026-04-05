@@ -5,7 +5,7 @@ brief = "Shared types for Idris2 coverage analysis tools"
 
 sourcedir = "src"
 
-depends = base, contrib
+depends = base, contrib, idris2-coverage-standardization
 
 modules = Coverage.Core.Types
         , Coverage.Core.Exclusions
@@ -14,6 +14,7 @@ modules = Coverage.Core.Types
         , Coverage.Core.Result
         , Coverage.Core.DumpcasesRunner
         , Coverage.Core.RuntimeHit
+        , Coverage.Core.ObligationMap
         , Coverage.Core.HighImpact
         , Coverage.Classification.CrashReason
         , Coverage.Classification.BranchClass

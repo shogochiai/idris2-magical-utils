@@ -11,10 +11,42 @@ import Data.String
 import System
 import System.File
 import System.Directory
+import Execution.Standardization.Web
 
 import WebCoverage.Types
 
 %default covering
+
+shellQuote : String -> String
+shellQuote s = "'" ++ concatMap escape (unpack s) ++ "'"
+  where
+    escape : Char -> String
+    escape '\'' = "'\\''"
+    escape c = singleton c
+
+getUniqueId : IO String
+getUniqueId = do
+  Right h <- popen "date +%s%N 2>/dev/null || date +%s" Read
+    | Left _ => pure "0"
+  Right s <- fGetLine h
+    | Left _ => do _ <- pclose h; pure "0"
+  _ <- pclose h
+  pure (trim s)
+
+runShellCapture : String -> IO (Either String String)
+runShellCapture cmd = do
+  uid <- getUniqueId
+  let outputPath = "/tmp/idris2_web_cov_shell_" ++ uid ++ ".log"
+  let wrapped = "(" ++ cmd ++ ") > " ++ shellQuote outputPath ++ " 2>/dev/null"
+  exitCode <- system wrapped
+  Right output <- readFile outputPath
+    | Left err => do
+        _ <- removeFile outputPath
+        pure $ Left $ "Failed to read shell output: " ++ show err
+  _ <- removeFile outputPath
+  if exitCode == 0
+     then pure $ Right (trim output)
+     else pure $ Left (trim output)
 
 -- =============================================================================
 -- Playwright Script Generation
@@ -82,7 +114,7 @@ parseV8Ranges json = extractRanges (unpack json)
                       Nothing => []
                       Just afterCount =>
                         let countNum = takeDigits afterCount
-                            range = MkV8Range startNum endNum countNum
+                            range = MkV8Range (jsByteOffsetFromNat startNum) (jsByteOffsetFromNat endNum) countNum
                         in range :: extractRanges afterCount
 
 -- Parse script name from URL field
@@ -98,72 +130,93 @@ parseScriptUrl json =
 -- Playwright Coverage Collection
 -- =============================================================================
 
-||| Extract project directory from JS path
-||| For relative paths (./build/...), returns "."
-||| For absolute paths (/path/project/build/...), returns "/path/project"
-extractProjectDir : String -> String
-extractProjectDir jsPath =
-  if isPrefixOf "./build" jsPath then "."
-  else if isPrefixOf "build" jsPath then "."
-  else "."  -- Always use current directory for simplicity
+resolveNodeModulesPath : String -> IO (Either String String)
+resolveNodeModulesPath projectDir = do
+  envPath <- getEnv "IDRIS2_WEB_COVERAGE_NODE_MODULES"
+  globalRoot <- runShellCapture "npm root -g 2>/dev/null || true"
+  let candidates =
+        filter (/= "")
+          ([fromMaybe "" envPath, projectDir ++ "/node_modules"]
+            ++ [either (const "") id globalRoot])
+  tryCandidates candidates
+  where
+    tryCandidates : List String -> IO (Either String String)
+    tryCandidates [] =
+      pure $ Left $
+        "Playwright runtime not available. Install `playwright` in the target project, "
+        ++ "set IDRIS2_WEB_COVERAGE_NODE_MODULES, or make it available via `npm root -g`."
+    tryCandidates (candidate :: rest) = do
+      let resolveCmd =
+            "NODE_PATH=" ++ shellQuote candidate
+            ++ " node -e " ++ shellQuote "require.resolve('playwright')"
+            ++ " >/dev/null 2>&1"
+      exitCode <- system resolveCmd
+      if exitCode == 0
+         then pure $ Right candidate
+         else tryCandidates rest
 
 ||| Run JavaScript file in Playwright browser and collect V8 coverage
 |||
 ||| @jsPath - Path to compiled JavaScript file
 ||| @timeout - Timeout in seconds
 export
-runDomTestCoverage : (jsPath : String) -> IO (Either String V8ScriptCoverage)
-runDomTestCoverage jsPath = do
+runDomTestCoverage : (projectDir : String) -> (jsPath : String) -> IO (Either String V8ScriptCoverage)
+runDomTestCoverage projectDir jsPath = do
   putStrLn "    [Playwright] Starting browser coverage collection..."
   -- Generate unique ID for temp files
   uid <- getUniqueId
   let scriptPath = "/tmp/playwright_cov_" ++ uid ++ ".js"
   let outputPath = "/tmp/playwright_cov_" ++ uid ++ ".json"
+  let logPath = "/tmp/playwright_cov_" ++ uid ++ ".log"
 
   -- Write Playwright script
   let script = playwrightScript jsPath outputPath
   Right () <- writeFile scriptPath script
     | Left err => pure $ Left $ "Failed to write script: " ++ show err
 
-  -- Run Playwright script with Node.js from project directory
-  -- Use NODE_PATH to help Node.js find modules in the project's node_modules
-  let projectDir = extractProjectDir jsPath
-  let nodeModulesPath = projectDir ++ "/node_modules"
-  let cmd = "cd " ++ projectDir ++ " && NODE_PATH=" ++ nodeModulesPath ++ " node " ++ scriptPath ++ " 2>&1"
+  Right nodeModulesPath <- resolveNodeModulesPath projectDir
+    | Left err => do
+        cleanup scriptPath outputPath logPath
+        pure $ Left err
+
+  let cmd =
+        "cd " ++ shellQuote projectDir
+        ++ " && NODE_PATH=" ++ shellQuote nodeModulesPath
+        ++ " node " ++ shellQuote scriptPath
+        ++ " > " ++ shellQuote logPath ++ " 2>&1"
   exitCode <- system cmd
+  if exitCode /= 0
+     then do
+       runLog <- readFile logPath
+       cleanup scriptPath outputPath logPath
+       pure $ Left $
+         "Playwright coverage failed: "
+         ++ either (\_ => "unable to read Playwright log") trim runLog
+     else do
+       -- Read coverage output
+       Right covJson <- readFile outputPath
+         | Left _ => do
+             cleanup scriptPath outputPath logPath
+             pure $ Left "Failed to read coverage output"
 
-  -- Read coverage output
-  Right covJson <- readFile outputPath
-    | Left _ => do
-        cleanup scriptPath outputPath
-        pure $ Left "Failed to read coverage output"
+       -- Cleanup temp files
+       cleanup scriptPath outputPath logPath
 
-  -- Cleanup temp files
-  cleanup scriptPath outputPath
-
-  -- Parse coverage JSON
-  let ranges = parseV8Ranges covJson
-  let scriptName = fromMaybe jsPath (parseScriptUrl covJson)
-  let func = MkV8FunctionCoverage "_aggregate_" ranges False
-  pure $ Right $ MkV8ScriptCoverage scriptName [func]
+       -- Parse coverage JSON
+       let ranges = parseV8Ranges covJson
+       let scriptName = fromMaybe jsPath (parseScriptUrl covJson)
+       let func = MkV8FunctionCoverage "_aggregate_" ranges False
+       pure $ Right $ MkV8ScriptCoverage scriptName [func]
   where
-    getUniqueId : IO String
-    getUniqueId = do
-      Right h <- popen "date +%s%N 2>/dev/null || date +%s" Read
-        | Left _ => pure "0"
-      Right s <- fGetLine h
-        | Left _ => do _ <- pclose h; pure "0"
-      _ <- pclose h
-      pure (trim s)
-
-    cleanup : String -> String -> IO ()
-    cleanup s o = do
+    cleanup : String -> String -> String -> IO ()
+    cleanup s o l = do
       _ <- removeFile s
       _ <- removeFile o
+      _ <- removeFile l
       pure ()
 
 ||| Collect Playwright coverage (alias for runDomTestCoverage)
 export
 collectPlaywrightCoverage : (jsPath : String) -> (timeout : Nat)
                           -> IO (Either String V8ScriptCoverage)
-collectPlaywrightCoverage jsPath _ = runDomTestCoverage jsPath
+collectPlaywrightCoverage jsPath _ = runDomTestCoverage "." jsPath

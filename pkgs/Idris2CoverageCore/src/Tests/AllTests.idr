@@ -8,7 +8,10 @@ import Data.List
 import Coverage.Core.Types
 import Coverage.Core.Result
 import Coverage.Core.RuntimeHit
+import Coverage.Core.ObligationMap
 import Coverage.Core.HighImpact
+import Coverage.Classification.BranchClass
+import Coverage.Standardization.Types
 
 %default covering
 
@@ -195,6 +198,28 @@ test_RUNTIME_006 () =
   let hit = MkFunctionRuntimeHit "f" "f" 5 10 20 20
   in uncoveredCount hit == 0
 
+test_RUNTIME_007 : () -> Bool
+test_RUNTIME_007 () =
+  let om = buildObligationMap
+             [ ("Main.foo", [runtimeFunctionName "Main.foo", generatedFunctionName "Main_foo"])
+             , ("Main.bar", [runtimeFunctionName "Main.bar"])
+             ]
+      resolved = resolveRuntimeUnits om [generatedFunctionName "Main_foo"]
+  in resolved == ["Main.foo"]
+
+test_RUNTIME_008 : () -> Bool
+test_RUNTIME_008 () =
+  let obligations =
+        [ MkCoverageObligation "Main.foo" ElaboratedCaseTree FunctionLevel "foo" Nothing ReachableObligation
+        , MkCoverageObligation "Main.artifact" ElaboratedCaseTree FunctionLevel "artifact" Nothing CompilerInsertedArtifact
+        ]
+      om = buildFunctionObligationMap obligations (\ob =>
+             [runtimeFunctionName ob.obligationId, generatedFunctionName (getSimpleFuncName ob.obligationId)]
+           )
+      covered = resolveCoveredDenominatorIds obligations om
+                  [generatedFunctionName "foo", generatedFunctionName "artifact"]
+  in covered == ["Main.foo"]
+
 -- =============================================================================
 -- HighImpact Module Tests
 -- =============================================================================
@@ -298,6 +323,49 @@ test_HI_014 () =
   showSeverity severityInfinity == "Inf"
 
 -- =============================================================================
+-- BranchClass / Standardization Tests
+-- =============================================================================
+
+test_BRANCH_001 : () -> Bool
+test_BRANCH_001 () =
+  branchClassToObligationClass BCCanonical == ReachableObligation
+  && branchClassToObligationClass BCExcludedNoClauses == LogicallyUnreachable
+  && branchClassToObligationClass BCBugUnhandledInput == UserAdmittedPartialGap
+
+test_BRANCH_002 : () -> Bool
+test_BRANCH_002 () =
+  isCountedInDenominator BCCanonical
+  && not (isCountedInDenominator BCExcludedNoClauses)
+  && not (isCountedInDenominator (BCUnknownCrash "mystery"))
+
+test_BRANCH_003 : () -> Bool
+test_BRANCH_003 () =
+  let canonical = MkClassifiedBranch (MkBranchId "Main" "safe" 0 0) BCCanonical "concase"
+      unknown = MkClassifiedBranch (MkBranchId "Main" "risky" 0 1) (BCUnknownCrash "mystery") "crash"
+  in isStandardCoverageClaimAdmissible [canonical]
+     && not (isStandardCoverageClaimAdmissible [canonical, unknown])
+
+test_BRANCH_004 : () -> Bool
+test_BRANCH_004 () =
+  let canonical = MkClassifiedBranch (MkBranchId "Main" "safe" 0 0) BCCanonical "concase"
+      partialBranch = MkClassifiedBranch (MkBranchId "Main" "safe" 0 1) BCBugUnhandledInput "crash"
+      fn = MkStaticFunctionAnalysis "Main.safe" [canonical, partialBranch]
+      obligation = staticFunctionToCoverageObligation fn
+  in functionObligationClass fn.branches == UserAdmittedPartialGap
+     && obligation.granularity == FunctionLevel
+     && isStandardFunctionCoverageClaimAdmissible [fn]
+
+test_BRANCH_005 : () -> Bool
+test_BRANCH_005 () =
+  let unreachable = MkClassifiedBranch (MkBranchId "Main" "voidFn" 0 0) BCExcludedNoClauses "impossible"
+      unknownBranch = MkClassifiedBranch (MkBranchId "Main" "unknownFn" 0 1) (BCUnknownCrash "mystery") "crash"
+      excludedFn = MkStaticFunctionAnalysis "Main.voidFn" [unreachable]
+      unknownFn = MkStaticFunctionAnalysis "Main.unknownFn" [unknownBranch]
+  in functionObligationClass excludedFn.branches == LogicallyUnreachable
+     && isStandardFunctionCoverageClaimAdmissible [excludedFn]
+     && not (isStandardFunctionCoverageClaimAdmissible [excludedFn, unknownFn])
+
+-- =============================================================================
 -- All Tests
 -- =============================================================================
 
@@ -334,6 +402,8 @@ allTests =
   , test "RUNTIME_004" "isFullyCovered false" test_RUNTIME_004
   , test "RUNTIME_005" "uncoveredCount with gaps" test_RUNTIME_005
   , test "RUNTIME_006" "uncoveredCount fully covered" test_RUNTIME_006
+  , test "RUNTIME_007" "ObligationMap resolves generated names to obligation IDs" test_RUNTIME_007
+  , test "RUNTIME_008" "ObligationMap only reports denominator-covered IDs" test_RUNTIME_008
 
   -- HighImpact
   , test "HI_001" "HighImpactKind equality" test_HI_001
@@ -350,6 +420,13 @@ allTests =
   , test "HI_012" "targetsFromRuntimeHits" test_HI_012
   , test "HI_013" "showSeverity regular" test_HI_013
   , test "HI_014" "showSeverity Inf" test_HI_014
+
+  -- BranchClass / Standardization
+  , test "BRANCH_001" "BranchClass to obligation class mapping" test_BRANCH_001
+  , test "BRANCH_002" "Denominator semantics follow standardization" test_BRANCH_002
+  , test "BRANCH_003" "Unknown branches block admissible claim" test_BRANCH_003
+  , test "BRANCH_004" "Function obligations aggregate partial branches" test_BRANCH_004
+  , test "BRANCH_005" "Function claims block on unknown branches" test_BRANCH_005
   ]
 
 ||| Run all tests - pure version

@@ -18,6 +18,16 @@ type = "local"
 path = "pkgs/Idris2Coverage"
 ipkg = "idris2-coverage.ipkg"
 
+[custom.all.idris2-coverage-standardization]
+type = "local"
+path = "pkgs/Idris2CoverageStandardization"
+ipkg = "idris2-coverage-standardization.ipkg"
+
+[custom.all.idris2-execution-standardization]
+type = "local"
+path = "pkgs/Idris2ExecutionStandardization"
+ipkg = "idris2-execution-standardization.ipkg"
+
 [custom.all.idris2-evm-coverage]
 type = "local"
 path = "pkgs/Idris2EvmCoverage"

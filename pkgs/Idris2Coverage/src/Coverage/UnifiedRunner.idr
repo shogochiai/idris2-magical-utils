@@ -31,6 +31,61 @@ joinStrings sep [] = ""
 joinStrings sep [x] = x
 joinStrings sep (x :: xs) = x ++ sep ++ joinStrings sep xs
 
+||| Shell prelude for using the installed Idris2 app resolved from a neutral directory.
+||| This avoids local pack.toml interference when running inside target projects.
+installedIdrisPrelude : String
+installedIdrisPrelude =
+  "APP=\"$(cd /tmp && pack app-path idris2)\""
+  ++ " && export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
+  ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
+  ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
+
+trimLog : String -> String
+trimLog = trim
+
+removeFileIfExistsSafe : String -> IO ()
+removeFileIfExistsSafe path = do
+  _ <- removeFile path
+  pure ()
+
+||| Build an ipkg, preferring direct Idris2 and falling back to pack.
+||| Returns captured failure logs so downstream callers can surface the real cause.
+buildIpkg : String -> String -> IO (Either String ())
+buildIpkg projectDir ipkgName = do
+  let directLog = projectDir ++ "/.idris2-coverage-build-direct.log"
+  let packLog = projectDir ++ "/.idris2-coverage-build-pack.log"
+  removeFileIfExistsSafe directLog
+  removeFileIfExistsSafe packLog
+
+  let directCmd = installedIdrisPrelude
+               ++ " && cd " ++ projectDir
+               ++ " && \"$APP\" --build " ++ ipkgName ++ " > " ++ directLog ++ " 2>&1"
+  directExit <- system directCmd
+  if directExit == 0
+     then do
+       removeFileIfExistsSafe directLog
+       pure $ Right ()
+     else do
+       directMsg <- readFile directLog
+       let packCmd = "cd " ++ projectDir ++ " && pack build " ++ ipkgName ++ " > " ++ packLog ++ " 2>&1"
+       packExit <- system packCmd
+       if packExit == 0
+          then do
+            removeFileIfExistsSafe directLog
+            removeFileIfExistsSafe packLog
+            pure $ Right ()
+          else do
+            packMsg <- readFile packLog
+            removeFileIfExistsSafe directLog
+            removeFileIfExistsSafe packLog
+            let directSummary = either (\err => "unable to read direct-build log: " ++ show err)
+                                       trimLog directMsg
+            let packSummary = either (\err => "unable to read pack-build log: " ++ show err)
+                                     trimLog packMsg
+            pure $ Left $
+              "direct idris2 build failed: " ++ directSummary ++ "\n"
+              ++ "pack fallback failed: " ++ packSummary
+
 ||| Generate temporary test runner source code
 ||| The test modules must export a `runAllTests : IO ()` function
 generateTempRunner : String -> List String -> String
@@ -42,6 +97,18 @@ generateTempRunner modName testModules = unlines
   , "main : IO ()"
   , "main = do"
   , unlines (map (\m => "  " ++ m ++ ".runAllTests") testModules)
+  ]
+
+||| Generate a temporary wrapper that imports all project modules.
+||| This forces Idris2 to emit case trees for library packages with no executable.
+generateImportWrapper : String -> List String -> String
+generateImportWrapper modName modules = unlines
+  [ "module " ++ modName
+  , ""
+  , unlines (map (\m => "import " ++ m) modules)
+  , ""
+  , "main : IO ()"
+  , "main = pure ()"
   ]
 
 ||| Generate temporary .ipkg file
@@ -178,21 +245,31 @@ cleanupTempFiles tempIdr tempIpkg ssHtml profileHtml = do
 -- Ipkg Parsing
 -- =============================================================================
 
-||| Parse depends line from ipkg content
-||| Returns list of package names from "depends = pkg1, pkg2, ..." line
+||| Parse depends from ipkg content, handling multi-line continuation
+||| Returns list of package names from "depends = pkg1, pkg2, ..." lines
+||| Supports continuation lines starting with ',' or whitespace
 parseIpkgDepends : String -> List String
 parseIpkgDepends content =
   let ls = lines content
-      dependsLines = filter (isPrefixOf "depends") (map trim ls)
-  in case dependsLines of
+      (_, fromDepends) = break (isPrefixOf "depends" . trim) ls
+  in case fromDepends of
        [] => []
-       (line :: _) =>
-         let afterEquals = trim $ snd $ break (== '=') line
-             -- Remove leading '=' if present
+       (firstLine :: rest) =>
+         let continuations = takeWhile isContinuation rest
+             allLines = firstLine :: continuations
+             joined = fastConcat $ intersperse " " (map trim allLines)
+             afterEquals = trim $ snd $ break (== '=') joined
              pkgStr = if isPrefixOf "=" afterEquals
                         then trim (substr 1 (length afterEquals) afterEquals)
                         else afterEquals
-         in map trim $ forget $ split (== ',') pkgStr
+         in map trim $ filter (/= "") $ forget $ split (== ',') pkgStr
+  where
+    isContinuation : String -> Bool
+    isContinuation s =
+      let trimmed = ltrim s
+      in not (null trimmed) &&
+         (isPrefixOf "," trimmed) &&
+         not (isInfixOf "=" trimmed)
 
 ||| Parse sourcedir from ipkg content (defaults to "src")
 parseIpkgSourcedir : String -> String
@@ -207,6 +284,34 @@ parseIpkgSourcedir content =
                           then trim (substr 1 (length afterEquals) afterEquals)
                           else afterEquals
          in trim $ pack $ filter (/= '"') (unpack stripped)
+
+||| Parse modules from ipkg content, handling multi-line continuation.
+parseIpkgModules : String -> List String
+parseIpkgModules content =
+  let ls = lines content
+      moduleLines = collectModuleLines ls False
+      joined = fastConcat $ intersperse " " moduleLines
+      afterEq = case break (== '=') (unpack joined) of
+                  (_, rest) => pack $ drop 1 rest
+      parts = forget $ split (== ',') afterEq
+  in map (trim . pack . filter isModuleChar . unpack . trim) parts
+  where
+    isModuleChar : Char -> Bool
+    isModuleChar c = isAlphaNum c || c == '.' || c == '_'
+
+    collectModuleLines : List String -> Bool -> List String
+    collectModuleLines [] _ = []
+    collectModuleLines (l :: ls) False =
+      if isInfixOf "modules" l && isInfixOf "=" l
+         then l :: collectModuleLines ls True
+         else collectModuleLines ls False
+    collectModuleLines (l :: ls) True =
+      let trimmed = trim l
+      in if null trimmed
+            then collectModuleLines ls True
+            else if isPrefixOf "," trimmed || isPrefixOf " " l || isPrefixOf "\t" l
+                    then l :: collectModuleLines ls True
+                    else []
 
 ||| Find and read first matching ipkg file content
 ||| Prefers files without -minimal, -test, -temp prefixes
@@ -245,6 +350,95 @@ readProjectSourcedir projectDir = do
   Just content <- findIpkgContent projectDir
     | Nothing => pure "src"
   pure $ parseIpkgSourcedir content
+
+||| Split "path/to/project.ipkg" into ("path/to", "project.ipkg")
+splitIpkgPathLocal : String -> (String, String)
+splitIpkgPathLocal path =
+  let parts = forget $ split (== '/') path
+  in case parts of
+       [] => (".", path)
+       [x] => (".", x)
+       _ => case initLast parts of
+              Nothing => (".", path)
+              Just (dirParts, lastPart) =>
+                (fastConcat $ intersperse "/" dirParts, lastPart)
+  where
+    initLast : List a -> Maybe (List a, a)
+    initLast [] = Nothing
+    initLast [x] = Just ([], x)
+    initLast (x :: xs) = case initLast xs of
+      Nothing => Just ([], x)
+      Just (ys, z) => Just (x :: ys, z)
+
+||| Collect dumpcases for a project by generating a temporary executable wrapper.
+||| This avoids the "already built package emits no dumpcases" problem.
+public export
+runProjectDumpcasesWithTempIpkg : (ipkgPath : String) -> IO (Either String String)
+runProjectDumpcasesWithTempIpkg ipkgPath = do
+  let (projectDir, _) = splitIpkgPathLocal ipkgPath
+  Right ipkgContent <- readFile ipkgPath
+    | Left err => pure $ Left $ "Failed to read ipkg: " ++ show err
+
+  let projectDepends = parseIpkgDepends ipkgContent
+  let sourcedir = parseIpkgSourcedir ipkgContent
+  let projectModules = parseIpkgModules ipkgContent
+
+  case projectModules of
+    [] => pure $ Left "No modules found in ipkg"
+    _ => do
+      uid <- getUniqueId
+      let tempModName = "TempDumpcases_" ++ uid
+      let tempExecName = "temp-dumpcases-" ++ uid
+      let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
+      let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
+      let tempIpkgName = tempExecName ++ ".ipkg"
+      let packTomlPath = projectDir ++ "/pack.toml"
+      projectPackToml <- readProjectPackToml projectDir
+      let packTomlContent = generateTempPackToml projectPackToml
+      let dumpcasesPath = "/tmp/idris2_dumpcases_project_" ++ uid ++ ".txt"
+
+      let runnerSource = generateImportWrapper tempModName projectModules
+      Right () <- writeFile tempIdrPath runnerSource
+        | Left err => pure $ Left $ "Failed to write temp wrapper: " ++ show err
+
+      let allModules = tempModName :: projectModules
+      let ipkgContent = generateTempIpkg tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just dumpcasesPath)
+      Right () <- writeFile tempIpkgPath ipkgContent
+        | Left err => do
+            removeFileIfExists tempIdrPath
+            pure $ Left $ "Failed to write temp ipkg: " ++ show err
+
+      Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
+        | Left err => do
+            removeFileIfExists tempIdrPath
+            removeFileIfExists tempIpkgPath
+            pure $ Left err
+
+      buildResult <- buildIpkg projectDir tempIpkgName
+      case buildResult of
+        Left err => do
+          removeFileIfExists tempIdrPath
+          removeFileIfExists tempIpkgPath
+          cleanupPackToml packTomlPath createdPackToml
+          removeFileIfExists dumpcasesPath
+          pure $ Left $ "Build with --dumpcases failed: " ++ err
+        Right () => do
+          Right dumpContent <- readFile dumpcasesPath
+            | Left err => do
+                removeFileIfExists tempIdrPath
+                removeFileIfExists tempIpkgPath
+                cleanupPackToml packTomlPath createdPackToml
+                removeFileIfExists dumpcasesPath
+                pure $ Left $ "Failed to read dumpcases output: " ++ show err
+
+          removeFileIfExists tempIdrPath
+          removeFileIfExists tempIpkgPath
+          cleanupPackToml packTomlPath createdPackToml
+          removeFileIfExists dumpcasesPath
+
+          if null (trim dumpContent)
+             then pure $ Left "No dumpcases output generated"
+             else pure $ Right dumpContent
 
 -- =============================================================================
 -- Main Entry Point
@@ -320,14 +514,15 @@ runTestsWithCoverage projectDir testModules timeout = do
             removeFileIfExists tempIpkgPath
             pure $ Left err
 
-      -- Build with profiling using pack for proper package resolution
-      buildResult <- system $ "cd " ++ projectDir ++ " && pack build " ++ tempExecName ++ ".ipkg 2>&1"
-      if buildResult /= 0
-        then do
+      -- Prefer the installed Idris2 app, but keep pack as fallback for projects
+      -- that still rely on pack-managed dependency resolution.
+      buildResult <- buildIpkg projectDir (tempExecName ++ ".ipkg")
+      case buildResult of
+        Left err => do
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
           cleanupPackToml packTomlPath createdPackToml
-          pure $ Left "Build failed"
-        else do
+          pure $ Left $ "Build failed: " ++ err
+        Right () => do
           -- Run executable and capture output
           -- Use relative path from projectDir (./build/exec/...) since we cd there
           let relExecPath = "./build/exec/" ++ tempExecName
@@ -455,16 +650,15 @@ runTestsWithTestCoverage projectDir testModules timeout = do
       -- Build with --dumpcases on test binary
       -- Use pack build to ensure proper package resolution (avoids ambiguous identifier issues)
       -- The --dumpcases flag is passed via opts in the ipkg file
-      let buildCmd = "cd " ++ projectDir ++ " && pack build " ++ tempIpkgName ++ " 2>&1"
       putStrLn $ "Dumping case trees to " ++ dumpcasesPath
-      buildResult <- system buildCmd
-      if buildResult /= 0
-        then do
+      buildResult <- buildIpkg projectDir tempIpkgName
+      case buildResult of
+        Left err => do
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
           cleanupPackToml packTomlPath createdPackToml
           removeFileIfExists dumpcasesPath
-          pure $ Left "Build with --dumpcases failed"
-        else do
+          pure $ Left $ "Build with --dumpcases failed: " ++ err
+        Right () => do
           -- Parse --dumpcases output from test binary
           Right dumpContent <- readFile dumpcasesPath
             | Left _ => do
@@ -568,15 +762,14 @@ runTestsWithFunctionHits projectDir testModules timeout = do
       -- Build with --dumpcases on test binary
       -- Use pack build to ensure proper package resolution (avoids ambiguous identifier issues)
       -- The --dumpcases flag is passed via opts in the ipkg file
-      let buildCmd = "cd " ++ projectDir ++ " && pack build " ++ tempIpkgName ++ " 2>&1"
-      buildResult <- system buildCmd
-      if buildResult /= 0
-        then do
+      buildResult <- buildIpkg projectDir tempIpkgName
+      case buildResult of
+        Left err => do
           cleanupTempFiles tempIdrPath tempIpkgPath ssHtmlPath profileHtmlPath
           cleanupPackToml packTomlPath createdPackToml
           removeFileIfExists dumpcasesPath
-          pure $ Left "Build with --dumpcases failed"
-        else do
+          pure $ Left $ "Build with --dumpcases failed: " ++ err
+        Right () => do
           -- Parse --dumpcases output for static analysis
           Right dumpContent <- readFile dumpcasesPath
             | Left _ => do

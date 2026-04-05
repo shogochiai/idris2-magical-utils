@@ -7,11 +7,24 @@ A pragmatic, proof-aware test coverage tool for Idris2.
 
 ## What is this?
 
-A coverage tool that understands dependent types. It excludes provably unreachable branches (like `void` cases) from your coverage denominator, so **100% coverage is actually achievable**.
+A coverage tool that interprets Idris2 compiler output conservatively in the
+presence of dependent types.
+
+Current positioning:
+
+- profile: function-level semantic test obligation coverage
+- implementation style: downstream and proof-aware
+- strong claim policy: only when `claim_admissible = true`
+
+This tool may emit a numeric coverage measurement even when compiler provenance
+is incomplete, but it does not treat every measurement as a strong semantic
+coverage claim.
 
 ```bash
 $ idris2-cov myproject/
 Coverage: 847/901 (94%)
+Profile: function-level semantic test obligation coverage
+Claim admissible: true
 
 Excluded (unreachable):
   - void/absurd patterns: 45
@@ -39,10 +52,24 @@ idris2 --build idris2-coverage.ipkg
 
 ## Key Features
 
-- **Proof-aware**: Excludes `impossible`/`void` branches from denominator
-- **CRASH classification**: Distinguishes bugs from unreachable code
+- **Proof-aware**: Separates reachable obligations, logical unreachability, partial gaps, artifacts, and unknowns
+- **Admissibility-aware**: Distinguishes a numeric measurement from a strong semantic claim
+- **CRASH classification**: Distinguishes multiple compiler/runtime artifact sources instead of treating all `CRASH` nodes alike
 - **CI-friendly**: Exit codes and JSON output for automation
 - **Zero compiler changes**: Works with vanilla Idris2
+
+## Relation To The Draft Standard
+
+This tool is intended to implement the draft standard defined in
+`idris2-coverage-standardization`, but current Idris2 compiler interfaces are
+not yet sufficient for a fully upstream-backed branch-level standard.
+
+Accordingly, the current implementation should be described as:
+
+- a conservative downstream implementation
+- of the function-level profile
+- with explicit unknown handling
+- and explicit `claim_admissible` reporting
 
 ## Documentation
 
@@ -61,10 +88,20 @@ idris2 --build idris2-coverage.ipkg
 ```
 idris2 --dumpcases  →  Parse case trees  →  Classify branches
                                                     ↓
-                              Canonical (testable) vs Excluded (void/absurd)
+                              Obligation classification + admissibility
                                                     ↓
-Chez Scheme profiler  →  Runtime hits  →  Coverage = executed / canonical
+Chez Scheme profiler  →  Runtime hits  →  Coverage measurement + claim status
 ```
+
+## What To Cite
+
+If you need a concept name in a paper, note, or issue, prefer:
+
+- `semantic test obligation coverage`
+
+If you need implementation status, say:
+
+- `idris2-coverage currently implements the function-level profile conservatively`
 
 ## Exit Codes
 

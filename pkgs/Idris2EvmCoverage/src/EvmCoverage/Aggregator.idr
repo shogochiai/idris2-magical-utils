@@ -4,9 +4,11 @@ module EvmCoverage.Aggregator
 
 import EvmCoverage.Types
 import EvmCoverage.SchemeMapper
+import EvmCoverage.DumpcasesParser
 import Data.List
 import Data.Maybe
 import Data.SortedMap
+import Coverage.Standardization.Types as CovStd
 
 %default covering
 
@@ -77,6 +79,70 @@ calculateHits static hits =
       (hitBranches, missedBranches) = partition (\b => isHit b.branchId hitSet) canonical
   in (length hitBranches, missedBranches)
 
+isHitCounted : BranchId -> List (BranchId, Nat) -> Bool
+isHitCounted bid hits =
+  any (\(other, cnt) => other == bid && cnt > 0) hits
+
+summarizeFunction : List (BranchId, Nat) -> (String, List ClassifiedBranch) -> BranchFunctionSummary
+summarizeFunction mergedHits (fn, branches) =
+  let canonical = filter (\b => isCanonical b.branchClass) branches
+      hitCanonical = filter (\b => isHitCounted b.branchId mergedHits) canonical
+      uncoveredIds =
+        map (show . (.branchId)) $
+          filter (\b => not (isHitCounted b.branchId mergedHits)) canonical
+      bugCount = length $ filter (\b => isBug b.branchClass) branches
+      unknownCount = length $ filter isUnknown branches
+  in MkBranchFunctionSummary
+       fn
+       (length canonical)
+       (length hitCanonical)
+       uncoveredIds
+       bugCount
+       unknownCount
+  where
+    isUnknown : ClassifiedBranch -> Bool
+    isUnknown b = case b.branchClass of
+      BCUnknownCrash _ => True
+      _ => False
+
+sortSummariesByPriority : List BranchFunctionSummary -> List BranchFunctionSummary
+sortSummariesByPriority [] = []
+sortSummariesByPriority (x :: xs) = insert x (sortSummariesByPriority xs)
+  where
+    priority : BranchFunctionSummary -> Nat
+    priority s =
+      let uncovered = length s.uncoveredBranchIds
+      in uncovered * 100 + s.bugBranches * 10 + s.unknownBranches
+
+    insert : BranchFunctionSummary -> List BranchFunctionSummary -> List BranchFunctionSummary
+    insert e [] = [e]
+    insert e (y :: ys) =
+      if priority e >= priority y then e :: y :: ys else y :: insert e ys
+
+groupByFunctionName : List ClassifiedBranch -> List (String, List ClassifiedBranch)
+groupByFunctionName branches = go branches []
+  where
+    insertOrUpdate : String -> ClassifiedBranch -> List (String, List ClassifiedBranch) -> List (String, List ClassifiedBranch)
+    insertOrUpdate fn b [] = [(fn, [b])]
+    insertOrUpdate fn b ((k, vs) :: rest) =
+      if k == fn then (k, b :: vs) :: rest
+      else (k, vs) :: insertOrUpdate fn b rest
+
+    go : List ClassifiedBranch -> List (String, List ClassifiedBranch) -> List (String, List ClassifiedBranch)
+    go [] acc = acc
+    go (b :: bs) acc = go bs (insertOrUpdate b.branchId.funcName b acc)
+
+export
+buildFunctionSummaries : StaticBranchAnalysis -> List (BranchId, Nat) -> List BranchFunctionSummary
+buildFunctionSummaries static mergedHits =
+  let grouped = groupByFunctionName static.allBranches
+      summaries = map (summarizeFunction mergedHits) grouped
+      interesting =
+        filter (\s => s.canonicalBranches > 0 &&
+                      (length s.uncoveredBranchIds > 0 || s.bugBranches > 0 || s.unknownBranches > 0))
+               summaries
+  in sortSummariesByPriority interesting
+
 ||| Create aggregated coverage from static analysis and hits
 export
 aggregateCoverage : StaticBranchAnalysis -> List TestRunHits -> AggregatedCoverage
@@ -86,12 +152,22 @@ aggregateCoverage static runs =
        (hitCount, uncovered) =>
          let tot = static.canonicalCount
              percent = calcCoveragePercent tot hitCount
+             measurement = coverageMeasurementForBranches static.allBranches (map fst mergedHits)
+             summaries = buildFunctionSummaries static mergedHits
+             targets = topKTargetsFromBranches 10 uncovered
          in MkAggregatedCoverage
               tot
               hitCount
               static.bugsCount
               static.unknownCount
               percent
+              defaultEvmExecutionProfileName
+              measurement
+              evmCoverageModelName
+              evmUnknownPolicyName
+              (coverageClaimAdmissibleForBranches static.allBranches)
+              targets
+              summaries
               uncovered
 
 -- =============================================================================

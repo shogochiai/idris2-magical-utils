@@ -4,6 +4,9 @@ module EvmCoverage.Tests.AllTests
 import Data.List
 import Data.SortedMap
 import EvmCoverage.SourceMap
+import EvmCoverage.StructuredExport
+import EvmCoverage.DumpcasesParser
+import EvmCoverage.Types
 
 -- =============================================================================
 -- YulComment Parsing Tests
@@ -197,6 +200,66 @@ test_buildYulToIdrisMap = do
     _ => False
 
 -- =============================================================================
+-- Structured Export Adapter Tests
+-- =============================================================================
+
+structuredSample : String
+structuredSample = """
+{
+  "compiler_version": "0.8.0",
+  "functions": [
+    {
+      "function_name": "Main.Functions.Vote.vote",
+      "nodes": [
+        {
+          "node_id": "Main.Functions.Vote.vote#0:0",
+          "source_span": "src/Main/Functions/Vote.idr:10:1-12:10",
+          "branch_index": 0,
+          "branch_label": "True",
+          "origin": "user_clause"
+        },
+        {
+          "node_id": "Main.Functions.Vote.vote#0:1",
+          "source_span": "src/Main/Functions/Vote.idr:13:1-15:10",
+          "branch_index": 1,
+          "branch_label": "False",
+          "origin": "impossible_clause"
+        }
+      ]
+    }
+  ]
+}
+"""
+
+||| REQ_STRUCT_001: structured export parser recognizes compiler node ids
+export
+test_parseStructuredExport_node_ids : IO Bool
+test_parseStructuredExport_node_ids = do
+  pure $ case parseStructuredExport structuredSample of
+    Right [b1, b2] =>
+      b1.branchId.compilerNodeId == Just "Main.Functions.Vote.vote#0:0"
+        && b2.branchId.compilerNodeId == Just "Main.Functions.Vote.vote#0:1"
+    _ => False
+
+||| REQ_STRUCT_002: structured export origin tags map to branch classes
+export
+test_parseStructuredExport_origin_mapping : IO Bool
+test_parseStructuredExport_origin_mapping = do
+  pure $ case parseStructuredExport structuredSample of
+    Right [b1, b2] =>
+      b1.branchClass == BCCanonical
+        && b2.branchClass == BCExcludedNoClauses
+    _ => False
+
+||| REQ_STRUCT_003: static export adapter autodetects structured JSON
+export
+test_parseStaticExport_autodetects_json : IO Bool
+test_parseStaticExport_autodetects_json = do
+  pure $ case parseStaticExport structuredSample of
+    Right [b1, _] => show b1.branchId == "Main.Functions.Vote.vote#0:0"
+    _ => False
+
+-- =============================================================================
 -- Test Runner
 -- =============================================================================
 
@@ -222,6 +285,9 @@ allTests =
   , ("REQ_SRCMAP_018: findIdrisLoc empty", test_findIdrisLoc_empty)
   , ("REQ_SRCMAP_019: findIdrisLoc nearest", test_findIdrisLoc_nearest)
   , ("REQ_SRCMAP_020: buildYulToIdrisMap", test_buildYulToIdrisMap)
+  , ("REQ_STRUCT_001: structured export preserves node ids", test_parseStructuredExport_node_ids)
+  , ("REQ_STRUCT_002: structured export maps origin tags", test_parseStructuredExport_origin_mapping)
+  , ("REQ_STRUCT_003: static export autodetects structured JSON", test_parseStaticExport_autodetects_json)
   ]
 
 runTest : (String, IO Bool) -> IO (String, Bool)

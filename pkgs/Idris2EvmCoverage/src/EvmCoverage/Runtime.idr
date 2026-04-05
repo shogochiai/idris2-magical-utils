@@ -74,16 +74,33 @@ extractProfileCounters logs =
 
 ||| Label entry from CSV: (index, function_name, has_switch)
 public export
+data LabelKind = LKFunction | LKBranch
+
+public export
+Show LabelKind where
+  show LKFunction = "function"
+  show LKBranch = "branch"
+
+public export
+Eq LabelKind where
+  LKFunction == LKFunction = True
+  LKBranch == LKBranch = True
+  _ == _ = False
+
+public export
 record LabelEntry where
   constructor MkLabelEntry
   labelIndex : Nat
+  labelKind : LabelKind
   mangledName : String    -- Original mangled name (e.g., Main_Functions_Vote_u_castVote)
   demangledName : String  -- Demangled name (e.g., Main.Functions.Vote.castVote)
-  hasSwitch : Bool
+  branchId : Maybe String
+  canonicalCountHint : Nat
 
 public export
 Show LabelEntry where
-  show l = show l.labelIndex ++ ": " ++ l.demangledName
+  show l = show l.labelIndex ++ ": " ++ l.demangledName ++
+           maybe "" (\bid => " -> " ++ bid) l.branchId
 
 ||| Demangle using YulMapper.parseYulFuncName
 demangle : String -> String
@@ -97,9 +114,21 @@ parseLabel : String -> Maybe LabelEntry
 parseLabel line =
   let parts = forget (split (== ',') line)
   in case parts of
+    (idx :: "branch" :: mangled :: demangledName :: bid :: _) =>
+      case parsePositive {a=Nat} idx of
+        Just i => Just (MkLabelEntry i LKBranch mangled demangledName
+                                  (if null (trim bid) then Nothing else Just (trim bid))
+                                  1)
+        Nothing => Nothing
+    (idx :: "function" :: mangled :: demangledName :: hint :: _) =>
+      case parsePositive {a=Nat} idx of
+        Just i => Just (MkLabelEntry i LKFunction mangled demangledName Nothing
+                                  (if trim hint == "True" then 1 else 0))
+        Nothing => Nothing
     (idx :: name :: sw :: _) =>
       case parsePositive {a=Nat} idx of
-        Just i => Just (MkLabelEntry i name (demangle name) (trim sw == "True"))
+        Just i => Just (MkLabelEntry i LKFunction name (demangle name) Nothing
+                                  (if trim sw == "True" then 1 else 0))
         Nothing => Nothing
     _ => Nothing
 
@@ -171,7 +200,7 @@ Show EvmCoverageResult where
 ||| Build EvmFunctionHit from label entry and hit count
 buildHit : LabelEntry -> Integer -> EvmFunctionHit
 buildHit lbl hitCount =
-  let canonical : Nat = if lbl.hasSwitch then 1 else 0
+  let canonical : Nat = lbl.canonicalCountHint
   in MkEvmFunctionHit lbl.demangledName lbl.mangledName canonical (cast {to=Nat} hitCount)
 
 ||| Make hit from label and count
@@ -283,6 +312,22 @@ parseHexCounters s =
            Nothing => []
            Just val => val :: go rest
 
+||| Decode ABI-wrapped uint256[] payload if present.
+||| EVM logs for dynamic arrays may appear as:
+|||   [offset, length, elem0, elem1, ...]
+||| or sometimes as:
+|||   [length, elem0, elem1, ...]
+||| If no ABI header is detected, return words unchanged.
+decodeCounterPayload : List Integer -> List Integer
+decodeCounterPayload [] = []
+decodeCounterPayload [w0] = [w0]
+decodeCounterPayload (w0 :: w1 :: ws) =
+  if w1 == cast {to=Integer} (length ws)
+     then ws
+  else if w0 == cast {to=Integer} (S (length ws))
+     then w1 :: ws
+  else w0 :: w1 :: ws
+
 ||| Check if a line looks like ProfileFlush hex data (long hex string)
 isLongHexData : String -> Bool
 isLongHexData s =
@@ -323,7 +368,7 @@ parseProfileFlushCounters : String -> List Integer
 parseProfileFlushCounters content =
   case extractProfileFlushFromText content of
     Nothing => []
-    Just hexData => parseHexCounters hexData
+    Just hexData => decodeCounterPayload (parseHexCounters hexData)
 
 ||| Analyze coverage from trace output text and labels
 ||| Higher-level function that works with idris2-evm-run output
@@ -344,6 +389,89 @@ analyzeCoverageFromFile tracePath labelPath = do
     | Left err => pure (Left err)
   let result = analyzeCoverageFromText traceContent labels
   pure (Right result)
+
+public export
+record EvmBranchCoverageResult where
+  constructor MkEvmBranchCoverageResult
+  staticTotalBranches : Nat
+  materializedTotalBranches : Nat
+  hitBranches : Nat
+  coveragePercent : Double
+  coveredBranchIds : List String
+  uncoveredBranchIds : List String
+  coveredFunctions : List String
+  uncoveredFunctions : List String
+  unobservableBranchIds : List String
+  materializedBranchIds : List String
+
+dedupStrings : List String -> List String
+dedupStrings [] = []
+dedupStrings (x :: xs) = if elem x xs then dedupStrings xs else x :: dedupStrings xs
+
+branchLabels : List LabelEntry -> List LabelEntry
+branchLabels = filter (\l => l.labelKind == LKBranch && isJust l.branchId)
+
+coveredBranchIdsFromCounters : List LabelEntry -> List (Nat, Integer) -> List String
+coveredBranchIdsFromCounters labels counters =
+  dedupStrings $
+    mapMaybe resolveCovered counters
+  where
+    resolveCovered : (Nat, Integer) -> Maybe String
+    resolveCovered (idx, cnt) =
+      if cnt <= 0 then Nothing
+      else branchId =<< lookupLabel idx labels
+
+branchFunctionName : LabelEntry -> Maybe String
+branchFunctionName lbl = if lbl.labelKind == LKBranch then Just lbl.demangledName else Nothing
+
+public export
+buildBranchCoverageResult : List LabelEntry -> List String -> List (Nat, Integer) -> EvmBranchCoverageResult
+buildBranchCoverageResult labels staticDenominatorIds counters =
+  let branchLbls = branchLabels labels in
+  let observableIds = dedupStrings (mapMaybe branchId branchLbls) in
+  let materializedIds = filter (\bid => elem bid observableIds) staticDenominatorIds in
+  let coveredIds = coveredBranchIdsFromCounters labels counters in
+  let uncoveredIds = filter (\bid => not (elem bid coveredIds)) materializedIds in
+  let unobservableIds = filter (\bid => not (elem bid observableIds)) staticDenominatorIds in
+  let totalCount = length materializedIds in
+  let hitCount = length (filter (\bid => elem bid materializedIds) coveredIds) in
+  let pct = if totalCount == 0 then 100.0 else cast hitCount / cast totalCount * 100.0 in
+  let coveredFns = coveredFunctionNames coveredIds branchLbls in
+  let uncoveredFns = coveredFunctionNames uncoveredIds branchLbls in
+  MkEvmBranchCoverageResult
+    (length staticDenominatorIds)
+    totalCount
+    hitCount
+    pct
+    coveredIds
+    uncoveredIds
+    coveredFns
+    uncoveredFns
+    unobservableIds
+    materializedIds
+  where
+    coveredFunctionNames : List String -> List LabelEntry -> List String
+    coveredFunctionNames branchIds lbls =
+      dedupStrings $
+        mapMaybe (\lbl => case lbl.branchId of
+                             Just bid => if elem bid branchIds then Just lbl.demangledName else Nothing
+                             Nothing => Nothing) lbls
+
+public export
+analyzeBranchCoverageFromText : String -> List LabelEntry -> List String -> EvmBranchCoverageResult
+analyzeBranchCoverageFromText traceOutput labels staticDenominatorIds =
+  let counters = parseProfileFlushCounters traceOutput
+      indexed = indexCounters counters
+  in buildBranchCoverageResult labels staticDenominatorIds indexed
+
+public export
+analyzeBranchCoverageFromFile : String -> String -> List String -> IO (Either String EvmBranchCoverageResult)
+analyzeBranchCoverageFromFile tracePath labelPath staticDenominatorIds = do
+  Right traceContent <- readFile tracePath
+    | Left err => pure (Left $ "Failed to read trace file: " ++ show err)
+  Right labels <- loadLabels labelPath
+    | Left err => pure (Left err)
+  pure $ Right $ analyzeBranchCoverageFromText traceContent labels staticDenominatorIds
 
 -- =============================================================================
 -- Library API: Conversion to Core Types

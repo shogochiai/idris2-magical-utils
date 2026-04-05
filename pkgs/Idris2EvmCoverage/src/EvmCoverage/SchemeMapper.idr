@@ -181,8 +181,8 @@ export
 schemeFuncToBranchId : String -> Nat -> BranchId
 schemeFuncToBranchId schemeFunc branchIdx =
   case parseSchemeFunc schemeFunc of
-    Nothing => MkBranchId "" schemeFunc branchIdx
-    Just (modName, funcName) => MkBranchId modName funcName branchIdx
+    Nothing => mkLegacyBranchId "" schemeFunc branchIdx
+    Just (modName, funcName) => mkLegacyBranchId modName funcName branchIdx
 
 ||| Match ProfileHit to BranchId
 export

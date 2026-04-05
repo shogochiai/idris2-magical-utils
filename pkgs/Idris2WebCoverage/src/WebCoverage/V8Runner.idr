@@ -10,6 +10,7 @@ import Data.String
 import System
 import System.File
 import System.Directory
+import Execution.Standardization.Web
 import WebCoverage.Types
 
 %default covering
@@ -135,7 +136,7 @@ parseV8Ranges json =
                       Nothing => []
                       Just afterCount =>
                         let countNum = takeDigits afterCount
-                            range = MkV8Range startNum endNum countNum
+                            range = MkV8Range (jsByteOffsetFromNat startNum) (jsByteOffsetFromNat endNum) countNum
                         in range :: extractRanges afterCount
 
 -- Helper: count characters until pattern is found
@@ -172,7 +173,7 @@ extractScriptRanges cs = go cs []
                                     Nothing => reverse acc
                                     Just afterCount =>
                                       let countNum = takeDigits afterCount
-                                          range = MkV8Range startNum endNum countNum
+                                          range = MkV8Range (jsByteOffsetFromNat startNum) (jsByteOffsetFromNat endNum) countNum
                                       in go afterCount (range :: acc)
                    else reverse acc
         Nothing =>
@@ -189,7 +190,7 @@ extractScriptRanges cs = go cs []
                           Nothing => reverse acc
                           Just afterCount =>
                             let countNum = takeDigits afterCount
-                                range = MkV8Range startNum endNum countNum
+                                range = MkV8Range (jsByteOffsetFromNat startNum) (jsByteOffsetFromNat endNum) countNum
                             in go afterCount (range :: acc)
 
 ||| Parse V8 script coverage from JSON

@@ -15,6 +15,8 @@
 module Coverage.Classification.BranchClass
 
 import Data.String
+import Coverage.Standardization.Types
+import Coverage.Standardization.Model
 
 -- Re-export Core.Types for BranchId
 import public Coverage.Core.Types
@@ -65,27 +67,51 @@ Eq BranchClass where
 -- Coverage Semantics
 -- =============================================================================
 
+public export
+branchClassToObligationClass : BranchClass -> ObligationClass
+branchClassToObligationClass BCCanonical = ReachableObligation
+branchClassToObligationClass BCExcludedNoClauses = LogicallyUnreachable
+branchClassToObligationClass BCBugUnhandledInput = UserAdmittedPartialGap
+branchClassToObligationClass BCOptimizerNat = CompilerInsertedArtifact
+branchClassToObligationClass (BCUnknownCrash _) = UnknownClassification
+branchClassToObligationClass BCCompilerGenerated = CompilerInsertedArtifact
+
 ||| Check if branch should be counted in coverage denominator
 |||
 ||| Only BCCanonical branches count - they represent reachable code.
 public export
 isCountedInDenominator : BranchClass -> Bool
-isCountedInDenominator BCCanonical = True
-isCountedInDenominator _ = False
+isCountedInDenominator = countsAsDenominator . branchClassToObligationClass
 
 ||| Check if branch represents a coverage bug
 |||
 ||| BCBugUnhandledInput indicates partial code that needs fixing.
 public export
 isCoverageBugBranch : BranchClass -> Bool
-isCoverageBugBranch BCBugUnhandledInput = True
-isCoverageBugBranch _ = False
+isCoverageBugBranch cls =
+  branchClassToObligationClass cls == UserAdmittedPartialGap
 
 ||| Check if branch needs investigation
 public export
 needsInvestigationBranch : BranchClass -> Bool
 needsInvestigationBranch (BCUnknownCrash _) = True
 needsInvestigationBranch _ = False
+
+public export
+standardCoverageModelName : String
+standardCoverageModelName = standardName semanticBranchObligationStandard
+
+public export
+standardFunctionCoverageModelName : String
+standardFunctionCoverageModelName = standardName semanticFunctionObligationStandard
+
+public export
+standardUnknownPolicyName : String
+standardUnknownPolicyName =
+  case unknownPolicy (soundnessEnvelope semanticBranchObligationStandard) of
+    BlockCoverageClaim => "block_claim"
+    CountAsGap => "count_as_gap"
+    ReportSeparately => "report_separately"
 
 -- =============================================================================
 -- Conversion from CrashReason
@@ -119,6 +145,24 @@ Show ClassifiedBranch where
 public export
 Eq ClassifiedBranch where
   cb1 == cb2 = cb1.branchId == cb2.branchId
+
+public export
+classifiedBranchToCoverageObligation : ClassifiedBranch -> CoverageObligation
+classifiedBranchToCoverageObligation cb =
+  MkCoverageObligation
+    (show cb.branchId)
+    ElaboratedCaseTree
+    BranchLevel
+    cb.pattern
+    Nothing
+    (branchClassToObligationClass cb.branchClass)
+
+public export
+isStandardCoverageClaimAdmissible : List ClassifiedBranch -> Bool
+isStandardCoverageClaimAdmissible branches =
+  isCoverageClaimAdmissible
+    semanticBranchObligationStandard
+    (map classifiedBranchToCoverageObligation branches)
 
 -- =============================================================================
 -- Function Name Classification
@@ -176,6 +220,34 @@ record StaticFunctionAnalysis where
 public export
 Show StaticFunctionAnalysis where
   show sfa = sfa.fullName ++ ": " ++ show (length sfa.branches) ++ " branches"
+
+public export
+functionObligationClass : List ClassifiedBranch -> ObligationClass
+functionObligationClass branches =
+  let classes = map (\cb => branchClassToObligationClass cb.branchClass) branches in
+    if any (== UnknownClassification) classes then UnknownClassification
+    else if any (== UserAdmittedPartialGap) classes then UserAdmittedPartialGap
+    else if any (== ReachableObligation) classes then ReachableObligation
+    else if any (== LogicallyUnreachable) classes then LogicallyUnreachable
+    else CompilerInsertedArtifact
+
+public export
+staticFunctionToCoverageObligation : StaticFunctionAnalysis -> CoverageObligation
+staticFunctionToCoverageObligation sfa =
+  MkCoverageObligation
+    sfa.fullName
+    ElaboratedCaseTree
+    FunctionLevel
+    sfa.fullName
+    Nothing
+    (functionObligationClass sfa.branches)
+
+public export
+isStandardFunctionCoverageClaimAdmissible : List StaticFunctionAnalysis -> Bool
+isStandardFunctionCoverageClaimAdmissible functions =
+  isCoverageClaimAdmissible
+    semanticFunctionObligationStandard
+    (map staticFunctionToCoverageObligation functions)
 
 ||| Static analysis result for entire project
 public export

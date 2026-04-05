@@ -4,7 +4,7 @@ EVM coverage collection and reporting for Idris2 smart contracts.
 
 ## Overview
 
-`idris2-evm-coverage` provides function-level code coverage for Idris2 contracts compiled to EVM via the `idris2-yul` backend. It maps EVM execution traces back to Idris2 source functions.
+`idris2-evm-coverage` provides branch-aware semantic coverage for Idris2 contracts compiled to EVM via the `idris2-yul` backend. It combines `--dumpcases` branch classification with runtime observations and reports conservative branch-level semantic obligations.
 
 ## Coverage Pipeline
 
@@ -18,10 +18,13 @@ EVM Trace (hit PCs) → PC→Yul→@source → Idris2 Function Coverage
 
 ## Features
 
+- **Branch-Level Semantic Obligations**: Canonical, excluded, bug, optimizer-artifact, and unknown branch classes
 - **PC to Function Mapping**: Maps EVM program counters to Idris2 functions
 - **Source Location Tracking**: Uses `@source` comments from idris2-yul
 - **Exclusion Patterns**: Filters out stdlib (Prelude, Data) and compiler-generated code
-- **Module-level Reports**: Coverage breakdown by Idris2 module
+- **High Impact Branch Targets**: Prioritized next functions to test based on uncovered branch counts
+- **Function Branch Summaries**: Per-function uncovered branch counts and bug/unknown buckets
+- **Claim Admissibility**: Explicit `coverage_model`, `unknown_policy`, and `claim_admissible`
 
 ## Requirements
 
@@ -45,6 +48,12 @@ idris2-yul --cg yul --build mycontract.ipkg
 
 # 2. Run coverage collection
 idris2-evm-cov build/exec/mycontract.yul -o coverage.json
+
+# Optional: force static analysis to use a forked Idris2 that supports
+# structured case-tree export.
+IDRIS2_BIN=/path/to/forked/idris2 \
+IDRIS2_PACKAGE_PATH=/path/to/idris2-packages \
+idris2-evm-cov --dumpcases .
 ```
 
 ### Manual Pipeline
@@ -86,26 +95,67 @@ The following are excluded from coverage denominator (based on `idris2-coverage/
 ```json
 {
   "coverage": {
-    "total": 81,
-    "hit": 17,
+    "canonical_total": 81,
+    "canonical_hit": 17,
     "percent": 21.0
   },
-  "modules": {
-    "TextDAO.Functions.Tally": {"hit": 7, "total": 20},
-    "TextDAO.Storages.Schema": {"hit": 10, "total": 37}
-  }
+  "execution": {
+    "profile": "evm",
+    "coverage_model": "semantic test obligation coverage (branch-level)",
+    "unknown_policy": "block_claim",
+    "claim_admissible": true
+  },
+  "measurement": {
+    "denominator_ids": ["Main.vote:0"],
+    "covered_ids": ["Main.vote:0"],
+    "excluded_ids": [],
+    "unknown_ids": []
+  },
+  "high_impact_targets": [
+    {"function": "TextDAO.Functions.Tally.castVote", "branch_count": 3, "severity": "Inf", "kind": "untested_canonical"}
+  ],
+  "function_summaries": [
+    {"function": "TextDAO.Functions.Tally.castVote", "canonical_branches": 3, "hit_branches": 1}
+  ],
+  "gaps": []
 }
 ```
 
-### Markdown
-```markdown
-## Coverage: 21.0% (17/81)
+### Text
+```text
+## Branch Classification
 
-| Module | Coverage |
-|--------|----------|
-| TextDAO.Functions.Tally | 35% (7/20) |
-| TextDAO.Storages.Schema | 27% (10/37) |
+Coverage: 21.0%
+Execution Profile: evm
+Coverage Model: semantic test obligation coverage (branch-level)
+Unknown Policy: block_claim
+Claim Admissible: True
+
+## Top Branch Targets
+  - TextDAO.Functions.Tally.castVote (3 branches, Inf)
+
+## Function Branch Summaries
+  - TextDAO.Functions.Tally.castVote: 1/3, uncovered=2, bugs=0, unknown=0
 ```
+
+## Semantics
+
+The denominator is the set of canonical branch obligations extracted from
+`--dumpcases`.
+
+The report also tracks:
+
+- excluded branches, such as logically unreachable `No clauses` cases
+- user-admitted partial gaps, such as `Unhandled input`
+- optimizer artifacts
+- unknown classifications
+
+`claim_admissible` indicates whether the current report can be presented as a
+strong semantic coverage claim under the current downstream provenance model.
+
+This package is ahead of Chez/DFX/Web in branch-level UX, but it is still a
+downstream approximation until Idris2 exposes stable provenance-tagged
+obligation IDs upstream.
 
 ## Architecture
 

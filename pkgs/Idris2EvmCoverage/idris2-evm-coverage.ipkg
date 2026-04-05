@@ -3,12 +3,13 @@ version = 0.1.0
 authors = "bob"
 brief = "EVM semantic coverage analysis using Chez Scheme profiler"
 
-depends = base, contrib, idris2-coverage-core, idris2-evm
+depends = base, contrib, idris2-coverage-core, idris2-evm, idris2-execution-standardization
 
 sourcedir = "src"
 
 modules = EvmCoverage.Types
         , EvmCoverage.SourceMap
+        , EvmCoverage.StructuredExport
         , EvmCoverage.DumpcasesParser
         , EvmCoverage.ProfileParser
         , EvmCoverage.ProfileParserLinear

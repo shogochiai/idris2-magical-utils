@@ -257,6 +257,23 @@ getHighImpactTargets n funcs =
   let sorted = getHighImpactByTypeBranches n funcs
   in funcCasesToHighImpactTargets sorted
 
+||| Get high impact targets enriched with profiling coverage data
+|||
+||| Unlike getHighImpactTargets which hardcodes executed=0,
+||| this function uses a coverage lookup to get real executed counts
+||| from CodeCoverageAnalyzer profiling data.
+||| Sorted by severity ratio (branches/executed, Inf if executed=0).
+|||
+||| @n Number of top targets
+||| @coverageLookup Maps Idris2 function name to hit count (0 if unknown)
+||| @funcs List of function case information from dumpcases
+export
+getHighImpactTargetsWithCoverage : Nat -> (String -> Nat) -> List FuncCases -> List HighImpactTarget
+getHighImpactTargetsWithCoverage n coverageLookup funcs =
+  let targets = map (\fc => funcCasesToHighImpactTarget fc (coverageLookup fc.funcName))
+                    (filter (\f => f.totalBranches > 0) funcs)
+  in take n (sortTargets targets)
+
 -- =============================================================================
 -- Exclusion Filtering (using core types)
 -- =============================================================================

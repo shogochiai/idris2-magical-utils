@@ -13,6 +13,7 @@ import Coverage.TestCoverage
 import Coverage.UnifiedRunner
 import Coverage.Config
 import Coverage.Exclusions
+import Coverage.Standardization.Types
 
 import Data.List
 import Data.List1
@@ -356,6 +357,10 @@ runBranches opts = do
                 Left _ => pure Nothing
                 Right hits => pure (Just hits)
 
+              let measurement = case functionHits of
+                                  Nothing => functionCoverageMeasurementFromRuntimeHits funcs []
+                                  Just hits => functionCoverageMeasurementFromRuntimeHits funcs hits
+
               -- Also get aggregate coverage for display (uses separate test run)
               runtimeCov <- case testModules of
                 [] => pure Nothing
@@ -371,7 +376,7 @@ runBranches opts = do
                    -- Use per-function runtime hits if available (accurate severity)
                    -- Otherwise fall back to proportional approximation (legacy)
                    let targets = getHighImpactTargets functionHits runtimeCov loadedExcl exclusionConfig opts.topK funcs analysis.totalCanonical
-                   putStrLn $ coverageReportToJson analysis targets
+                   putStrLn $ coverageReportToJsonWithMeasurement analysis measurement targets
                  else do
                    -- Text output mode (original behavior)
                    putStrLn $ "# Coverage Report"
@@ -402,6 +407,14 @@ runBranches opts = do
                             ++ "   # Nat case - ignore (non-semantic)"
                    putStrLn $ "unknown:            " ++ show analysis.totalUnknown
                             ++ "   # conservative bucket"
+                   putStrLn $ "coverage_model:     " ++ analysis.coverageModel
+                            ++ "   # standard vocabulary used for branch classification"
+                   putStrLn $ "unknown_policy:     " ++ analysis.unknownPolicy
+                            ++ "   # handling rule for unclassified obligations"
+                   putStrLn $ "claim_admissible:   " ++ show analysis.claimAdmissible
+                            ++ "   # False means strong semantic-coverage claim is blocked"
+                   putStrLn ""
+                   putStrLn $ formatCoverageMeasurementSummary measurement
                    putStrLn "## Excluded from Denominator:"
                    putStrLn $ "  compiler_generated: " ++ show analysis.exclusionBreakdown.compilerGenerated
                             ++ "   # {csegen:*}, _builtin.*, prim__*"

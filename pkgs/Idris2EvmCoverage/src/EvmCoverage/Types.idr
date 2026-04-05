@@ -6,6 +6,9 @@ import Data.List
 import Data.List1
 import Data.Maybe
 import Data.String
+import Execution.Standardization.Model
+import Coverage.Standardization.Types as CovStd
+import Coverage.Standardization.Model as CovStdModel
 
 -- Import shared types from coverage-core
 import public Coverage.Core.HighImpact
@@ -22,28 +25,42 @@ import public Coverage.Core.RuntimeHit
 public export
 record BranchId where
   constructor MkBranchId
+  compilerNodeId : Maybe String
   moduleName : String
   funcName   : String
   branchIdx  : Nat
 
 public export
+mkLegacyBranchId : String -> String -> Nat -> BranchId
+mkLegacyBranchId moduleName funcName branchIdx =
+  MkBranchId Nothing moduleName funcName branchIdx
+
+branchLegacyId : BranchId -> String
+branchLegacyId b = "\{b.moduleName}.\{b.funcName}:\{show b.branchIdx}"
+
+public export
 Show BranchId where
-  show b = "\{b.moduleName}.\{b.funcName}:\{show b.branchIdx}"
+  show b = fromMaybe (branchLegacyId b) b.compilerNodeId
 
 public export
 Eq BranchId where
-  b1 == b2 = b1.moduleName == b2.moduleName
-          && b1.funcName == b2.funcName
-          && b1.branchIdx == b2.branchIdx
+  b1 == b2 =
+    case (b1.compilerNodeId, b2.compilerNodeId) of
+      (Just x, Just y) => x == y
+      _ => b1.moduleName == b2.moduleName
+        && b1.funcName == b2.funcName
+        && b1.branchIdx == b2.branchIdx
 
 public export
 Ord BranchId where
   compare b1 b2 =
-    case compare b1.moduleName b2.moduleName of
-      EQ => case compare b1.funcName b2.funcName of
-              EQ => compare b1.branchIdx b2.branchIdx
-              x => x
-      x => x
+    case (b1.compilerNodeId, b2.compilerNodeId) of
+      (Just x, Just y) => compare x y
+      _ => case compare b1.moduleName b2.moduleName of
+             EQ => case compare b1.funcName b2.funcName of
+                     EQ => compare b1.branchIdx b2.branchIdx
+                     x => x
+             x => x
 
 -- =============================================================================
 -- Branch Classification (from dunham's taxonomy)
@@ -179,6 +196,22 @@ Show TestRunHits where
 -- Aggregated Coverage
 -- =============================================================================
 
+public export
+record BranchFunctionSummary where
+  constructor MkBranchFunctionSummary
+  functionName : String
+  canonicalBranches : Nat
+  hitBranches : Nat
+  uncoveredBranchIds : List String
+  bugBranches : Nat
+  unknownBranches : Nat
+
+public export
+Show BranchFunctionSummary where
+  show s =
+    s.functionName ++ ": " ++ show s.hitBranches ++ "/" ++ show s.canonicalBranches
+      ++ " branches"
+
 ||| Final aggregated coverage result
 public export
 record AggregatedCoverage where
@@ -188,11 +221,89 @@ record AggregatedCoverage where
   bugsTotal        : Nat    -- Unhandled inputs (potential bugs)
   unknownTotal     : Nat    -- Unknown crashes to investigate
   coveragePercent  : Double
+  executionProfile : String
+  measurement      : CovStd.CoverageMeasurement
+  coverageModel    : String
+  unknownPolicy    : String
+  claimAdmissible  : Bool
+  highImpactTargets : List HighImpactTarget
+  functionSummaries : List BranchFunctionSummary
   uncoveredBranches : List ClassifiedBranch
 
 public export
 Show AggregatedCoverage where
-  show a = "Coverage: \{show a.canonicalHit}/\{show a.canonicalTotal} (\{show a.coveragePercent}%)"
+  show a = "Coverage: \{show a.canonicalHit}/\{show a.canonicalTotal} (\{show a.coveragePercent}%, \{a.executionProfile})"
+        ++ " model=" ++ a.coverageModel ++ " admissible=" ++ show a.claimAdmissible
+
+public export
+defaultEvmExecutionProfileName : String
+defaultEvmExecutionProfileName = evmExecutionProfileName
+
+public export
+evmCoverageModelName : String
+evmCoverageModelName = CovStdModel.semanticBranchObligationStandard.standardName
+
+public export
+evmUnknownPolicyName : String
+evmUnknownPolicyName =
+  case CovStd.defaultSoundnessEnvelope.unknownPolicy of
+    CovStd.BlockCoverageClaim => "block_claim"
+    CovStd.CountAsGap => "count_as_gap"
+    CovStd.ReportSeparately => "report_separately"
+
+public export
+branchClassToObligationClass : BranchClass -> CovStd.ObligationClass
+branchClassToObligationClass BCCanonical = CovStd.ReachableObligation
+branchClassToObligationClass BCExcludedNoClauses = CovStd.LogicallyUnreachable
+branchClassToObligationClass BCBugUnhandledInput = CovStd.UserAdmittedPartialGap
+branchClassToObligationClass BCOptimizerNat = CovStd.CompilerInsertedArtifact
+branchClassToObligationClass (BCUnknownCrash _) = CovStd.UnknownClassification
+branchClassToObligationClass BCCompilerGenerated = CovStd.CompilerInsertedArtifact
+
+public export
+branchToCoverageObligation : ClassifiedBranch -> CovStd.CoverageObligation
+branchToCoverageObligation branch =
+  CovStd.MkCoverageObligation
+    (show branch.branchId)
+    CovStd.ElaboratedCaseTree
+    CovStd.BranchLevel
+    branch.pattern
+    Nothing
+    (branchClassToObligationClass branch.branchClass)
+
+dedupStrings : List String -> List String
+dedupStrings [] = []
+dedupStrings (x :: xs) =
+  if elem x xs then dedupStrings xs else x :: dedupStrings xs
+
+public export
+coverageMeasurementForBranches : List ClassifiedBranch -> List BranchId -> CovStd.CoverageMeasurement
+coverageMeasurementForBranches branches hitBranchIds =
+  let obligations = map branchToCoverageObligation branches
+      denominatorIds =
+        map (.obligationId) $
+          filter (\ob => CovStd.countsAsDenominator ob.classification) obligations
+      excludedIds =
+        map (.obligationId) $
+          filter (\ob => CovStd.mustBeExcluded ob.classification) obligations
+      unknownIds =
+        map (.obligationId) $
+          filter (\ob => ob.classification == CovStd.UnknownClassification) obligations
+      coveredIds =
+        dedupStrings $
+          mapMaybe (\hitId =>
+            case find (\branch => branch.branchId == hitId
+                               && CovStd.countsAsDenominator (branchClassToObligationClass branch.branchClass)) branches of
+              Just branch => Just (show branch.branchId)
+              Nothing => Nothing) hitBranchIds
+  in CovStd.MkCoverageMeasurement denominatorIds coveredIds excludedIds unknownIds
+
+public export
+coverageClaimAdmissibleForBranches : List ClassifiedBranch -> Bool
+coverageClaimAdmissibleForBranches branches =
+  CovStdModel.isCoverageClaimAdmissible
+    CovStdModel.semanticBranchObligationStandard
+    (map branchToCoverageObligation branches)
 
 ||| Calculate coverage percentage
 public export

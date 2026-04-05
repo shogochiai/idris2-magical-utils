@@ -72,6 +72,18 @@ icpDefaultExclusions =
   , prefixPattern "stackSave" "WASM stack"
   , prefixPattern "stackRestore" "WASM stack"
   , prefixPattern "stackAlloc" "WASM stack"
+
+    -- Idris2 runtime / stdlib (not application code)
+  , prefixPattern "PrimIO_" "Idris2 PrimIO runtime"
+  , prefixPattern "Prelude_" "Idris2 Prelude stdlib"
+  , exactPattern "Main_main" "Idris2 entry point"
+  , prefixPattern "Main_forceRetain" "Idris2 linker retention"
+  , exactPattern "Main_runTests" "Test runner itself"
+  , exactPattern "_initialize" "WASM module initializer"
+  , prefixPattern "_braceOpen_" "Idris2 internal expression"
+  , prefixPattern "_emscripten_" "Emscripten runtime"
+  , prefixPattern "idris2_" "Idris2 RTS"
+  , prefixPattern "csegen" "Idris2 codegen helper"
   ]
 
 ||| Combine core defaults with ICP-specific exclusions

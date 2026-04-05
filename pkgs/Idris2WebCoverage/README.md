@@ -64,6 +64,7 @@ Compatible with idris2-coverage for unified tooling:
 # Web Coverage Report
 Coverage: 45/60 (75%)
 Functions: 12/20
+Measurement: denominator=20, covered=12, excluded=0, unknown=0
 
 ## User Files
   ✓ MyApp.idr: 15/15 (100%)
@@ -82,6 +83,14 @@ Functions: 12/20
     "lines": { "covered": 45, "total": 60, "percentage": 75 },
     "functions": { "covered": 12, "total": 20 }
   },
+  "measurement": {
+    "denominator_ids": ["js:Main.main@0:0"],
+    "covered_ids": ["js:Main.main@0:0"],
+    "excluded_ids": [],
+    "unknown_ids": []
+  },
   "files": [...]
 }
 ```
+
+`measurement` in the JS CLI is a runtime-function observation set derived from V8 coverage. The stronger semantic function-obligation model is produced by the Idris-side runner used by `LazyWeb`.
