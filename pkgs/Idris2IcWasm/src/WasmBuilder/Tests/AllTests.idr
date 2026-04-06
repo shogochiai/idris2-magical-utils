@@ -35,7 +35,7 @@ test_REFC_001 () =
 -- REQ_WASM_REFC_002: Handle package dependencies
 test_REFC_002 : () -> Bool
 test_REFC_002 () =
-  let opts = MkBuildOptions "." "test" "src/Main.idr" ["contrib", "network"] True False Nothing
+  let opts = MkBuildOptions "." "test" "src/Main.idr" ["contrib", "network"] True False False Nothing
   in length opts.packages == 2
 
 -- REQ_WASM_RT_003: gmp.h wrapper exists conceptually

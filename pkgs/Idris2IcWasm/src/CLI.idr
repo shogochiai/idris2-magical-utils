@@ -420,6 +420,7 @@ main = do
                     opts.mainModule
                     opts.packages
                     True   -- generateSourceMap
+                    False  -- instrumentBranchProbes
                     False  -- forTestBuild (CLI doesn't use test builds)
                     Nothing -- testModulePath (CLI doesn't use test builds)
               result <- buildCanisterAuto buildOpts

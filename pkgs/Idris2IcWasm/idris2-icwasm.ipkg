@@ -15,6 +15,7 @@ modules = IcWasm.SQLite
         , IcWasm.Tests.InterCanisterCallTests
         , WasmBuilder.CanisterEntryGen
         , WasmBuilder.WasmBuilder
+        , WasmBuilder.BranchProbe
         , WasmBuilder.CandidStubs
         , WasmBuilder.CandidDecoder
         , WasmBuilder.IC0.FFI

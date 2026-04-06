@@ -13,6 +13,7 @@ import Data.List1
 import Data.Maybe
 import System
 import System.File
+import WasmBuilder.BranchProbe
 import WasmBuilder.SourceMap.SourceMap
 import WasmBuilder.SourceMap.VLQ
 import WasmBuilder.CandidStubs
@@ -32,6 +33,7 @@ record BuildOptions where
   mainModule : String      -- Main module path (default: src/Main.idr)
   packages : List String   -- Additional packages (-p flags)
   generateSourceMap : Bool -- Generate Idris→WASM source map
+  instrumentBranchProbes : Bool -- Insert C-level branch probes for runtime coverage
   forTestBuild : Bool      -- Generate test Main in /tmp (requires Tests/AllTests.idr)
   testModulePath : Maybe String  -- Custom test module path (default: src/Tests/AllTests.idr)
 
@@ -44,6 +46,7 @@ defaultBuildOptions = MkBuildOptions
   , mainModule = "src/Main.idr"
   , packages = ["contrib"]
   , generateSourceMap = True
+  , instrumentBranchProbes = False
   , forTestBuild = False
   , testModulePath = Nothing
   }
@@ -87,6 +90,13 @@ executeCommand cmd = do
 
   pure (exitCode, trim stdout, trim stderr)
 
+resolveIdris2Bin : IO String
+resolveIdris2Bin = do
+  mBin <- getEnv "IDRIS2_BIN"
+  pure $ case mBin of
+    Just bin => let trimmed = trim bin in if null trimmed then "idris2" else trimmed
+    Nothing => "idris2"
+
 -- =============================================================================
 -- Build Pipeline Steps
 -- =============================================================================
@@ -107,10 +117,118 @@ pathToModuleName path =
       noExt = if isSuffixOf ".idr" noSrc then strSubstr 0 (noSrcLen - 4) noSrc else noSrc
   in pack $ map (\c => if c == '/' then '.' else c) (unpack noExt)
 
-||| Generate test Main.idr content that imports the specified test module
+public export
+data TestHarnessStyle = ExistingHarness | TupleHarness | RecordHarness
+
+detectTestHarnessStyle : String -> TestHarnessStyle
+detectTestHarnessStyle content =
+  let hasRunTests = isInfixOf "runTests : IO (Int, Int)" content
+      hasRecordTestDef = isInfixOf "record TestDef where" content && isInfixOf "testFn : IO Bool" content
+      hasTupleTests = isInfixOf "allTests : List (String, IO Bool)" content
+  in if hasRunTests
+        then ExistingHarness
+     else if hasRecordTestDef
+        then RecordHarness
+     else if hasTupleTests
+        then TupleHarness
+     else ExistingHarness
+
+generateTestHarnessShimContent : TestHarnessStyle -> String -> String
+generateTestHarnessShimContent ExistingHarness testModuleName =
+  unlines
+    [ "module TestHarness"
+    , "import " ++ testModuleName ++ " as TestModule"
+    , "%hide TestModule.main"
+    , ""
+    , "export"
+    , "allTestsGeneric : List (String, IO Bool)"
+    , "allTestsGeneric = TestModule.allTests"
+    , ""
+    , "export"
+    , "runTests : IO (Int, Int)"
+    , "runTests = TestModule.runTests"
+    , ""
+    , "export"
+    , "runMinimalTests : IO (Int, Int)"
+    , "runMinimalTests = TestModule.runMinimalTests"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = TestModule.runTrivialTest"
+    ]
+generateTestHarnessShimContent TupleHarness testModuleName =
+  unlines
+    [ "module TestHarness"
+    , "import " ++ testModuleName ++ " as TestModule"
+    , "import Data.List"
+    , "%hide TestModule.main"
+    , ""
+    , "%default covering"
+    , ""
+    , "export"
+    , "allTestsGeneric : List (String, IO Bool)"
+    , "allTestsGeneric = TestModule.allTests"
+    , ""
+    , "runBatch : Nat -> Nat -> IO (Int, Int)"
+    , "runBatch start count = do"
+    , "  let batch = take count (drop start allTestsGeneric)"
+    , "  if null batch then pure (0, 0) else do"
+    , "    rs <- traverse (\\(_, t) => t) batch"
+    , "    let passed = length (filter id rs)"
+    , "        failed = length (filter not rs)"
+    , "    pure (cast passed, cast failed)"
+    , ""
+    , "export"
+    , "runTests : IO (Int, Int)"
+    , "runTests = runBatch 0 (length allTestsGeneric)"
+    , ""
+    , "export"
+    , "runMinimalTests : IO (Int, Int)"
+    , "runMinimalTests = runBatch 0 8"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = runBatch 0 1"
+    ]
+generateTestHarnessShimContent RecordHarness testModuleName =
+  unlines
+    [ "module TestHarness"
+    , "import " ++ testModuleName ++ " as TestModule"
+    , "import Data.List"
+    , "%hide TestModule.main"
+    , ""
+    , "%default covering"
+    , ""
+    , "export"
+    , "allTestsGeneric : List (String, IO Bool)"
+    , "allTestsGeneric = map (\\t => (t.testId, t.testFn)) TestModule.allTests"
+    , ""
+    , "runBatch : Nat -> Nat -> IO (Int, Int)"
+    , "runBatch start count = do"
+    , "  let batch = take count (drop start allTestsGeneric)"
+    , "  if null batch then pure (0, 0) else do"
+    , "    rs <- traverse (\\(_, t) => t) batch"
+    , "    let passed = length (filter id rs)"
+    , "        failed = length (filter not rs)"
+    , "    pure (cast passed, cast failed)"
+    , ""
+    , "export"
+    , "runTests : IO (Int, Int)"
+    , "runTests = runBatch 0 (length allTestsGeneric)"
+    , ""
+    , "export"
+    , "runMinimalTests : IO (Int, Int)"
+    , "runMinimalTests = runBatch 0 8"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = runBatch 0 1"
+    ]
+
+||| Generate test Main.idr content that imports the standardized shim module
 ||| This is written to /tmp, never touches the original Main.idr
-generateTestMainContent : String -> String
-generateTestMainContent testModuleName =
+generateTestMainContent : String
+generateTestMainContent =
   let maxTestSlots : Int
       maxTestSlots = 256
       batchSizes : List Int
@@ -122,16 +240,18 @@ generateTestMainContent testModuleName =
             let batchCount = maxTestSlots `div` size
             in map (\idx => (size, idx * size)) [0 .. batchCount - 1])
           batchSizes
+      runChunkLines : List String
       runChunkLines =
         [ "runChunk : Nat -> Nat -> IO (Int, Int)"
         , "runChunk start count = do"
-        , "  let batch = take count (drop start " ++ testModuleName ++ ".allTests)"
+        , "  let batch = take count (drop start TestHarness.allTestsGeneric)"
         , "  if null batch then pure (0, 0) else do"
         , "    rs <- traverse (\\(_, t) => t) batch"
         , "    let passed = length (filter id rs)"
         , "        failed = length (filter not rs)"
         , "    pure (cast passed, cast failed)"
         ]
+      batchExportLines : List String
       batchExportLines =
         concatMap
           (\(size, start) =>
@@ -141,13 +261,14 @@ generateTestMainContent testModuleName =
             , "runTestBatch" ++ show size ++ "_" ++ show start ++ " = runChunk " ++ show start ++ " " ++ show size
             ])
           batchSpecs
+      retainBatchLines : List String
       retainBatchLines =
         map (\(size, start) => "    _ <- Main.runTestBatch" ++ show size ++ "_" ++ show start) batchSpecs
   in unlines $
        [ "||| Auto-generated test entry point for coverage analysis"
        , "module Main"
        , ""
-       , "import " ++ testModuleName  -- Import test module (not public to avoid name clashes)
+       , "import TestHarness"
        , "import Data.List"
        , ""
        , "%default covering"
@@ -157,18 +278,18 @@ generateTestMainContent testModuleName =
        , "prim__ic_ffi_get_arg : Int -> PrimIO Int"
        , ""
        , "||| Run all tests - exported for Candid call"
-       , "||| Uses the standardized canister test entrypoint from " ++ testModuleName
+       , "||| Uses the standardized canister test shim"
        , "export"
        , "runTests : IO (Int, Int)"
-       , "runTests = " ++ testModuleName ++ ".runTests"
+       , "runTests = TestHarness.runTests"
        , ""
        , "export"
        , "runMinimalTests : IO (Int, Int)"
-       , "runMinimalTests = " ++ testModuleName ++ ".runMinimalTests"
+       , "runMinimalTests = TestHarness.runMinimalTests"
        , ""
        , "export"
        , "runTrivialTest : IO (Int, Int)"
-       , "runTrivialTest = " ++ testModuleName ++ ".runTrivialTest"
+       , "runTrivialTest = TestHarness.runTrivialTest"
        , ""
        ]
        ++ runChunkLines
@@ -357,14 +478,34 @@ generateFuncEntry modulePrefix cArities ef didMethods typeDefs =
 ||| @exports List of exported functions from Idris
 ||| @didMethods Parsed .did methods for Candid-aware reply generation
 ||| @typeDefs Parsed .did type definitions for dynamic Candid encoding
-generateCanisterEntryC : String -> List (String, RefCArity) -> List ExportedFunc -> List DidMethod -> List TypeDef -> String
-generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs =
+generateCanisterEntryC : String -> List (String, RefCArity) -> List ExportedFunc -> List DidMethod -> List TypeDef -> Bool -> String
+generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrumentBranchProbes =
   let funcEntries = fastConcat $ map (\ef => generateFuncEntry modulePrefix cArities ef didMethods typeDefs) exports
       header = canisterEntryHeader
+      branchProbeExterns =
+        if instrumentBranchProbes
+           then unlines
+             [ "extern const char* __dfxcov_format_hits(void);"
+             , "extern uint32_t __dfxcov_probe_total(void);"
+             , "extern void __dfxcov_reset_hits(void);"
+             ]
+           else ""
       -- Generate extern declarations only for actual Idris functions (not .did stubs)
       idrisExports = filter (\ef => not ef.fromDid) exports
       funcExterns = unlines $ map mkExtern idrisExports
-  in header ++ "\n/* Idris Function Externs */\n" ++ funcExterns ++ "\n" ++ funcEntries
+      branchProbeEntry =
+        if instrumentBranchProbes
+           then unlines
+             [ ""
+             , "__attribute__((export_name(\"canister_query __get_branch_probes\")))"
+             , "void canister_query___get_branch_probes(void) {"
+             , "    debug_log(\"__get_branch_probes called\");"
+             , "    ensure_idris2_init();"
+             , "    reply_text(__dfxcov_format_hits());"
+             , "}"
+             ]
+           else ""
+  in header ++ "\n/* Idris Function Externs */\n" ++ branchProbeExterns ++ funcExterns ++ "\n" ++ branchProbeEntry ++ funcEntries
   where
     mkExtern : ExportedFunc -> String
     mkExtern ef =
@@ -528,8 +669,10 @@ setupTestBuild projectDir originalIpkg customTestPath = do
         Just p  => absProjectDir ++ "/" ++ p
         Nothing => absProjectDir ++ "/src/Tests/AllTests.idr"
   let testModuleRelPath = fromMaybe "src/Tests/AllTests.idr" customTestPath
-  Right _ <- readFile testModulePath
-    | Left _ => pure (Left $ "Test module not found: " ++ testModuleRelPath ++ "\nCreate this file with: export runAllTests : (Int, Int)")
+  Right testModuleContent <- readFile testModulePath
+    | Left _ => pure (Left $ "Test module not found: " ++ testModuleRelPath)
+  let testModuleName = pathToModuleName testModuleRelPath
+  let harnessStyle = detectTestHarnessStyle testModuleContent
 
   -- Create temp directory structure
   let tempDir = "/tmp/idris2-icwasm-test-" ++ show !time
@@ -544,9 +687,11 @@ setupTestBuild projectDir originalIpkg customTestPath = do
   _ <- traverse_ (\item => system $ "ln -sf " ++ absProjectDir ++ "/src/" ++ item ++ " " ++ tempSrcDir ++ "/" ++ item) srcItems
 
   -- Write generated Main.idr to temp (not a symlink, actual generated file)
+  let tempHarnessPath = tempSrcDir ++ "/TestHarness.idr"
   let tempMainPath = tempSrcDir ++ "/Main.idr"
-  let testModuleName = pathToModuleName testModuleRelPath
-  Right () <- writeFile tempMainPath (generateTestMainContent testModuleName)
+  Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName)
+    | Left err => pure (Left $ "Failed to write temp TestHarness: " ++ show err)
+  Right () <- writeFile tempMainPath generateTestMainContent
     | Left err => pure (Left $ "Failed to write temp Main: " ++ show err)
 
   -- Generate temp ipkg pointing to temp src directory
@@ -558,8 +703,32 @@ setupTestBuild projectDir originalIpkg customTestPath = do
 ||| Find ipkg file in project directory
 findIpkg : String -> IO (Maybe String)
 findIpkg projectDir = do
-  (_, result, _) <- executeCommand $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' | head -1"
-  pure $ if null (trim result) then Nothing else Just (trim result)
+  canister <- findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*canister*.ipkg' -type f | sort | head -1"
+  case canister of
+    Just path => pure (Just path)
+    Nothing => do
+      nonMinimal <- findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f ! -name '*minimal*.ipkg' | sort | head -1"
+      case nonMinimal of
+        Just path => pure (Just path)
+        Nothing => findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f | sort | head -1"
+  where
+    findPreferred : String -> IO (Maybe String)
+    findPreferred cmd = do
+      (_, result, _) <- executeCommand cmd
+      pure $ if null (trim result) then Nothing else Just (trim result)
+
+resolvePackagesFromIpkg : String -> IO (List String)
+resolvePackagesFromIpkg ipkg = do
+  idris2Bin <- resolveIdris2Bin
+  let tmpJson = "/tmp/ipkg_dump_" ++ show !time ++ ".json"
+  let dumpCmd = idris2Bin ++ " --dump-ipkg-json " ++ ipkg ++ " > " ++ tmpJson
+  _ <- system dumpCmd
+  let parseCmd =
+        "python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [print(next(iter(dep))) for dep in d.get(\"depends\", [])]' "
+        ++ tmpJson
+  (_, output, _) <- executeCommand parseCmd
+  _ <- system $ "rm -f " ++ tmpJson
+  pure $ filter (\s => not (null s)) (lines (trim output))
 
 public export
 compileToRefC : BuildOptions -> String -> IO (Either String String)
@@ -577,9 +746,12 @@ compileToRefC opts buildDir = do
     then do
       let testPath = fromMaybe "src/Tests/AllTests.idr" opts.testModulePath
       putStrLn $ "        Test build mode: generating temp Main from " ++ testPath
-      Right tempIpkg <- setupTestBuild opts.projectDir ipkgFile opts.testModulePath
-        | Left err => pure (Left err)
-      compileWithIpkg opts tempIpkg
+      resolvedPackages <- resolvePackagesFromIpkg ipkgFile
+      when (not (null resolvedPackages)) $
+        putStrLn $ "        Resolved packages: " ++ show resolvedPackages
+      let directOpts =
+            if null resolvedPackages then opts else { packages := resolvedPackages } opts
+      compileTestDirectly directOpts buildDir testPath
     else compileWithIpkg opts ipkgFile
   where
     -- Extract directory from a file path
@@ -625,12 +797,55 @@ compileToRefC opts buildDir = do
           putStrLn $ "        Generated: " ++ trim cFile
           pure $ Right (trim cFile)
 
+    compileTestDirectly : BuildOptions -> String -> String -> IO (Either String String)
+    compileTestDirectly opts' buildDir' testModuleRelPath = do
+      idris2Bin <- resolveIdris2Bin
+      let testModulePath = opts'.projectDir ++ "/" ++ testModuleRelPath
+      Right testModuleContent <- readFile testModulePath
+        | Left _ => pure $ Left $ "Test module not found: " ++ testModuleRelPath
+      let harnessStyle = detectTestHarnessStyle testModuleContent
+      let testModuleName = pathToModuleName testModuleRelPath
+      let tempDir = "/tmp/idris2-icwasm-test-" ++ show !time
+      let tempMainPath = tempDir ++ "/Main.idr"
+      let tempHarnessPath = tempDir ++ "/TestHarness.idr"
+      let outputBase = tempDir ++ "/test_runner"
+      let pkgFlags = unwords $ map (\p => "-p " ++ p) opts'.packages
+      _ <- system $ "mkdir -p " ++ tempDir
+      putStrLn $ "        Direct RefC test compile via temp sources: " ++ tempDir
+      putStrLn $ "        Direct RefC packages: " ++ show opts'.packages
+      Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName)
+        | Left err => pure $ Left $ "Failed to write temp TestHarness: " ++ show err
+      Right () <- writeFile tempMainPath generateTestMainContent
+        | Left err => pure $ Left $ "Failed to write temp Main: " ++ show err
+      let clearCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" -delete 2>/dev/null || true; rm -f " ++ outputBase ++ ".c'"
+      let cmd = "cd " ++ opts'.projectDir ++ " && " ++
+                idris2Bin ++ " --codegen refc " ++
+                "--source-dir " ++ opts'.projectDir ++ "/src " ++
+                "--source-dir " ++ tempDir ++ " " ++
+                pkgFlags ++ " " ++
+                "-o " ++ outputBase ++ " " ++
+                tempMainPath
+      _ <- executeCommand clearCmd
+      (_, _, stderr) <- executeCommand cmd
+      Right _ <- readFile (outputBase ++ ".c")
+        | Left _ => do
+            let findCmd = "sh -c 'find " ++ buildDir' ++ " " ++ tempDir ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
+            (_, cFile, _) <- executeCommand findCmd
+            if null (trim cFile)
+              then pure $ Left $ "No C file generated by RefC\n" ++ stderr
+              else do
+                putStrLn $ "        Generated: " ++ trim cFile
+                pure $ Right (trim cFile)
+      putStrLn $ "        Generated: " ++ outputBase ++ ".c"
+      pure $ Right (outputBase ++ ".c")
+
     compileDirectly : BuildOptions -> String -> IO (Either String String)
     compileDirectly opts' buildDir' = do
+      idris2Bin <- resolveIdris2Bin
       let pkgFlags = unwords $ map (\p => "-p " ++ p) opts'.packages
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
                 "mkdir -p " ++ buildDir' ++ " && " ++
-                "idris2 --codegen refc " ++
+                idris2Bin ++ " --codegen refc " ++
                 "--build-dir " ++ buildDir' ++ " " ++
                 pkgFlags ++ " " ++
                 "--source-dir src " ++
@@ -811,8 +1026,8 @@ compileToWasm cFile refcSrc miniGmp ic0Support outputWasm = do
 ||| Compile C to WASM with custom canister_entry.c path
 ||| Used when canister_entry.c is generated from Main.idr exports
 public export
-compileToWasmWithEntry : String -> String -> String -> String -> String -> String -> IO (Either String ())
-compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath outputWasm = do
+compileToWasmWithEntry : String -> String -> String -> String -> String -> String -> List String -> IO (Either String ())
+compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath outputWasm extraCSources = do
   putStrLn "      Step 3: C → WASM (Emscripten)"
 
   let refcCFiles = unwords $ map (\f => refcSrc ++ "/" ++ f)
@@ -837,6 +1052,7 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
 
   let bridgeFile = if hasBridge then ic0Support ++ "/ic_ffi_bridge.c " else ""
   let callFile = if hasCall then ic0Support ++ "/ic_call.c " else ""
+  let extraFiles = if null extraCSources then "" else unwords extraCSources ++ " "
 
   let cmd = "CPATH= CPLUS_INCLUDE_PATH= emcc " ++ cFile ++ " " ++
             refcCFiles ++ " " ++
@@ -846,6 +1062,7 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
             ic0Support ++ "/wasi_stubs.c " ++
             bridgeFile ++
             callFile ++
+            extraFiles ++
             includeFlags ++ " " ++
             "-I" ++ miniGmp ++ " " ++
             "-I" ++ refcSrc ++ " " ++
@@ -1007,8 +1224,7 @@ generateCanisterEntry opts cFile ic0Support = do
       -- DO NOT read original Main.idr - those functions won't be in test WASM
       -- .did methods will be added later via didMethodToExport (with fromDid = True)
       let testModulePath' = fromMaybe "src/Tests/AllTests.idr" opts.testModulePath
-      let testModuleName = pathToModuleName testModulePath'
-      pure (generateTestMainContent testModuleName)
+      pure generateTestMainContent
     else do
       let mainPath = opts.projectDir ++ "/src/Main.idr"
       Right content <- readFile mainPath
@@ -1071,7 +1287,7 @@ generateCanisterEntry opts cFile ic0Support = do
       then pure $ Left $ "Failed to infer RefC arity for one or more exports"
     else do
       -- Generate dynamic canister_entry.c with Candid-aware stubs
-      let entryC = generateCanisterEntryC modulePrefix cArities normalizedExports didMethods typeDefs
+      let entryC = generateCanisterEntryC modulePrefix cArities normalizedExports didMethods typeDefs opts.instrumentBranchProbes
       let tempEntryPath = "/tmp/canister_entry_generated.c"
       Right () <- writeFile tempEntryPath entryC
         | Left err => pure $ Left $ "Failed to write canister_entry.c: " ++ show err
@@ -1094,21 +1310,38 @@ buildCanister opts ic0Support = do
   let wasmDir = opts.projectDir ++ "/build"
   let rawWasm = wasmDir ++ "/" ++ opts.canisterName ++ ".wasm"
   let stubbedWasm = wasmDir ++ "/" ++ opts.canisterName ++ "_stubbed.wasm"
+  let exportedProbeCsv = wasmDir ++ "/idris2-branch-probes.csv"
 
   -- Step 1: Idris2 → C
   Right cFile <- compileToRefC opts buildDir
     | Left err => pure $ BuildError err
+
+  let cDir = if null (buildDirName cFile) then buildDir else buildDirName cFile
+  probePrep <- if opts.instrumentBranchProbes
+    then do
+      result <- instrumentRefCCFile cFile cDir opts.projectDir
+      pure $ map (\artifacts => (artifacts.instrumentedCPath, [artifacts.probeCPath], Just artifacts.csvPath)) result
+    else pure $ Right (cFile, [], Nothing)
+  Right (preparedCFile, extraCSources, mProbeCsv) <- pure probePrep
+    | Left err => pure $ BuildError err
+  when opts.instrumentBranchProbes $
+    putStrLn $ "      Step 1.5: Generated branch probes"
+  case mProbeCsv of
+    Just csvPath => do
+      _ <- system $ "mkdir -p " ++ wasmDir ++ " && cp " ++ csvPath ++ " " ++ exportedProbeCsv
+      putStrLn $ "        Exported branch probe map: " ++ exportedProbeCsv
+    Nothing => pure ()
 
   -- Step 2: Prepare runtime
   Right (refcSrc, miniGmp) <- prepareRefCRuntime
     | Left err => pure $ BuildError err
 
   -- Step 2.5: Generate canister_entry.c from Main.idr exports
-  Right canisterEntryPath <- generateCanisterEntry opts cFile ic0Support
+  Right canisterEntryPath <- generateCanisterEntry opts preparedCFile ic0Support
     | Left err => pure $ BuildError err
 
   -- Step 3: C → WASM (use generated canister_entry.c)
-  Right () <- compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath rawWasm
+  Right () <- compileToWasmWithEntry preparedCFile refcSrc miniGmp ic0Support canisterEntryPath rawWasm extraCSources
     | Left err => pure $ BuildError err
 
   -- Step 4: Stub WASI
@@ -1118,9 +1351,9 @@ buildCanister opts ic0Support = do
   -- Step 5: Generate Source Maps (if enabled)
   when opts.generateSourceMap $ do
     putStrLn "      Step 5: Generating Source Maps"
-    Right cContent <- readFile cFile
+    Right cContent <- readFile preparedCFile
       | Left _ => putStrLn "        Warning: Could not read C file for source map"
-    let idrisCMap = generateIdrisCSourceMapWithFunctions cFile cContent
+    let idrisCMap = generateIdrisCSourceMapWithFunctions preparedCFile cContent
     let idrisCMapPath = wasmDir ++ "/idris2-c.map"
     Right () <- writeSourceMap idrisCMapPath idrisCMap
       | Left _ => putStrLn "        Warning: Could not write idris2-c.map"
@@ -1130,6 +1363,12 @@ buildCanister opts ic0Support = do
 
   putStrLn $ "    Build complete: " ++ stubbedWasm
   pure $ BuildSuccess stubbedWasm
+  where
+    buildDirName : String -> String
+    buildDirName path =
+      let chars = unpack (reverse path)
+          (_, rest) = break (== '/') chars
+      in pack (reverse (drop 1 rest))
 
 ||| Build canister using project's lib/ic0 for support files
 |||
