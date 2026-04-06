@@ -13,6 +13,8 @@ presence of dependent types.
 Current positioning:
 
 - profile: function-level semantic test obligation coverage
+- profile: path-level semantic test obligation coverage is also available via
+  `idris2-cov paths`
 - implementation style: downstream and proof-aware
 - strong claim policy: only when `claim_admissible = true`
 - common measurement schema: aligned with `Idris2CoverageCore` and
@@ -50,7 +52,33 @@ idris2 --build idris2-coverage.ipkg
 
 # JSON output for CI
 ./build/exec/idris2-cov --json path/to/project/
+
+# Path coverage from dumppaths-json + runtime hits
+./build/exec/idris2-cov paths --dumppaths-json path/to/dumppaths.json --path-hits path/to/path-hits.txt
+
+# Path coverage by asking a forked compiler to emit dumppaths-json on demand
+IDRIS2_BIN=/path/to/forked/idris2 ./build/exec/idris2-cov paths myproject.ipkg
 ```
+
+## Path Coverage
+
+`idris2-cov paths` is the current entrypoint for missing-path analysis.
+
+It consumes the same semantic vocabulary used elsewhere in the repo:
+
+- `Missing paths`
+- `coverage_percent`
+- `claim_admissible`
+
+The intended use is:
+
+1. generate canonical intrafunction path obligations with a forked Idris2
+   exposing `--dumppaths-json`
+2. collect runtime path hits
+3. report exact missing paths over the same obligation layer
+
+This is the output surface now consumed by `lazy * ask --steps=4` and
+EtherClaw HardHarness integration.
 
 ## Key Features
 
@@ -107,6 +135,15 @@ Chez Scheme profiler  →  Runtime hits  →  Coverage measurement + claim statu
 
 The strong claim boundary is function-level because that is the layer where the
 current native runtime observations can be mapped back conservatively.
+
+For path coverage, the tool uses a stricter export/runtime pair:
+
+```
+idris2 --dumppaths-json  →  canonical path obligations
+runtime path hits        →  covered_ids on the same path_id layer
+```
+
+The result is a missing-path list rather than only a per-function summary.
 
 ## What To Cite
 

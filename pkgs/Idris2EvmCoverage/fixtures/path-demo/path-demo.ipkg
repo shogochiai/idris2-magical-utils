@@ -1,0 +1,6 @@
+package path-demo
+
+sourcedir = "."
+main = Main
+executable = path-demo
+modules = Main

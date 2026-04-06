@@ -59,6 +59,9 @@ MAX_COUNTERS = 128
 PROFILE_FLUSH_TOPIC : Integer
 PROFILE_FLUSH_TOPIC = 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925
 
+PROFILE_FLUSH_TOPIC_HEX : String
+PROFILE_FLUSH_TOPIC_HEX = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
+
 -- =============================================================================
 -- Yul Parsing Types
 -- =============================================================================
@@ -207,7 +210,7 @@ generateFlushFunction numCounters =
     generateEventEmit : Nat -> String
     generateEventEmit n =
       let dataSize = show (64 + cast n * 32)  -- offset + length + data
-          topic = show PROFILE_FLUSH_TOPIC
+          topic = PROFILE_FLUSH_TOPIC_HEX
       in "        mstore(0x2000, 32)  // offset to array\n" ++
          "        mstore(0x2020, " ++ show n ++ ")  // array length\n" ++
          "        log1(0x2000, " ++ dataSize ++ ", " ++ topic ++ ")\n"
@@ -758,9 +761,18 @@ sanitizeIpkgForYul ipkgPath = do
     | Left err => pure $ Left $ "Failed to read build ipkg: " ++ show err
   t <- time
   let yulIpkgPath = substr 0 (length ipkgPath `minus` 5) ipkgPath ++ "-yul-" ++ show t ++ ".ipkg"
+  let rewriteYulDep : String -> String
+      rewriteYulDep line =
+        let trimmed = trim line in
+        if trimmed == "idris2-yul"
+           then replaceOnce "idris2-yul" "idris2-evm" line
+        else if trimmed == ", idris2-yul"
+                then replaceOnce "idris2-yul" "idris2-evm" line
+                else line
   let sanitized =
         unlines $
-          filter (\line => not (isPrefixOf "opts =" (trim line))) (lines content)
+          map rewriteYulDep $
+            filter (\line => not (isPrefixOf "opts =" (trim line))) (lines content)
   Right () <- writeFile yulIpkgPath sanitized
     | Left err => pure $ Left $ "Failed to write Yul build ipkg: " ++ show err
   pure $ Right yulIpkgPath

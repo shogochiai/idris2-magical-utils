@@ -1,6 +1,7 @@
 # idris2-evm-coverage
 
-Branch-aware semantic coverage tooling for Idris2 programs compiled to EVM.
+Branch- and path-aware semantic coverage tooling for Idris2 programs compiled
+to EVM.
 
 ## Positioning
 
@@ -26,6 +27,17 @@ It also distinguishes three important branch sets:
 The strongest current runtime claim is therefore:
 
 `runtime branch-level semantic coverage over the materialized denominator`
+
+Path-level support now also exists as a downstream layer:
+
+- `idris2-evm-cov paths --dumppaths-json ... --path-hits ...`
+- `idris2-evm-cov paths --runtime-trace ... --runtime-labels ...`
+
+The EVM path report uses the same contract as the other backends:
+
+- `Missing paths`
+- `coverage_percent`
+- `claim_admissible`
 
 ## What The Tool Actually Does
 
@@ -56,6 +68,12 @@ This pipeline performs:
 - bounded `idris2-evm-run` execution
 - runtime trace parsing
 - branch hit aggregation
+
+For path coverage, the full-pipeline story is:
+
+1. obtain canonical paths from `--dumppaths-json`
+2. recover runtime evidence from EVM labels / traces
+3. emit exact missing-path lists over that same semantic denominator
 
 ## Requirements
 
@@ -190,6 +208,19 @@ Branches hit: 53 / 64
 Coverage: 82%
 Claim admissible (runtime branch-level): True
 ```
+
+Path-focused example:
+
+```bash
+./build/exec/idris2-evm-cov paths \
+  --dumppaths-json ./fixtures/path-demo/golden.paths.json \
+  --path-hits ./fixtures/path-demo/sample.path-hits.txt
+```
+
+See the reproducible fixture under:
+
+- `fixtures/path-demo/README.md`
+- `fixtures/path-demo/expected.txt`
 
 ## Current Limits
 

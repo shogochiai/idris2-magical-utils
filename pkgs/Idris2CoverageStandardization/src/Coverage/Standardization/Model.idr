@@ -37,6 +37,17 @@ semanticFunctionObligationStandard =
     defaultSoundnessEnvelope
 
 public export
+semanticPathObligationStandard : CoverageStandard
+semanticPathObligationStandard =
+  MkCoverageStandard
+    "Semantic Test Obligation Coverage (Path-Level)"
+    PathLevel
+    "Covered executable paths observed at runtime and mapped back to stable elaborated path obligation identifiers."
+    "All source- or elaboration-level executable path obligations, excluding logically unreachable paths and non-semantic compiler artifacts."
+    [SourceSurface, ElaboratedCaseTree, RuntimeExecution]
+    defaultSoundnessEnvelope
+
+public export
 semanticTestObligationStandard : CoverageStandard
 semanticTestObligationStandard = semanticBranchObligationStandard
 

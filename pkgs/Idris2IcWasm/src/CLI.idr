@@ -23,6 +23,10 @@ record Options where
   mainModule : String
   projectDir : String
   packages : List String
+  generateSourceMap : Bool
+  instrumentBranchProbes : Bool
+  forTestBuild : Bool
+  testModulePath : Maybe String
   showHelp : Bool
 
 defaultOptions : Options
@@ -31,6 +35,10 @@ defaultOptions = MkOptions
   , mainModule = "src/Main.idr"
   , projectDir = "."
   , packages = ["contrib"]
+  , generateSourceMap = True
+  , instrumentBranchProbes = False
+  , forTestBuild = False
+  , testModulePath = Nothing
   , showHelp = False
   }
 
@@ -59,7 +67,21 @@ parseArgs args = go defaultOptions args
         Just ("--project", val) => go ({ projectDir := val } opts) rest
         Just ("--package", val) => go ({ packages $= (val ::) } opts) rest
         Just ("-p", val) => go ({ packages $= (val ::) } opts) rest
-        _ => go opts rest  -- Skip unknown args
+        Just ("--test-module", val) => go ({ testModulePath := Just val } opts) rest
+        Just ("--source-map", _) => go ({ generateSourceMap := True } opts) rest
+        Just ("--no-source-map", _) => go ({ generateSourceMap := False } opts) rest
+        Just ("--branch-probes", _) => go ({ instrumentBranchProbes := True } opts) rest
+        Just ("--for-test-build", _) => go ({ forTestBuild := True } opts) rest
+        _ =>
+          if arg == "--source-map"
+             then go ({ generateSourceMap := True } opts) rest
+          else if arg == "--no-source-map"
+             then go ({ generateSourceMap := False } opts) rest
+          else if arg == "--branch-probes"
+             then go ({ instrumentBranchProbes := True } opts) rest
+          else if arg == "--for-test-build"
+             then go ({ forTestBuild := True } opts) rest
+          else go opts rest  -- Skip unknown args
 
 -- =============================================================================
 -- Main
@@ -82,6 +104,11 @@ Build Options:
   --project=DIR     Project directory (default: .)
   --package=PKG     Additional package (can be repeated)
   -p=PKG            Short for --package
+  --source-map      Generate Idris→WASM source map (default)
+  --no-source-map   Skip Idris→WASM source map generation
+  --branch-probes   Insert branch probe hooks for coverage collection
+  --for-test-build  Generate test Main from Tests/AllTests
+  --test-module=REL Override test module path relative to project root
   --help, -h        Show this help
 
 Gen-entry Options:
@@ -419,10 +446,10 @@ main = do
                     opts.canisterName
                     opts.mainModule
                     opts.packages
-                    True   -- generateSourceMap
-                    False  -- instrumentBranchProbes
-                    False  -- forTestBuild (CLI doesn't use test builds)
-                    Nothing -- testModulePath (CLI doesn't use test builds)
+                    opts.generateSourceMap
+                    opts.instrumentBranchProbes
+                    opts.forTestBuild
+                    opts.testModulePath
               result <- buildCanisterAuto buildOpts
               putStrLn $ show result
               case result of

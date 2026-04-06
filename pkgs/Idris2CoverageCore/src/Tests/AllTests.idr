@@ -5,6 +5,8 @@ module Tests.AllTests
 
 import Data.List
 
+import Coverage.Core.DumppathsJson
+import Coverage.Core.PathCoverage
 import Coverage.Core.Types
 import Coverage.Core.Result
 import Coverage.Core.RuntimeHit
@@ -366,6 +368,68 @@ test_BRANCH_005 () =
      && not (isStandardFunctionCoverageClaimAdmissible [excludedFn, unknownFn])
 
 -- =============================================================================
+-- Path Coverage Tests
+-- =============================================================================
+
+sampleDumppathsJson : String
+sampleDumppathsJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"Main.partialMaybe\",\"paths\":[{\"path_id\":\"Main.partialMaybe#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[{\"node_id\":\"Main.partialMaybe#0:0\",\"branch_index\":0,\"origin\":\"user_clause\",\"branch_label\":\"Just\"}]},{\"path_id\":\"Main.partialMaybe#p1\",\"classification\":\"UserAdmittedPartialGap\",\"terminal_kind\":\"partial_gap\",\"steps\":[{\"node_id\":\"Main.partialMaybe#0:1\",\"branch_index\":1,\"origin\":\"compiler_partial_completion\",\"branch_label\":\"default\"}]}]}]}"
+
+test_PATH_001 : () -> Bool
+test_PATH_001 () =
+  case parseDumppathsJson sampleDumppathsJson of
+    Left _ => False
+    Right paths =>
+      length paths == 2
+        && any (\p => p.pathId == "Main.partialMaybe#p1"
+                   && p.classification == UserAdmittedPartialGap
+                   && p.terminalKind == "partial_gap") paths
+
+test_PATH_002 : () -> Bool
+test_PATH_002 () =
+  case parseDumppathsJson sampleDumppathsJson of
+    Left _ => False
+    Right paths =>
+      let result = buildPathCoverageResultFromHits paths [MkPathRuntimeHit "Main.partialMaybe#p0" 1]
+      in result.measurement.denominatorIds == ["Main.partialMaybe#p0", "Main.partialMaybe#p1"]
+         && result.measurement.coveredIds == ["Main.partialMaybe#p0"]
+         && missingPathIds result == ["Main.partialMaybe#p1"]
+
+test_PATH_003 : () -> Bool
+test_PATH_003 () =
+  let unknownPath =
+        MkPathObligation
+          "Main.unknown#p0"
+          "Main.unknown"
+          "Main"
+          UnknownClassification
+          "unknown"
+          Nothing
+          [MkPathStep "Main.unknown#0:0" 0 "unknown" Nothing (Just "default") Nothing]
+          Nothing
+          1
+      result = buildPathCoverageResult [unknownPath] []
+  in not result.claimAdmissible
+     && result.measurement.unknownIds == ["Main.unknown#p0"]
+
+test_PATH_004 : () -> Bool
+test_PATH_004 () =
+  let obligation = pathObligationToCoverageObligation $
+        MkPathObligation
+          "Main.safe#p0"
+          "Main.safe"
+          "Main"
+          ReachableObligation
+          "reached_clause"
+          Nothing
+          [MkPathStep "Main.safe#0:0" 0 "user_clause" (Just 0) (Just "True") Nothing]
+          Nothing
+          1
+  in obligation.granularity == PathLevel
+     && obligation.classification == ReachableObligation
+     && obligation.summary == "Main.safe :: True => reached_clause"
+
+-- =============================================================================
 -- All Tests
 -- =============================================================================
 
@@ -427,6 +491,12 @@ allTests =
   , test "BRANCH_003" "Unknown branches block admissible claim" test_BRANCH_003
   , test "BRANCH_004" "Function obligations aggregate partial branches" test_BRANCH_004
   , test "BRANCH_005" "Function claims block on unknown branches" test_BRANCH_005
+
+  -- Path coverage
+  , test "PATH_001" "parse dumppaths json" test_PATH_001
+  , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
+  , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003
+  , test "PATH_004" "path obligations use path granularity" test_PATH_004
   ]
 
 ||| Run all tests - pure version

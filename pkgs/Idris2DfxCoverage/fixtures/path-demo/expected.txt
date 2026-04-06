@@ -1,0 +1,14 @@
+# DFX Path Coverage Report
+coverage_model:   Semantic Test Obligation Coverage (Path-Level)
+claim_admissible: True
+coverage_percent: 50.0
+
+Path-level semantic measurement:
+  denominator_ids: 4
+  covered_ids:     2
+  excluded_ids:    0
+  unknown_ids:     0
+
+Missing paths: 2
+- PathDemo.safeHead#p0 :: PathDemo.safeHead :: Nil => reached_clause
+- PathDemo.main#p0 :: PathDemo.main ::  => reached_clause

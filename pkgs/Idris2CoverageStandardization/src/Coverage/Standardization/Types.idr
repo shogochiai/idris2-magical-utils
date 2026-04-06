@@ -26,6 +26,14 @@ data ObligationClass
   | UnknownClassification
 
 public export
+Show ObligationClass where
+  show ReachableObligation = "ReachableObligation"
+  show LogicallyUnreachable = "LogicallyUnreachable"
+  show UserAdmittedPartialGap = "UserAdmittedPartialGap"
+  show CompilerInsertedArtifact = "CompilerInsertedArtifact"
+  show UnknownClassification = "UnknownClassification"
+
+public export
 Eq ObligationClass where
   ReachableObligation == ReachableObligation = True
   LogicallyUnreachable == LogicallyUnreachable = True
@@ -38,11 +46,19 @@ public export
 data ObligationGranularity
   = FunctionLevel
   | BranchLevel
+  | PathLevel
+
+public export
+Show ObligationGranularity where
+  show FunctionLevel = "FunctionLevel"
+  show BranchLevel = "BranchLevel"
+  show PathLevel = "PathLevel"
 
 public export
 Eq ObligationGranularity where
   FunctionLevel == FunctionLevel = True
   BranchLevel == BranchLevel = True
+  PathLevel == PathLevel = True
   _ == _ = False
 
 public export

@@ -6,6 +6,8 @@ Current strongest profile:
 
 - branch-level semantic test obligation coverage on the materialized runtime denominator
 - function-level semantic test obligation coverage remains available as an advisory/static layer
+- path-level semantic test obligation reporting is available through `paths`
+  commands and `dumppaths-json`
 
 In practice this means:
 
@@ -14,6 +16,19 @@ In practice this means:
 - `claim_admissible=True` only when that branch-level runtime denominator/numerator pair is coherent
 
 This is the path consumed by `lazy dfx ask --steps=4`.
+
+Path-level reporting now uses the same shared output contract as the other
+backends:
+
+- `Missing paths`
+- `coverage_percent`
+- `claim_admissible`
+
+The intended DFX flow is:
+
+1. canonical static path obligations from `--dumppaths-json`
+2. DFX/IcWasm runtime evidence from profiling / public-name surfaces
+3. exact missing-path report over the same path layer
 
 ## Authoritative Coverage Pipeline
 
@@ -85,6 +100,19 @@ On `TheWorld`, `lazy dfx ask --steps=4` now reaches:
 
 This is intentionally stated on the materialized runtime denominator, not on a
 purely static canonical branch set.
+
+For path coverage, reproducible fixtures also exist:
+
+```bash
+./build/exec/idris2-dfx-cov paths \
+  --dumppaths-json ./fixtures/path-demo/golden.paths.json \
+  --path-hits ./fixtures/path-demo/sample.path-hits.txt
+```
+
+See:
+
+- `fixtures/path-demo/README.md`
+- `fixtures/path-demo/expected.txt`
 
 ### Consumer API (`LazyDfx` Step 4)
 

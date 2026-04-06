@@ -13,6 +13,7 @@ module Coverage.TestCoverage
 
 import Coverage.Types
 import Coverage.DumpcasesParser
+import public Coverage.PathCoverage
 import Coverage.Collector
 import Coverage.UnifiedRunner
 import Coverage.Exclusions

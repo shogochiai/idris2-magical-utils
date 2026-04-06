@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "canisters": {
+    "path_demo": {
+      "type": "custom",
+      "candid": "can.did",
+      "wasm": "build/path_demo/path_demo.wasm"
+    }
+  },
+  "defaults": {
+    "build": {
+      "packtool": ""
+    }
+  }
+}

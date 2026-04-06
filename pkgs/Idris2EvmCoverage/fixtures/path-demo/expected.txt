@@ -1,0 +1,18 @@
+# EVM Path Coverage Report
+coverage_model:   Semantic Test Obligation Coverage (Path-Level)
+claim_admissible: True
+coverage_percent: 50.0
+
+Path-level semantic measurement:
+  denominator_ids: 12
+  covered_ids:     6
+  excluded_ids:    0
+  unknown_ids:     0
+
+Missing paths: 6
+- Main.partialMaybe#p1 :: Main.partialMaybe :: default => partial_gap
+- Main.safeHead#p0 :: Main.safeHead :: Nil => reached_clause
+- Main.useSafeHead#p0 :: Main.useSafeHead ::  => reached_clause
+- Main.usePartialMaybe#p0 :: Main.usePartialMaybe ::  => reached_clause
+- Main.case block in runCovered#p1 :: Main.case block in runCovered :: False => reached_clause
+- Main.case block in case block in runCovered#p1 :: Main.case block in case block in runCovered :: Nothing => reached_clause

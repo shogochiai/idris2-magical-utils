@@ -67,3 +67,35 @@ uncoveredCount h =
   if h.canonicalCount > h.executedCount
   then h.canonicalCount `minus` h.executedCount
   else 0
+
+-- =============================================================================
+-- PathRuntimeHit - Per-path runtime coverage
+-- =============================================================================
+
+||| Runtime hit for a stable compiler-exported path identifier.
+public export
+record PathRuntimeHit where
+  constructor MkPathRuntimeHit
+  pathId   : String
+  hitCount : Nat
+
+public export
+Show PathRuntimeHit where
+  show h = h.pathId ++ ": " ++ show h.hitCount
+
+public export
+Eq PathRuntimeHit where
+  h1 == h2 = h1.pathId == h2.pathId
+
+||| Check whether a path was covered at least once.
+public export
+isPathCovered : PathRuntimeHit -> Bool
+isPathCovered h = h.hitCount > 0
+
+||| Extract the covered path ids from runtime hits.
+public export
+coveredPathIds : List PathRuntimeHit -> List String
+coveredPathIds hits =
+  nub $
+    map (.pathId) $
+      filter isPathCovered hits

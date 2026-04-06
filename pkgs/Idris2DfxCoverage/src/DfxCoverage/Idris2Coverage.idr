@@ -19,6 +19,7 @@ import System.File
 import DfxCoverage.IcWasm.IcpPublicNameParser
 import DfxCoverage.IcWasm.ProfilingParser
 import DfxCoverage.DumpcasesParser
+import public DfxCoverage.PathCoverage
 import DfxCoverage.Exclusions
 
 -- Re-export shared coverage result type

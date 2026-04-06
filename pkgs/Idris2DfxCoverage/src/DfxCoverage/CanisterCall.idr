@@ -10,10 +10,10 @@ import Data.String
 import System
 import System.File
 import System.Clock
+import System.Directory
 
 import DfxCoverage.CandidParser
 import DfxCoverage.IcWasm.Instrumenter as Instr
-import WasmBuilder.WasmBuilder as WB
 
 %default covering
 
@@ -179,6 +179,7 @@ record DeployOptions where
   network : String
   dfxPath : String
   projectDir : String
+  instrumentBranchProbes : Bool
   forTestBuild : Bool      -- Build with src/Main_test.idr for coverage
 
 public export
@@ -188,8 +189,144 @@ defaultDeployOptions = MkDeployOptions
   , network = "local"
   , dfxPath = "dfx"
   , projectDir = "."
+  , instrumentBranchProbes = False
   , forTestBuild = False
   }
+
+extractIpkgField : String -> String -> Maybe String
+extractIpkgField field content =
+  case find (isPrefixOf (field ++ " =")) (map trim (lines content)) of
+    Just line =>
+      let raw = trim (pack (drop (length (field ++ " =")) (unpack line)))
+      in Just $
+           if isPrefixOf "\"" raw && isSuffixOf "\"" raw && length raw >= 2
+              then strSubstr 1 (cast {to=Int} (length raw) - 2) raw
+              else raw
+    Nothing => Nothing
+
+moduleToPath : String -> String
+moduleToPath modName =
+  pack (map (\c => if c == '.' then '/' else c) (unpack modName)) ++ ".idr"
+
+resolveMainModulePath : String -> IO String
+resolveMainModulePath projectDir = do
+  let cmd = "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f | sort | head -1"
+  (_, ipkgPath, _) <- executeCommand cmd
+  if null (trim ipkgPath)
+     then pure "src/Main.idr"
+     else do
+       Right ipkgContent <- readFile (trim ipkgPath)
+         | Left _ => pure "src/Main.idr"
+       let sourcedir = fromMaybe "src" (extractIpkgField "sourcedir" ipkgContent)
+       let mainModule = fromMaybe "Main" (extractIpkgField "main" ipkgContent)
+       pure $ sourcedir ++ "/" ++ moduleToPath mainModule
+
+probeIc0SupportDir : String -> IO (Maybe String)
+probeIc0SupportDir projectDir = go candidates
+  where
+    candidates : List String
+    candidates =
+      [ projectDir ++ "/lib/ic0"
+      , projectDir ++ "/../idris2-icwasm/support/ic0"
+      , projectDir ++ "/../Idris2IcWasm/support/ic0"
+      , projectDir ++ "/../../Idris2IcWasm/support/ic0"
+      , projectDir ++ "/../../../Idris2IcWasm/support/ic0"
+      ]
+
+    go : List String -> IO (Maybe String)
+    go [] = pure Nothing
+    go (dir :: rest) = do
+      Right _ <- readFile (dir ++ "/canister_entry.c")
+        | Left _ => go rest
+      pure (Just dir)
+
+ensureProjectIc0Support : String -> IO ()
+ensureProjectIc0Support projectDir = do
+  let projectIc0 = projectDir ++ "/lib/ic0"
+  Right _ <- readFile (projectIc0 ++ "/canister_entry.c")
+    | Left _ => do
+        mSupportDir <- probeIc0SupportDir projectDir
+        case mSupportDir of
+          Nothing => pure ()
+          Just supportDir =>
+            if supportDir == projectIc0
+               then pure ()
+               else do
+                 _ <- system $ "mkdir -p " ++ projectDir ++ "/lib"
+                 _ <- system $ "rm -rf " ++ projectIc0
+                 _ <- system $ "ln -s " ++ supportDir ++ " " ++ projectIc0
+                 pure ()
+  pure ()
+
+probeExecutable : List String -> IO (Maybe String)
+probeExecutable [] = pure Nothing
+probeExecutable (candidate :: rest) =
+  if null candidate
+     then probeExecutable rest
+     else do
+       exitCode <- system ("test -x " ++ candidate ++ " >/dev/null 2>&1")
+       if exitCode == 0 then pure (Just candidate) else probeExecutable rest
+
+resolveIcWasmExecutable : String -> IO (Maybe String)
+resolveIcWasmExecutable projectDir = do
+  mEnv <- getEnv "IDRIS2_ICWASM_BIN"
+  cwd <- currentDir
+  let envCandidate = fromMaybe "" mEnv
+  let cwdVal = fromMaybe "." cwd
+  let candidates =
+        [ envCandidate
+        , projectDir ++ "/../Idris2IcWasm/build/exec/idris2-icwasm"
+        , projectDir ++ "/../../Idris2IcWasm/build/exec/idris2-icwasm"
+        , projectDir ++ "/../../../Idris2IcWasm/build/exec/idris2-icwasm"
+        , cwdVal ++ "/pkgs/Idris2IcWasm/build/exec/idris2-icwasm"
+        , cwdVal ++ "/Idris2IcWasm/build/exec/idris2-icwasm"
+        ]
+  found <- probeExecutable candidates
+  case found of
+    Just path => pure (Just path)
+    Nothing => do
+      let lookupCmd = "command -v idris2-icwasm 2>/dev/null"
+      (_, stdout, _) <- executeCommand lookupCmd
+      let resolved = trim stdout
+      pure (if null resolved then Nothing else Just resolved)
+
+buildWasmViaIcWasmCli : DeployOptions -> String -> Maybe String -> IO (Either String String)
+buildWasmViaIcWasmCli opts mainModulePath testModPath = do
+  mIcWasm <- resolveIcWasmExecutable opts.projectDir
+  case mIcWasm of
+    Nothing => pure (Left "Unable to locate idris2-icwasm executable")
+    Just icwasmBin => do
+      mPackagePath <- getEnv "IDRIS2_PACKAGE_PATH"
+      mIdris2Bin <- getEnv "IDRIS2_BIN"
+      mCPath <- getEnv "CPATH"
+      let envVars =
+            catMaybes
+              [ map (\v => "IDRIS2_PACKAGE_PATH=" ++ v) mPackagePath
+              , map (\v => "IDRIS2_BIN=" ++ v) mIdris2Bin
+              , map (\v => "CPATH=" ++ v) mCPath
+              ]
+      let baseArgs =
+            [ "build"
+            , "--project=" ++ opts.projectDir
+            , "--canister=" ++ opts.canisterName
+            , "--main=" ++ mainModulePath
+            ]
+      let probeArgs =
+            if opts.instrumentBranchProbes then ["--branch-probes"] else []
+      let testArgs =
+            if opts.forTestBuild
+               then "--for-test-build" ::
+                    maybe [] (\path => ["--test-module=" ++ path]) testModPath
+               else []
+      let cmd = unwords (envVars ++ (icwasmBin :: baseArgs ++ probeArgs ++ testArgs))
+      (exitCode, stdout, stderr) <- executeCommand cmd
+      if exitCode /= 0
+         then pure (Left (if null stderr then stdout else stderr))
+         else do
+           let wasmPath = opts.projectDir ++ "/build/" ++ opts.canisterName ++ "_stubbed.wasm"
+           Right _ <- readFile wasmPath
+             | Left _ => pure (Left ("idris2-icwasm reported success but no wasm found at " ++ wasmPath))
+           pure (Right wasmPath)
 
 ||| Find test module path by searching for **/Tests/AllTests.idr
 ||| Returns relative path from project root (e.g., "src/Economics/Tests/AllTests.idr")
@@ -302,6 +439,7 @@ deployCanister opts = do
 public export
 ensureDeployed : DeployOptions -> IO (Either String String)
 ensureDeployed opts = do
+  ensureProjectIc0Support opts.projectDir
   -- Step 1: Build WASM (always rebuild to avoid cache bugs)
   -- forTestBuild generates temp Main.idr in /tmp importing Tests.AllTests (atomic)
   -- First, find test module if forTestBuild is enabled
@@ -312,15 +450,12 @@ ensureDeployed opts = do
     case testModPath of
       Just p  => putStrLn $ "    Found test module: " ++ p
       Nothing => putStrLn "    Warning: No Tests/AllTests.idr found, using default path"
-  let buildOpts = { projectDir := opts.projectDir
-                  , canisterName := opts.canisterName
-                  , forTestBuild := opts.forTestBuild
-                  , testModulePath := testModPath } WB.defaultBuildOptions
+  mainModulePath <- resolveMainModulePath opts.projectDir
   when opts.forTestBuild $ putStrLn "    Building with test code (dynamically generated from Tests.AllTests)..."
-  buildResult <- WB.buildCanisterAuto buildOpts
+  buildResult <- buildWasmViaIcWasmCli opts mainModulePath testModPath
   case buildResult of
-    WB.BuildError err => pure (Left $ "WASM build failed: " ++ err)
-    WB.BuildSuccess wasmPath => do
+    Left err => pure (Left $ "WASM build failed: " ++ err)
+    Right wasmPath => do
       putStrLn $ "    WASM built: " ++ wasmPath
 
       -- Step 2: Instrument WASM with ic-wasm for profiling

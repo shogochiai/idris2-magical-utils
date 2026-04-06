@@ -5,12 +5,14 @@ module Coverage.UnifiedRunner
 import Coverage.Types
 import public Coverage.Collector
 import public Coverage.DumpcasesParser
+import public Coverage.Core.RuntimeHit
 import System
 import System.Clock
 import System.File
 import System.Directory
 import Data.List
 import Data.List1
+import Data.Maybe
 import Data.String
 
 %default covering
@@ -48,16 +50,34 @@ removeFileIfExistsSafe path = do
   _ <- removeFile path
   pure ()
 
+buildPrelude : Maybe String -> String
+buildPrelude idris2Override =
+  case idris2Override of
+    Just app =>
+      "APP=\"" ++ app ++ "\""
+      ++ " && export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
+      ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
+      ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
+    Nothing => installedIdrisPrelude
+
 ||| Build an ipkg, preferring direct Idris2 and falling back to pack.
 ||| Returns captured failure logs so downstream callers can surface the real cause.
-buildIpkg : String -> String -> IO (Either String ())
-buildIpkg projectDir ipkgName = do
+buildIpkgWithClean : Bool -> String -> String -> IO (Either String ())
+buildIpkgWithClean cleanFirst projectDir ipkgName = do
+  idris2Override <- getEnv "IDRIS2_BIN"
   let directLog = projectDir ++ "/.idris2-coverage-build-direct.log"
   let packLog = projectDir ++ "/.idris2-coverage-build-pack.log"
   removeFileIfExistsSafe directLog
   removeFileIfExistsSafe packLog
 
-  let directCmd = installedIdrisPrelude
+  let appPrelude = buildPrelude idris2Override
+  when cleanFirst $
+    do let cleanCmd = appPrelude
+                   ++ " && cd " ++ projectDir
+                   ++ " && \"$APP\" --clean " ++ ipkgName ++ " > /dev/null 2>&1"
+       _ <- system cleanCmd
+       pure ()
+  let directCmd = appPrelude
                ++ " && cd " ++ projectDir
                ++ " && \"$APP\" --build " ++ ipkgName ++ " > " ++ directLog ++ " 2>&1"
   directExit <- system directCmd
@@ -67,24 +87,34 @@ buildIpkg projectDir ipkgName = do
        pure $ Right ()
      else do
        directMsg <- readFile directLog
-       let packCmd = "cd " ++ projectDir ++ " && pack build " ++ ipkgName ++ " > " ++ packLog ++ " 2>&1"
-       packExit <- system packCmd
-       if packExit == 0
-          then do
-            removeFileIfExistsSafe directLog
-            removeFileIfExistsSafe packLog
-            pure $ Right ()
-          else do
-            packMsg <- readFile packLog
-            removeFileIfExistsSafe directLog
-            removeFileIfExistsSafe packLog
-            let directSummary = either (\err => "unable to read direct-build log: " ++ show err)
-                                       trimLog directMsg
-            let packSummary = either (\err => "unable to read pack-build log: " ++ show err)
-                                     trimLog packMsg
-            pure $ Left $
-              "direct idris2 build failed: " ++ directSummary ++ "\n"
-              ++ "pack fallback failed: " ++ packSummary
+       case idris2Override of
+         Just _ => do
+           removeFileIfExistsSafe directLog
+           let directSummary = either (\err => "unable to read direct-build log: " ++ show err)
+                                      trimLog directMsg
+           pure $ Left $ "direct idris2 build failed: " ++ directSummary
+         Nothing => do
+           let packCmd = "cd " ++ projectDir ++ " && pack build " ++ ipkgName ++ " > " ++ packLog ++ " 2>&1"
+           packExit <- system packCmd
+           if packExit == 0
+              then do
+                removeFileIfExistsSafe directLog
+                removeFileIfExistsSafe packLog
+                pure $ Right ()
+              else do
+                packMsg <- readFile packLog
+                removeFileIfExistsSafe directLog
+                removeFileIfExistsSafe packLog
+                let directSummary = either (\err => "unable to read direct-build log: " ++ show err)
+                                           trimLog directMsg
+                let packSummary = either (\err => "unable to read pack-build log: " ++ show err)
+                                         trimLog packMsg
+                pure $ Left $
+                  "direct idris2 build failed: " ++ directSummary ++ "\n"
+                  ++ "pack fallback failed: " ++ packSummary
+
+buildIpkg : String -> String -> IO (Either String ())
+buildIpkg = buildIpkgWithClean False
 
 ||| Generate temporary test runner source code
 ||| The test modules must export a `runAllTests : IO ()` function
@@ -115,22 +145,33 @@ generateImportWrapper modName modules = unlines
 ||| @depends - Additional package dependencies (e.g., from target project's ipkg)
 ||| @sourcedir - Source directory (from target project's ipkg, defaults to "src")
 ||| @dumpcasesPath - Optional path for --dumpcases output (Nothing = profile only)
-generateTempIpkg : String -> String -> List String -> String -> List String -> String -> Maybe String -> String
-generateTempIpkg pkgName mainMod modules execName depends sourcedir dumpcasesPath =
+generateTempIpkgWithOpts : String -> String -> List String -> String -> List String -> String -> Maybe String -> Maybe String -> String
+generateTempIpkgWithOpts pkgName mainMod modules execName depends sourcedir opts builddir =
   let allDepends = "base, contrib, idris2-coverage" ++
         (if null depends then "" else ", " ++ joinStrings ", " depends)
-      optsLine = case dumpcasesPath of
-        Just path => "opts = \"--profile --dumpcases " ++ path ++ "\""
-        Nothing => "opts = \"--profile\""
+      optsLine = case opts of
+        Just optStr => ["opts = \"" ++ optStr ++ "\""]
+        Nothing => []
+      builddirLine = case builddir of
+        Just dir => ["builddir = \"" ++ dir ++ "\""]
+        Nothing => []
   in unlines
-    [ "package " ++ pkgName
-    , optsLine
-    , "sourcedir = \"" ++ sourcedir ++ "\""
-    , "main = " ++ mainMod
-    , "executable = " ++ execName
-    , "depends = " ++ allDepends
-    , "modules = " ++ joinStrings ", " modules
-    ]
+    ( [ "package " ++ pkgName ]
+   ++ optsLine
+   ++ builddirLine
+   ++ [ "sourcedir = \"" ++ sourcedir ++ "\""
+      , "main = " ++ mainMod
+      , "executable = " ++ execName
+      , "depends = " ++ allDepends
+      , "modules = " ++ joinStrings ", " modules
+      ])
+
+generateTempIpkg : String -> String -> List String -> String -> List String -> String -> Maybe String -> String
+generateTempIpkg pkgName mainMod modules execName depends sourcedir dumpcasesPath =
+  let opts = case dumpcasesPath of
+        Just path => Just ("--profile --dumpcases " ++ path)
+        Nothing => Just "--profile"
+  in generateTempIpkgWithOpts pkgName mainMod modules execName depends sourcedir opts Nothing
 
 ||| Generate pack.toml with idris2-coverage dependency from GitHub
 |||
@@ -414,7 +455,7 @@ runProjectDumpcasesWithTempIpkg ipkgPath = do
             removeFileIfExists tempIpkgPath
             pure $ Left err
 
-      buildResult <- buildIpkg projectDir tempIpkgName
+      buildResult <- buildIpkgWithClean True projectDir tempIpkgName
       case buildResult of
         Left err => do
           removeFileIfExists tempIdrPath
@@ -814,3 +855,99 @@ runTestsWithFunctionHits projectDir testModules timeout = do
   where
     countCanonical : List CompiledCase -> Nat
     countCanonical = length . filter (\c => c.kind == Canonical)
+
+parsePathHitLineLocal : String -> Maybe PathRuntimeHit
+parsePathHitLineLocal line =
+  let trimmed = trim line in
+  if null trimmed || isPrefixOf "#" trimmed
+     then Nothing
+     else case forget (split (== ',') trimmed) of
+            [pathId] => Just (MkPathRuntimeHit (trim pathId) 1)
+            [pathId, countStr] =>
+              let parsed = fromMaybe 1 (parsePositive (trim countStr))
+              in Just (MkPathRuntimeHit (trim pathId) parsed)
+            _ => Just (MkPathRuntimeHit trimmed 1)
+
+||| Build and run test modules with forked Idris2 path instrumentation enabled.
+||| Returns static dumppaths JSON plus runtime path hits from the executed test binary.
+export
+runTestsWithPathCoverageArtifacts : (projectDir : String)
+                                 -> (projectModules : List String)
+                                 -> (testModules : List String)
+                                 -> (timeout : Nat)
+                                 -> IO (Either String (String, List PathRuntimeHit))
+runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout = do
+  case testModules of
+    [] => pure $ Left "No test modules specified"
+    _ => do
+      projectDepends <- readProjectDepends projectDir
+      sourcedir <- readProjectSourcedir projectDir
+
+      uid <- getUniqueId
+      let tempModName = "TempPathRunner_" ++ uid
+      let tempExecName = "temp-paths-" ++ uid
+      let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
+      let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
+      let tempIpkgName = tempExecName ++ ".ipkg"
+      let tempBuildDir = ".idris2-coverage-build-" ++ uid
+      let packTomlPath = projectDir ++ "/pack.toml"
+      projectPackToml <- readProjectPackToml projectDir
+      let packTomlContent = generateTempPackToml projectPackToml
+      let dumppathsPath = "/tmp/idris2_dumppaths_runtime_" ++ uid ++ ".json"
+      let pathHitsPath = "/tmp/idris2_pathhits_runtime_" ++ uid ++ ".txt"
+      let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
+
+      let runnerSource = generateTempRunner tempModName testModules
+      Right () <- writeFile tempIdrPath runnerSource
+        | Left err => pure $ Left $ "Failed to write temp runner: " ++ show err
+
+      let allModules = nub (tempModName :: (projectModules ++ testModules))
+      let opts = "--dumppaths-json " ++ dumppathsPath ++ " --dumppathshits " ++ pathHitsPath
+      let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just opts) (Just tempBuildDir)
+      Right () <- writeFile tempIpkgPath ipkgContent
+        | Left err => do
+            removeFileIfExists tempIdrPath
+            pure $ Left $ "Failed to write temp ipkg: " ++ show err
+
+      Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
+        | Left err => do
+            removeFileIfExists tempIdrPath
+            removeFileIfExists tempIpkgPath
+            pure $ Left err
+
+      buildResult <- buildIpkgWithClean True projectDir tempIpkgName
+      case buildResult of
+        Left err => do
+          removeFileIfExists tempIdrPath
+          removeFileIfExists tempIpkgPath
+          cleanupPackToml packTomlPath createdPackToml
+          _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
+          removeFileIfExists dumppathsPath
+          removeFileIfExists pathHitsPath
+          pure $ Left $ "Build with path instrumentation failed: " ++ err
+        Right () => do
+          Right dumppathsContent <- readFile dumppathsPath
+            | Left err => do
+                removeFileIfExists tempIdrPath
+                removeFileIfExists tempIpkgPath
+                cleanupPackToml packTomlPath createdPackToml
+                _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
+                removeFileIfExists dumppathsPath
+                removeFileIfExists pathHitsPath
+                pure $ Left $ "Failed to read dumppaths JSON: " ++ show err
+
+          _ <- system $ "cd " ++ projectDir ++ " && " ++ relExecPath ++ " > /dev/null 2>&1"
+
+          hitsContent <- readFile pathHitsPath
+          let hits = case hitsContent of
+                       Left _ => []
+                       Right content => mapMaybe parsePathHitLineLocal (lines content)
+
+          removeFileIfExists tempIdrPath
+          removeFileIfExists tempIpkgPath
+          cleanupPackToml packTomlPath createdPackToml
+          _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
+          removeFileIfExists dumppathsPath
+          removeFileIfExists pathHitsPath
+
+          pure $ Right (dumppathsContent, hits)

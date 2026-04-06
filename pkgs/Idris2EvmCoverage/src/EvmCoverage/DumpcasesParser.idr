@@ -84,6 +84,27 @@ supportsDumpcasesJson cmd = do
   _ <- system $ "rm -f " ++ probe
   pure $ exitCode == 0
 
+findPackInstallBase : IO (Maybe String)
+findPackInstallBase = do
+  let tmpFile = "/tmp/evm-dumpcases-pack-install-base.txt"
+  _ <- system $ "ls -td ~/.local/state/pack/install/*/ 2>/dev/null | head -1 > " ++ tmpFile
+  Right content <- readFile tmpFile
+    | Left _ => pure Nothing
+  let path = trim content
+  if null path then pure Nothing else pure (Just path)
+
+discoverPackagePath : IO String
+discoverPackagePath = do
+  mBase <- findPackInstallBase
+  case mBase of
+    Nothing => pure ""
+    Just basePath => do
+      let tmpFile = "/tmp/evm-dumpcases-package-paths.txt"
+      _ <- system $ "find " ++ basePath ++ " -type d -name 'idris2-*' 2>/dev/null > " ++ tmpFile
+      Right content <- readFile tmpFile
+        | Left _ => pure ""
+      pure $ joinBy ":" (filter (not . null) (map trim (lines content)))
+
 -- =============================================================================
 -- CRASH Reason Classification
 -- =============================================================================
@@ -708,11 +729,13 @@ runDumpcasesAndParse ipkgPath outputPath = do
   -- --dumpcases outputs case trees DURING type-checking before codegen.
   -- So we check if output exists first, ignoring exit code if output is valid.
   let buildLog = projectDir ++ "/build/exec/dumpcases-pack-build.log"
+  pkgPath <- discoverPackagePath
+  let envPrefix = if null pkgPath then "" else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
   let cmd =
         if explicitOverride
            then "mkdir -p " ++ projectDir ++ "/build/exec"
              ++ " && cd " ++ projectDir
-             ++ " && " ++ idris2Cmd ++ " --build " ++ tempIpkgName
+             ++ " && " ++ envPrefix ++ idris2Cmd ++ " --build " ++ tempIpkgName
              ++ " > " ++ buildLog ++ " 2>&1"
            else "mkdir -p " ++ projectDir ++ "/build/exec"
              ++ " && cd " ++ projectDir

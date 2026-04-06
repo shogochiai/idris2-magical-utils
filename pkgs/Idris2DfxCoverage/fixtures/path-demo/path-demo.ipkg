@@ -1,0 +1,7 @@
+package path-demo
+version = 0.0.1
+sourcedir = "src"
+main = PathDemo
+executable = "path-demo"
+depends = base, idris2-icwasm
+modules = PathDemo, Tests.AllTests

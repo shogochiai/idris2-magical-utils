@@ -5,10 +5,13 @@ module Tests.AllTests
 
 import Data.List
 import Data.Maybe
+import Data.SortedMap
 
 import DfxCoverage.Exclusions
 import DfxCoverage.IcWasm.ProfilingParser
+import DfxCoverage.IcWasm.IcpPublicNameParser
 import DfxCoverage.DumpcasesParser
+import DfxCoverage.PathRuntime
 import DfxCoverage.SourceMap.SourceMapParser
 
 %default covering
@@ -245,6 +248,23 @@ test_SRCMAP_005 () =
   in null (getProjectFunctions sm)
 
 -- =============================================================================
+-- PathRuntime Module Tests
+-- =============================================================================
+
+test_PATH_001 : () -> Bool
+test_PATH_001 () =
+  extractPathIdFromPublicName "path:Main.f#p0" == Just "Main.f#p0"
+
+test_PATH_002 : () -> Bool
+test_PATH_002 () =
+  let profiling = MkProfilingResult [MkProfilingEntry 10 100, MkProfilingEntry (-10) 50] Nothing
+      names = MkIcpFuncNames (fromList [(10, "path:Main.f#p0"), (11, "Main.main")]) 2
+      hits = pathHitsFromProfilingResult profiling names
+  in case hits of
+       [hit] => hit.pathId == "Main.f#p0" && hit.hitCount == 1
+       _ => False
+
+-- =============================================================================
 -- All Tests
 -- =============================================================================
 
@@ -290,6 +310,8 @@ allTests =
   , test "SRCMAP_003" "Round-trip conversion" test_SRCMAP_003
   , test "SRCMAP_004" "Name conversion round-trip 2" test_SRCMAP_004
   , test "SRCMAP_005" "getProjectFunctions empty" test_SRCMAP_005
+  , test "PATH_001" "extractPathIdFromPublicName" test_PATH_001
+  , test "PATH_002" "pathHitsFromProfilingResult" test_PATH_002
   ]
 
 ||| Run all tests - pure version

@@ -10,6 +10,8 @@ sourcedir = "src"
 modules = EvmCoverage.Types
         , EvmCoverage.SourceMap
         , EvmCoverage.StructuredExport
+        , EvmCoverage.PathCoverage
+        , EvmCoverage.PathRuntime
         , EvmCoverage.DumpcasesParser
         , EvmCoverage.ProfileParser
         , EvmCoverage.ProfileParserLinear

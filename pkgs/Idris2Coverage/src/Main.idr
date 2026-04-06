@@ -9,6 +9,7 @@ import Coverage.TestRunner
 import Coverage.Aggregator
 import Coverage.Report
 import Coverage.DumpcasesParser
+import Coverage.PathCoverage
 import Coverage.TestCoverage
 import Coverage.UnifiedRunner
 import Coverage.Config
@@ -45,9 +46,11 @@ record Options where
   jsonOutput   : Bool            -- --json flag for machine-readable output
   topK         : Nat             -- --top N for high impact targets (default 10)
   reportLeak   : Bool            -- --report-leak flag to contribute
+  dumppathsJson : Maybe String   -- explicit --dumppaths-json input path
+  pathHitsPath : Maybe String    -- optional runtime path-hit file
 
 defaultOptions : Options
-defaultOptions = MkOptions JSON Nothing Nothing (Just ".") [] False False Nothing False False 10 False
+defaultOptions = MkOptions JSON Nothing Nothing (Just ".") [] False False Nothing False False 10 False Nothing Nothing
 
 -- =============================================================================
 -- Argument Parsing
@@ -57,10 +60,16 @@ parseArgs : List String -> Options -> Options
 parseArgs [] opts = opts
 parseArgs ("branches" :: rest) opts =
   parseArgs rest ({ subcommand := Just "branches" } opts)
+parseArgs ("paths" :: rest) opts =
+  parseArgs rest ({ subcommand := Just "paths" } opts)
 parseArgs ("--uncovered" :: rest) opts =
   parseArgs rest ({ showUncovered := True } opts)
 parseArgs ("--json" :: rest) opts =
   parseArgs rest ({ jsonOutput := True } opts)
+parseArgs ("--dumppaths-json" :: path :: rest) opts =
+  parseArgs rest ({ dumppathsJson := Just path } opts)
+parseArgs ("--path-hits" :: path :: rest) opts =
+  parseArgs rest ({ pathHitsPath := Just path } opts)
 parseArgs ("--top" :: n :: rest) opts =
   let k : Nat = fromMaybe 10 (parsePositive n)
   in parseArgs rest ({ topK := k } opts)
@@ -112,6 +121,8 @@ EXAMPLES:
   idris2-cov .                         # same as above
   idris2-cov pkgs/LazyCore/            # analyze specific directory
   idris2-cov myproject.ipkg            # analyze specific ipkg
+  idris2-cov paths --dumppaths-json out.json
+  idris2-cov paths myproject.ipkg      # requires forked IDRIS2_BIN with --dumppaths-json
   idris2-cov --uncovered .             # only show coverage gaps
   idris2-cov --json .                  # JSON output with high_impact_targets
   idris2-cov --json --top 5 .          # JSON with top 5 targets
@@ -121,6 +132,8 @@ OPTIONS:
   -v, --version     Show version
   --uncovered       Only show functions with bugs/unknown CRASHes
   --json            Output JSON with high_impact_targets and reading_guide
+  --dumppaths-json  Read path obligations from an existing dumppaths JSON file
+  --path-hits       Optional newline or csv file of covered path ids
   --top N           Number of high impact targets to include (default: 10)
   --report-leak     Found stdlib/compiler funcs in targets? Report them!
                     Creates a PR automatically. Your help keeps this fresh.
@@ -135,6 +148,278 @@ BRANCH CLASSIFICATION (per dunham):
 
 versionText : String
 versionText = "idris2-coverage 0.1.0"
+
+-- =============================================================================
+-- Path Coverage Command
+-- =============================================================================
+
+resolveIdris2Command : IO String
+resolveIdris2Command = do
+  mcmd <- getEnv "IDRIS2_BIN"
+  pure $ fromMaybe "idris2" mcmd
+
+supportsDumppathsJson : String -> IO Bool
+supportsDumppathsJson cmd = do
+  t <- time
+  let probe = "/tmp/idris2-dumppaths-json-probe-" ++ show t ++ ".json"
+  exitCode <- system $ cmd ++ " --dumppaths-json " ++ probe ++ " --version >/dev/null 2>&1"
+  _ <- system $ "rm -f " ++ probe
+  pure $ exitCode == 0
+
+splitPath : String -> (String, String)
+splitPath path =
+  let parts = forget $ split (== '/') path in
+  case reverse parts of
+    [] => (".", path)
+    [name] => (".", name)
+    (name :: revDirs) => (joinBy "/" (reverse revDirs), name)
+
+getIdris2VersionForPaths : IO String
+getIdris2VersionForPaths = do
+  let tmpFile = "/tmp/idris2-version-paths.txt"
+  _ <- system $ "idris2 --version > " ++ tmpFile ++ " 2>&1"
+  Right content <- readFile tmpFile
+    | Left _ => pure "unknown"
+  pure $ trim content
+
+loadPathExclusionsForCLI : IO LoadedExclusions
+loadPathExclusionsForCLI = do
+  idris2Ver <- getIdris2VersionForPaths
+  let tryPaths = ["./exclusions", "../exclusions", "exclusions"]
+  findAndLoad tryPaths idris2Ver
+  where
+    findAndLoad : List String -> String -> IO LoadedExclusions
+    findAndLoad [] ver = pure emptyExclusions
+    findAndLoad (p :: ps) ver = do
+      Right _ <- readFile (p ++ "/base.txt")
+        | Left _ => findAndLoad ps ver
+      loadExclusions p ver
+
+findIpkgInDirForPaths : String -> IO (Maybe String)
+findIpkgInDirForPaths dir = do
+  Right entries <- listDir dir
+    | Left _ => pure Nothing
+  let ipkgs = filter (isSuffixOf ".ipkg") entries
+  let nonTemp = filter (not . isPrefixOf "temp-") ipkgs
+  case nonTemp of
+    (x :: _) => pure $ Just (dir ++ "/" ++ x)
+    [] => case ipkgs of
+            (x :: _) => pure $ Just (dir ++ "/" ++ x)
+            [] => pure Nothing
+
+resolveIpkgForPaths : String -> IO (Either String String)
+resolveIpkgForPaths target = do
+  let cleanTarget = if isSuffixOf "/" target
+                       then pack $ reverse $ drop 1 $ reverse $ unpack target
+                       else target
+  if isSuffixOf ".ipkg" cleanTarget
+     then pure $ Right cleanTarget
+     else do
+       result <- findIpkgInDirForPaths cleanTarget
+       case result of
+         Nothing => pure $ Left $ "No .ipkg file found in " ++ cleanTarget
+         Just ipkg => pure $ Right ipkg
+
+runDumppathsJson : String -> IO (Either String String)
+runDumppathsJson ipkgPath = do
+  let (projectDir, ipkgName) = splitPath ipkgPath
+  idris2Cmd <- resolveIdris2Command
+  supported <- supportsDumppathsJson idris2Cmd
+  if not supported
+     then pure $ Left "Current Idris2 does not support --dumppaths-json. Set IDRIS2_BIN to your forked compiler."
+     else do
+       t <- time
+       let outPath = "/tmp/idris2_cov_paths_" ++ show t ++ ".json"
+       let logPath = "/tmp/idris2_cov_paths_" ++ show t ++ ".log"
+       let cmd = "cd " ++ projectDir ++ " && "
+              ++ idris2Cmd ++ " --dumppaths-json " ++ outPath ++ " --build " ++ ipkgName
+              ++ " > " ++ logPath ++ " 2>&1"
+       _ <- system cmd
+       Right content <- readFile outPath
+         | Left err => do
+             Right logContent <- readFile logPath
+               | Left _ => pure $ Left $ "Failed to read dumppaths JSON: " ++ show err
+             pure $ Left $ "Failed to read dumppaths JSON: " ++ show err ++ "\nBuild log tail:\n" ++ unlines (reverse (take 20 (reverse (lines logContent))))
+       _ <- system $ "rm -f " ++ outPath ++ " " ++ logPath
+       if null (trim content)
+          then pure $ Left "dumppaths JSON was empty"
+          else pure $ Right content
+
+parsePathHitLine : String -> Maybe PathRuntimeHit
+parsePathHitLine line =
+  let trimmed = trim line in
+  if null trimmed || isPrefixOf "#" trimmed
+     then Nothing
+     else case forget (split (== ',') trimmed) of
+            [pathId] => Just (MkPathRuntimeHit (trim pathId) 1)
+            [pathId, countStr] =>
+              let parsed = fromMaybe 1 (parsePositive (trim countStr))
+              in Just (MkPathRuntimeHit (trim pathId) parsed)
+            _ => Just (MkPathRuntimeHit trimmed 1)
+
+loadPathHits : Maybe String -> IO (Either String (List PathRuntimeHit))
+loadPathHits Nothing = pure $ Right []
+loadPathHits (Just path) = do
+  Right content <- readFile path
+    | Left err => pure $ Left $ "Failed to read path hits: " ++ show err
+  pure $ Right $ mapMaybe parsePathHitLine (lines content)
+
+pathMeasurementSummary : CoverageMeasurement -> String
+pathMeasurementSummary m = unlines
+  [ "Path-level semantic measurement:"
+  , "  denominator_ids: " ++ show (length m.denominatorIds)
+  , "  covered_ids:     " ++ show (length m.coveredIds)
+  , "  excluded_ids:    " ++ show (length m.excludedIds)
+  , "  unknown_ids:     " ++ show (length m.unknownIds)
+  ]
+
+escapeJson : String -> String
+escapeJson s = fastConcat $ map escapeChar (unpack s)
+  where
+    escapeChar : Char -> String
+    escapeChar '\n' = "\\n"
+    escapeChar '"'  = "\\\""
+    escapeChar '\\' = "\\\\"
+    escapeChar c    = singleton c
+
+pathToJson : PathObligation -> String
+pathToJson p = unlines
+  [ "    {"
+  , "      \"path_id\": \"" ++ escapeJson p.pathId ++ "\","
+  , "      \"function_name\": \"" ++ escapeJson p.functionName ++ "\","
+  , "      \"classification\": \"" ++ escapeJson (show p.classification) ++ "\","
+  , "      \"terminal_kind\": \"" ++ escapeJson p.terminalKind ++ "\","
+  , "      \"summary\": \"" ++ escapeJson (pathSummary p) ++ "\""
+  , "    }"
+  ]
+
+pathsToJsonArray : List PathObligation -> String
+pathsToJsonArray [] = "[]"
+pathsToJsonArray paths =
+  "[\n" ++ fastConcat (intersperse ",\n" (map pathToJson paths)) ++ "\n  ]"
+
+pathCoverageReportToJson : PathCoverageResult -> String
+pathCoverageReportToJson result = unlines
+  [ "{"
+  , "  \"coverage_model\": \"" ++ escapeJson result.coverageModel ++ "\","
+  , "  \"claim_admissible\": " ++ boolToJson result.claimAdmissible ++ ","
+  , "  \"coverage_percent\": " ++ show (fromMaybe 100.0 result.coveragePercent) ++ ","
+  , "  \"measurement\": " ++ indentJson (coverageMeasurementToJson result.measurement) ++ ","
+  , "  \"missing_paths\": " ++ pathsToJsonArray result.missingPaths
+  , "}"
+  ]
+  where
+    boolToJson : Bool -> String
+    boolToJson True = "true"
+    boolToJson False = "false"
+
+    indentJson : String -> String
+    indentJson s =
+      let ls = lines s
+      in fastConcat $ intersperse "\n" $ map ("  " ++) ls
+
+parseIpkgModulesForPaths : String -> List String
+parseIpkgModulesForPaths content =
+  let ls = lines content
+      moduleLines = collectModuleLines ls False
+      joined = fastConcat $ intersperse " " moduleLines
+      afterEq = case break (== '=') (unpack joined) of
+                  (_, rest) => pack $ drop 1 rest
+      parts = forget $ split (== ',') afterEq
+  in map (trim . pack . filter isModuleChar . unpack . trim) parts
+  where
+    isModuleChar : Char -> Bool
+    isModuleChar c = isAlphaNum c || c == '.' || c == '_'
+
+    collectModuleLines : List String -> Bool -> List String
+    collectModuleLines [] _ = []
+    collectModuleLines (l :: ls) False =
+      if isInfixOf "modules" l && isInfixOf "=" l
+         then l :: collectModuleLines ls True
+         else collectModuleLines ls False
+    collectModuleLines (l :: ls) True =
+      let trimmed = trim l in
+      if null trimmed
+         then collectModuleLines ls True
+         else if isPrefixOf "," trimmed || isPrefixOf " " l || isPrefixOf "\t" l
+                 then l :: collectModuleLines ls True
+                 else []
+
+getProjectDirForPaths : String -> String
+getProjectDirForPaths ipkg =
+  let parts = forget $ split (== '/') ipkg
+      allButLast = reverse $ drop 1 $ reverse parts
+  in case allButLast of
+       [] => "."
+       dirs => joinBy "/" dirs
+
+findTestModulesForPaths : String -> IO (List String)
+findTestModulesForPaths ipkg = do
+  Right content <- readFile ipkg
+    | Left _ => discoverTestModules (getProjectDirForPaths ipkg)
+  let allModules = parseIpkgModulesForPaths content
+  let testMods = filter (isSuffixOf "AllTests") allModules
+  case testMods of
+    [] => discoverTestModules (getProjectDirForPaths ipkg)
+    mods => pure mods
+
+runPaths : Options -> IO ()
+runPaths opts = do
+  loadedExcl <- loadPathExclusionsForCLI
+  pathHitsResult <- loadPathHits opts.pathHitsPath
+  case pathHitsResult of
+    Left err => putStrLn $ "Error: " ++ err
+    Right explicitHits => do
+      artifactsResult <- case opts.dumppathsJson of
+        Just path => do
+          Right content <- readFile path
+            | Left err => pure $ Left $ "Failed to read dumppaths JSON: " ++ show err
+          pure $ Right (content, explicitHits)
+        Nothing =>
+          case opts.targetPath of
+            Nothing => pure $ Left "paths command requires either --dumppaths-json or a target .ipkg/directory"
+            Just target => do
+              ipkgResult <- resolveIpkgForPaths target
+              case ipkgResult of
+                Left err => pure $ Left err
+                Right ipkg =>
+                  case opts.pathHitsPath of
+                    Just _ => do
+                      contentResult <- runDumppathsJson ipkg
+                      pure $ map (\content => (content, explicitHits)) contentResult
+                    Nothing => do
+                      testModules <- findTestModulesForPaths ipkg
+                      ipkgContentResult <- readFile ipkg
+                      let projectModules = either (const []) parseIpkgModulesForPaths ipkgContentResult
+                      case testModules of
+                        [] => do
+                          contentResult <- runDumppathsJson ipkg
+                          pure $ map (\content => (content, explicitHits)) contentResult
+                        mods => do
+                          artifacts <- runTestsWithPathCoverageArtifacts (getProjectDirForPaths ipkg) projectModules mods 120
+                          case artifacts of
+                            Right pair => pure $ Right pair
+                            Left err => do
+                              putStrLn $ "Exact path runner failed; falling back to static analysis: " ++ err
+                              contentResult <- runDumppathsJson ipkg
+                              pure $ map (\content => (content, explicitHits)) contentResult
+      case artifactsResult of
+        Left err => putStrLn $ "Error: " ++ err
+        Right (content, hits) =>
+          case analyzePathCoverageFromContent loadedExcl emptyExclusionConfig content hits of
+            Left err => putStrLn $ "Error: " ++ err
+            Right result =>
+              if opts.jsonOutput
+                 then putStrLn $ pathCoverageReportToJson result
+                 else do
+                   putStrLn "# Path Coverage Report"
+                   putStrLn $ "coverage_model:   " ++ result.coverageModel
+                   putStrLn $ "claim_admissible: " ++ show result.claimAdmissible
+                   putStrLn $ "coverage_percent: " ++ show (fromMaybe 100.0 result.coveragePercent)
+                   putStrLn ""
+                   putStrLn $ pathMeasurementSummary result.measurement
+                   putStrLn $ "Missing paths: " ++ show (length result.missingPaths)
+                   traverse_ (\p => putStrLn $ "- " ++ p.pathId ++ " :: " ++ pathSummary p) result.missingPaths
 
 -- =============================================================================
 -- Branches Command
@@ -494,4 +779,6 @@ main = do
              then putStrLn versionText
              else if opts.reportLeak
                      then runReportLeak opts
-                     else runBranches opts  -- branches is the default command
+                     else case opts.subcommand of
+                            Just "paths" => runPaths opts
+                            _ => runBranches opts  -- branches is the default command

@@ -11,6 +11,7 @@ depends = base, contrib, idris2-coverage-core
 modules = Main
         , Coverage.Types
         , Coverage.Collector
+        , Coverage.PathCoverage
         , Coverage.SourceAnalyzer
         , Coverage.TestRunner
         , Coverage.Aggregator

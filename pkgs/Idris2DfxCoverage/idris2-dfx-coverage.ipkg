@@ -8,6 +8,9 @@ sourcedir = "src"
 depends = base, contrib, idris2-coverage-core, idris2-icwasm
 
 modules = DfxCoverage.Idris2Coverage
+        , DfxCoverage.PathCoverage
+        , DfxCoverage.PathRuntime
+        , Main
         , DfxCoverage.CandidParser
         , DfxCoverage.CanisterCall
         , DfxCoverage.CoverageAnalyzer
@@ -30,5 +33,10 @@ modules = DfxCoverage.Idris2Coverage
         , DfxCoverage.IcWasm.ProfilingParser
         , DfxCoverage.IcWasm.IcpPublicNameParser
         , DfxCoverage.IcWasm.HttpOutcallDetector
+        -- Source maps / branch probe mapping
+        , DfxCoverage.SourceMap.BranchProbeMap
         -- Dumpcases Analysis
         , DfxCoverage.DumpcasesParser
+
+main = Main
+executable = idris2-dfx-cov

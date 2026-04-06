@@ -3,6 +3,7 @@
 module EvmCoverage.EvmCoverage
 
 import EvmCoverage.Types
+import public EvmCoverage.PathCoverage
 import EvmCoverage.DumpcasesParser
 import EvmCoverage.ProfileParser
 import EvmCoverage.SchemeMapper

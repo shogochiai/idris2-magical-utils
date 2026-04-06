@@ -1,5 +1,5 @@
 package idris2-coverage-core
-version = 0.1.0
+version = 0.1.1
 authors = "lazy-idris team"
 brief = "Shared types for Idris2 coverage analysis tools"
 
@@ -13,6 +13,8 @@ modules = Coverage.Core.Types
         , Coverage.Core.Stats
         , Coverage.Core.Result
         , Coverage.Core.DumpcasesRunner
+        , Coverage.Core.DumppathsJson
+        , Coverage.Core.PathCoverage
         , Coverage.Core.RuntimeHit
         , Coverage.Core.ObligationMap
         , Coverage.Core.HighImpact

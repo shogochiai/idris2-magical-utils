@@ -6,6 +6,7 @@ import Data.SortedMap
 import EvmCoverage.SourceMap
 import EvmCoverage.StructuredExport
 import EvmCoverage.DumpcasesParser
+import EvmCoverage.PathRuntime
 import EvmCoverage.Types
 
 -- =============================================================================
@@ -259,6 +260,56 @@ test_parseStaticExport_autodetects_json = do
     Right [b1, _] => show b1.branchId == "Main.Functions.Vote.vote#0:0"
     _ => False
 
+dumppathsSample : String
+dumppathsSample = """
+{
+  "compiler_version": "0.8.0",
+  "export_kind": "canonical_intrafunction_paths",
+  "path_schema_version": 1,
+  "functions": [
+    {
+      "function_name": "Main.partialMaybe",
+      "paths": [
+        {
+          "path_id": "Main.partialMaybe#p0",
+          "classification": "ReachableObligation",
+          "terminal_kind": "reached_clause",
+          "steps": [
+            {
+              "node_id": "Main.partialMaybe#0:0",
+              "branch_index": 0,
+              "origin": "user_clause",
+              "branch_label": "Just"
+            }
+          ]
+        },
+        {
+          "path_id": "Main.partialMaybe#p1",
+          "classification": "UserAdmittedPartialGap",
+          "terminal_kind": "partial_gap",
+          "steps": [
+            {
+              "node_id": "Main.partialMaybe#0:1",
+              "branch_index": 1,
+              "origin": "compiler_partial_completion",
+              "branch_label": "default"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+"""
+
+||| REQ_PATHRT_001: covered terminal branch ids lift to exact path ids
+export
+test_pathHitsFromCoveredBranchIds_terminal_mapping : IO Bool
+test_pathHitsFromCoveredBranchIds_terminal_mapping = do
+  pure $ case pathHitsFromCoveredBranchIdsInContent ["Main.partialMaybe#0:0"] dumppathsSample of
+    Right [hit] => hit.pathId == "Main.partialMaybe#p0" && hit.hitCount == 1
+    _ => False
+
 -- =============================================================================
 -- Test Runner
 -- =============================================================================
@@ -288,6 +339,7 @@ allTests =
   , ("REQ_STRUCT_001: structured export preserves node ids", test_parseStructuredExport_node_ids)
   , ("REQ_STRUCT_002: structured export maps origin tags", test_parseStructuredExport_origin_mapping)
   , ("REQ_STRUCT_003: static export autodetects structured JSON", test_parseStaticExport_autodetects_json)
+  , ("REQ_PATHRT_001: terminal branch ids map to path ids", test_pathHitsFromCoveredBranchIds_terminal_mapping)
   ]
 
 runTest : (String, IO Bool) -> IO (String, Bool)

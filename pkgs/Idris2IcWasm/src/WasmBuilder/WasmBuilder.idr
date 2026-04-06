@@ -229,88 +229,40 @@ generateTestHarnessShimContent RecordHarness testModuleName =
 ||| This is written to /tmp, never touches the original Main.idr
 generateTestMainContent : String
 generateTestMainContent =
-  let maxTestSlots : Int
-      maxTestSlots = 256
-      batchSizes : List Int
-      batchSizes = [8, 4, 2, 1]
-      batchSpecs : List (Int, Int)
-      batchSpecs =
-        concatMap
-          (\size =>
-            let batchCount = maxTestSlots `div` size
-            in map (\idx => (size, idx * size)) [0 .. batchCount - 1])
-          batchSizes
-      runChunkLines : List String
-      runChunkLines =
-        [ "runChunk : Nat -> Nat -> IO (Int, Int)"
-        , "runChunk start count = do"
-        , "  let batch = take count (drop start TestHarness.allTestsGeneric)"
-        , "  if null batch then pure (0, 0) else do"
-        , "    rs <- traverse (\\(_, t) => t) batch"
-        , "    let passed = length (filter id rs)"
-        , "        failed = length (filter not rs)"
-        , "    pure (cast passed, cast failed)"
-        ]
-      batchExportLines : List String
-      batchExportLines =
-        concatMap
-          (\(size, start) =>
-            [ ""
-            , "export"
-            , "runTestBatch" ++ show size ++ "_" ++ show start ++ " : IO (Int, Int)"
-            , "runTestBatch" ++ show size ++ "_" ++ show start ++ " = runChunk " ++ show start ++ " " ++ show size
-            ])
-          batchSpecs
-      retainBatchLines : List String
-      retainBatchLines =
-        map (\(size, start) => "    _ <- Main.runTestBatch" ++ show size ++ "_" ++ show start) batchSpecs
-  in unlines $
-       [ "||| Auto-generated test entry point for coverage analysis"
-       , "module Main"
-       , ""
-       , "import TestHarness"
-       , "import Data.List"
-       , ""
-       , "%default covering"
-       , ""
-       , "-- FFI bridge for code retention"
-       , "%foreign \"C:ic_ffi_get_arg,libic0\""
-       , "prim__ic_ffi_get_arg : Int -> PrimIO Int"
-       , ""
-       , "||| Run all tests - exported for Candid call"
-       , "||| Uses the standardized canister test shim"
-       , "export"
-       , "runTests : IO (Int, Int)"
-       , "runTests = TestHarness.runTests"
-       , ""
-       , "export"
-       , "runMinimalTests : IO (Int, Int)"
-       , "runMinimalTests = TestHarness.runMinimalTests"
-       , ""
-       , "export"
-       , "runTrivialTest : IO (Int, Int)"
-       , "runTrivialTest = TestHarness.runTrivialTest"
-       , ""
-       ]
-       ++ runChunkLines
-       ++ batchExportLines
-       ++
-       [ ""
-       , "||| Force code retention to prevent DCE"
-       , "forceRetain : IO ()"
-       , "forceRetain = do"
-       , "  v <- primIO $ prim__ic_ffi_get_arg 7"
-       , "  when (v == (-999999)) $ do"
-       , "    _ <- Main.runTests"  -- Explicit to avoid clash with Tests.AllTests.runTests
-       , "    _ <- Main.runMinimalTests"
-       , "    _ <- Main.runTrivialTest"
-       ]
-       ++ retainBatchLines ++
-       [ "    pure ()"
-       , ""
-       , "main : IO ()"
-       , "main = forceRetain"
-       ]
+  unlines
+    [ "||| Auto-generated test entry point for coverage analysis"
+    , "module Main"
+    , ""
+    , "import TestHarness"
+    , "import Data.List"
+    , ""
+    , "%default covering"
+    , ""
+    , "||| Run all tests - exported for Candid call"
+    , "||| Uses the standardized canister test shim"
+    , "export"
+    , "runTests : IO (Int, Int)"
+    , "runTests = TestHarness.runTests"
+    , ""
+    , "export"
+    , "runMinimalTests : IO (Int, Int)"
+    , "runMinimalTests = TestHarness.runMinimalTests"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = TestHarness.runTrivialTest"
+    , ""
+    , "||| Force code retention to prevent DCE"
+    , "forceRetain : IO ()"
+    , "forceRetain ="
+    , "  let retained = [Main.runTests, Main.runMinimalTests, Main.runTrivialTest] in"
+    , "    case retained of"
+    , "      [] => pure ()"
+    , "      _ => pure ()"
+    , ""
+    , "main : IO ()"
+    , "main = forceRetain"
+    ]
 
 -- =============================================================================
 -- Export Function Parsing (for canister_entry.c generation)
@@ -814,6 +766,7 @@ compileToRefC opts buildDir = do
       let projectDumpcasesPath = opts'.projectDir ++ "/build/idris2-test-harness.dumpcases.txt"
       let legacyDumpcasesPath = buildDir' ++ "/idris2-test-harness.dumpcases.txt"
       let pkgFlags = unwords $ map (\p => "-p " ++ p) opts'.packages
+      let candidateDirs = [buildDir', tempDir, opts'.projectDir ++ "/build"]
       _ <- system $ "mkdir -p " ++ tempSrcDir
       (_, absProjectDir', _) <- executeCommand $ "cd " ++ opts'.projectDir ++ " && pwd"
       let absProjectDir = trim absProjectDir'
@@ -826,7 +779,11 @@ compileToRefC opts buildDir = do
         | Left err => pure $ Left $ "Failed to write temp TestHarness: " ++ show err
       Right () <- writeFile tempMainPath generateTestMainContent
         | Left err => pure $ Left $ "Failed to write temp Main: " ++ show err
-      let clearCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" -delete 2>/dev/null || true; rm -f " ++ outputBase ++ ".c'"
+      let clearCmd =
+            "sh -c 'find "
+            ++ joinBy " " candidateDirs
+            ++ " -name \"*.c\" -delete 2>/dev/null || true; rm -f "
+            ++ outputBase ++ ".c'"
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
                 idris2Bin ++ " --codegen refc " ++
                 "--source-dir " ++ tempSrcDir ++ " " ++
@@ -851,7 +808,10 @@ compileToRefC opts buildDir = do
                     " || true'"
       Right _ <- readFile (outputBase ++ ".c")
         | Left _ => do
-            let findCmd = "sh -c 'find " ++ buildDir' ++ " " ++ tempDir ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
+            let findCmd =
+                  "sh -c 'find "
+                  ++ joinBy " " candidateDirs
+                  ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
             (_, cFile, _) <- executeCommand findCmd
             if null (trim cFile)
               then pure $ Left $ "No C file generated by RefC\n" ++ stderr
@@ -1235,6 +1195,19 @@ allRealExportsHaveArities modulePrefix exports arities =
       required = map (\ef => modulePrefix ++ "_" ++ ef.name) (filter (\ef => not ef.fromDid) exports)
   in all (\name => name `elem` names) required
 
+modulePathToPrefix : String -> String
+modulePathToPrefix path =
+  let withoutExt =
+        if isSuffixOf ".idr" path
+           then pack (reverse (drop 4 (reverse (unpack path))))
+           else path
+      parts = filter (\part => not (null part)) (forget (split (== '/') withoutExt))
+      relParts =
+        case parts of
+          "src" :: rest => rest
+          _ => parts
+  in fastConcat $ intersperse "_" relParts
+
 ||| Generate canister_entry.c from Main.idr exports
 ||| Writes to temp file and returns path
 generateCanisterEntry : BuildOptions -> String -> String -> IO (Either String String)
@@ -1248,7 +1221,7 @@ generateCanisterEntry opts cFile ic0Support = do
       let testModulePath' = fromMaybe "src/Tests/AllTests.idr" opts.testModulePath
       pure generateTestMainContent
     else do
-      let mainPath = opts.projectDir ++ "/src/Main.idr"
+      let mainPath = opts.projectDir ++ "/" ++ opts.mainModule
       Right content <- readFile mainPath
         | Left _ => pure ""
       pure content
@@ -1292,9 +1265,11 @@ generateCanisterEntry opts cFile ic0Support = do
                     effectiveExports
            else effectiveExports
 
-  -- Determine module prefix: "Main" for both prod and test builds
-  -- (test builds generate a temp Main.idr that re-exports from Tests.AllTests)
-  let modulePrefix = "Main"
+  -- Test builds generate a temporary Main.idr. Production builds need the real module prefix.
+  let modulePrefix =
+        if opts.forTestBuild
+           then "Main"
+           else modulePathToPrefix opts.mainModule
 
   Right cContent <- readFile cFile
     | Left err => pure $ Left $ "Failed to read generated RefC C file: " ++ show err
@@ -1399,14 +1374,21 @@ buildCanister opts ic0Support = do
 public export
 buildCanisterAuto : BuildOptions -> IO BuildResult
 buildCanisterAuto opts = do
-  -- Try to find IC0 support in project or sibling
-  let projectIc0 = opts.projectDir ++ "/lib/ic0"
-  let siblingIc0 = opts.projectDir ++ "/../idris2-icwasm/support/ic0"
-
-  Right _ <- readFile (projectIc0 ++ "/canister_entry.c")
-    | Left _ => do
-        Right _ <- readFile (siblingIc0 ++ "/canister_entry.c")
-          | Left _ => pure $ BuildError "IC0 support files not found in lib/ic0 or ../idris2-icwasm/support/ic0"
-        buildCanister opts siblingIc0
-
-  buildCanister opts projectIc0
+  let candidateIc0Dirs =
+        [ opts.projectDir ++ "/lib/ic0"
+        , opts.projectDir ++ "/../idris2-icwasm/support/ic0"
+        , opts.projectDir ++ "/../Idris2IcWasm/support/ic0"
+        , opts.projectDir ++ "/../../Idris2IcWasm/support/ic0"
+        , opts.projectDir ++ "/../../../Idris2IcWasm/support/ic0"
+        ]
+  supportDir <- firstExistingIc0Support candidateIc0Dirs
+  case supportDir of
+    Just dir => buildCanister opts dir
+    Nothing => pure $ BuildError "IC0 support files not found in lib/ic0, ../idris2-icwasm/support/ic0, ../Idris2IcWasm/support/ic0, ../../Idris2IcWasm/support/ic0, or ../../../Idris2IcWasm/support/ic0"
+  where
+    firstExistingIc0Support : List String -> IO (Maybe String)
+    firstExistingIc0Support [] = pure Nothing
+    firstExistingIc0Support (dir :: rest) = do
+      Right _ <- readFile (dir ++ "/canister_entry.c")
+        | Left _ => firstExistingIc0Support rest
+      pure (Just dir)

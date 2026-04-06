@@ -74,17 +74,19 @@ extractProfileCounters logs =
 
 ||| Label entry from CSV: (index, function_name, has_switch)
 public export
-data LabelKind = LKFunction | LKBranch
+data LabelKind = LKFunction | LKBranch | LKPath
 
 public export
 Show LabelKind where
   show LKFunction = "function"
   show LKBranch = "branch"
+  show LKPath = "path"
 
 public export
 Eq LabelKind where
   LKFunction == LKFunction = True
   LKBranch == LKBranch = True
+  LKPath == LKPath = True
   _ == _ = False
 
 public export
@@ -114,6 +116,12 @@ parseLabel : String -> Maybe LabelEntry
 parseLabel line =
   let parts = forget (split (== ',') line)
   in case parts of
+    (idx :: "path" :: mangled :: demangledName :: pid :: _) =>
+      case parsePositive {a=Nat} idx of
+        Just i => Just (MkLabelEntry i LKPath mangled demangledName
+                                  (if null (trim pid) then Nothing else Just (trim pid))
+                                  1)
+        Nothing => Nothing
     (idx :: "branch" :: mangled :: demangledName :: bid :: _) =>
       case parsePositive {a=Nat} idx of
         Just i => Just (MkLabelEntry i LKBranch mangled demangledName
@@ -421,6 +429,9 @@ dedupStrings (x :: xs) = if elem x xs then dedupStrings xs else x :: dedupString
 branchLabels : List LabelEntry -> List LabelEntry
 branchLabels = filter (\l => l.labelKind == LKBranch && isJust l.branchId)
 
+pathLabels : List LabelEntry -> List LabelEntry
+pathLabels = filter (\l => l.labelKind == LKPath && isJust l.branchId)
+
 coveredBranchIdsFromCounters : List LabelEntry -> List (Nat, Integer) -> List String
 coveredBranchIdsFromCounters labels counters =
   dedupStrings $
@@ -430,6 +441,21 @@ coveredBranchIdsFromCounters labels counters =
     resolveCovered (idx, cnt) =
       if cnt <= 0 then Nothing
       else branchId =<< lookupLabel idx labels
+
+public export
+pathHitsFromCounters : List LabelEntry -> List (Nat, Integer) -> List CoreRH.PathRuntimeHit
+pathHitsFromCounters labels counters =
+  mapMaybe resolveCovered counters
+  where
+    resolveCovered : (Nat, Integer) -> Maybe CoreRH.PathRuntimeHit
+    resolveCovered (idx, cnt) =
+      if cnt <= 0 then Nothing
+      else case lookupLabel idx labels of
+             Just lbl =>
+               case (lbl.labelKind, lbl.branchId) of
+                 (LKPath, Just pid) => Just (CoreRH.MkPathRuntimeHit pid (cast cnt))
+                 _ => Nothing
+             Nothing => Nothing
 
 branchFunctionName : LabelEntry -> Maybe String
 branchFunctionName lbl = if lbl.labelKind == LKBranch then Just lbl.demangledName else Nothing
@@ -522,6 +548,22 @@ analyzeBranchCoverageFromFile tracePath labelPath staticDenominatorIds = do
   Right labels <- loadLabels labelPath
     | Left err => pure (Left err)
   pure $ Right $ analyzeBranchCoverageFromText traceContent labels staticDenominatorIds
+
+public export
+analyzePathHitsFromText : String -> List LabelEntry -> List CoreRH.PathRuntimeHit
+analyzePathHitsFromText traceOutput labels =
+  let counters = parseProfileFlushCounters traceOutput
+      indexed = indexCounters counters
+  in pathHitsFromCounters labels indexed
+
+public export
+analyzePathHitsFromFile : String -> String -> IO (Either String (List CoreRH.PathRuntimeHit))
+analyzePathHitsFromFile tracePath labelPath = do
+  Right traceContent <- readFile tracePath
+    | Left err => pure (Left $ "Failed to read trace file: " ++ show err)
+  Right labels <- loadLabels labelPath
+    | Left err => pure (Left err)
+  pure $ Right $ analyzePathHitsFromText traceContent labels
 
 public export
 writeBranchCounterDiagnostics : String -> String -> List String -> String -> IO (Either String ())
