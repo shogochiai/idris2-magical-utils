@@ -806,11 +806,20 @@ compileToRefC opts buildDir = do
       let harnessStyle = detectTestHarnessStyle testModuleContent
       let testModuleName = pathToModuleName testModuleRelPath
       let tempDir = "/tmp/idris2-icwasm-test-" ++ show !time
-      let tempMainPath = tempDir ++ "/Main.idr"
-      let tempHarnessPath = tempDir ++ "/TestHarness.idr"
+      let tempSrcDir = tempDir ++ "/src"
+      let tempMainPath = tempSrcDir ++ "/Main.idr"
+      let tempHarnessPath = tempSrcDir ++ "/TestHarness.idr"
       let outputBase = tempDir ++ "/test_runner"
+      let tempDumpcasesPath = tempDir ++ "/idris2-test-harness.dumpcases.txt"
+      let projectDumpcasesPath = opts'.projectDir ++ "/build/idris2-test-harness.dumpcases.txt"
+      let legacyDumpcasesPath = buildDir' ++ "/idris2-test-harness.dumpcases.txt"
       let pkgFlags = unwords $ map (\p => "-p " ++ p) opts'.packages
-      _ <- system $ "mkdir -p " ++ tempDir
+      _ <- system $ "mkdir -p " ++ tempSrcDir
+      (_, absProjectDir', _) <- executeCommand $ "cd " ++ opts'.projectDir ++ " && pwd"
+      let absProjectDir = trim absProjectDir'
+      (_, files, _) <- executeCommand $ "ls " ++ absProjectDir ++ "/src/"
+      let srcItems = filter (\s => not (null s) && s /= "Main.idr") (lines files)
+      _ <- traverse_ (\item => system $ "ln -sf " ++ absProjectDir ++ "/src/" ++ item ++ " " ++ tempSrcDir ++ "/" ++ item) srcItems
       putStrLn $ "        Direct RefC test compile via temp sources: " ++ tempDir
       putStrLn $ "        Direct RefC packages: " ++ show opts'.packages
       Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName)
@@ -820,13 +829,26 @@ compileToRefC opts buildDir = do
       let clearCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" -delete 2>/dev/null || true; rm -f " ++ outputBase ++ ".c'"
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
                 idris2Bin ++ " --codegen refc " ++
-                "--source-dir " ++ opts'.projectDir ++ "/src " ++
-                "--source-dir " ++ tempDir ++ " " ++
+                "--source-dir " ++ tempSrcDir ++ " " ++
                 pkgFlags ++ " " ++
                 "-o " ++ outputBase ++ " " ++
                 tempMainPath
+      let dumpcasesCmd = "cd " ++ opts'.projectDir ++ " && " ++
+                         idris2Bin ++ " --dumpcases " ++ tempDumpcasesPath ++ " " ++
+                         "--codegen refc " ++
+                         "--source-dir " ++ tempSrcDir ++ " " ++
+                         pkgFlags ++ " " ++
+                         "-o " ++ outputBase ++ " " ++
+                         tempMainPath ++ " 2>&1"
+      _ <- system $ "mkdir -p " ++ buildDir'
+      _ <- system $ "mkdir -p " ++ opts'.projectDir ++ "/build"
       _ <- executeCommand clearCmd
       (_, _, stderr) <- executeCommand cmd
+      _ <- executeCommand dumpcasesCmd
+      _ <- system $ "sh -c 'test -f " ++ tempDumpcasesPath ++
+                    " && cp " ++ tempDumpcasesPath ++ " " ++ projectDumpcasesPath ++
+                    " && cp " ++ tempDumpcasesPath ++ " " ++ legacyDumpcasesPath ++
+                    " || true'"
       Right _ <- readFile (outputBase ++ ".c")
         | Left _ => do
             let findCmd = "sh -c 'find " ++ buildDir' ++ " " ++ tempDir ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
