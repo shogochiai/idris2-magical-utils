@@ -1,54 +1,62 @@
 # idris2-dfx-coverage
 
-ICP Canister coverage analysis library for Idris2 CDK backend.
+ICP canister coverage analysis library for the Idris2 CDK backend.
 
-## Authoritative Coverage Pipeline (3-Stage Architecture)
+Current strongest profile:
+
+- branch-level semantic test obligation coverage on the materialized runtime denominator
+- function-level semantic test obligation coverage remains available as an advisory/static layer
+
+In practice this means:
+
+- the denominator is the set of branch obligations that actually materialize in the instrumented IC WASM runtime
+- the numerator is the set of runtime branch probe hits that map back to those same branch obligations
+- `claim_admissible=True` only when that branch-level runtime denominator/numerator pair is coherent
+
+This is the path consumed by `lazy dfx ask --steps=4`.
+
+## Authoritative Coverage Pipeline
 
 **This is the canonical design. Do not introduce shortcut parsers or bypass modules.**
 
 ```
-Stage 1: Denominator (What should be tested)
+Stage 1: Static semantic surface
 ┌──────────────────────────────────────────────────────┐
 │  DumpcasesParser                                      │
 │  idris2 --dumpcases → FuncCases                       │
-│  • Canonical branches = testable (denominator)        │
+│  • Canonical branches = reachable semantic obligations │
 │  • NonCanonical (Impossible) branches = excluded      │
-│  → Type-system-aware: only counts reachable branches  │
+│  → Type-system-aware: only counts reachable branches   │
 └──────────────────────────────────────────────────────┘
                         ↓
-Stage 2: SourceMap (WASM ↔ Idris2 name mapping)
+Stage 2: Runtime mapping surface
 ┌──────────────────────────────────────────────────────┐
 │  WasmMapper/NameSection + WasmMapper/WasmBranchParser │
+│  + SourceMap/BranchProbeMap                           │
 │  • NameSection: WASM func index → Idris2 QName        │
 │  • WasmBranchParser: br_if, br_table, if/else → branch points │
+│  • BranchProbeMap: probe index → function-local branch ordinal │
 │  → Bridges gap between entry-mode profiling and       │
-│    internal function coverage                         │
+│    internal branch coverage                           │
 └──────────────────────────────────────────────────────┘
                         ↓
-Stage 3: Numerator (What was actually executed)
+Stage 3: Runtime observation
 ┌──────────────────────────────────────────────────────┐
-│  IcWasm/ProfilingParser → WasmTraceEntry              │
-│  ic-wasm __get_profiling → func_id + cycles           │
+│  IcWasm/ProfilingParser + __get_branch_probes         │
+│  • ic-wasm __get_profiling → func_id + cycles         │
+│  • __get_branch_probes → branch probe hit indices     │
 │  → Parsed by ProfilingParser.parseProfilingOutput     │
 │  → Converted to WasmTraceEntry via toWasmTraces       │
 └──────────────────────────────────────────────────────┘
                         ↓
-            CodeCoverageAnalyzer.analyzeCodeCoverage
+            WasmCoverage.runWasmCoverageFromProfiling
 ┌──────────────────────────────────────────────────────┐
-│  Combines Stage 2 mapping + Stage 3 traces            │
-│  → Function coverage (covered/total/percent)          │
-│  → Branch coverage (fully/partially covered)          │
-│  → Module breakdown                                   │
-│  → Uncovered functions with Idris2 qualified names    │
-│  → CodeCoverageResult                                 │
-└──────────────────────────────────────────────────────┘
-                        ↓
-        Cross-Stage: High Impact Severity
-┌──────────────────────────────────────────────────────┐
-│  DumpcasesParser.getHighImpactTargetsWithCoverage    │
-│  Stage 1 (branches) × Stage 3 (executed count)       │
-│  → severity = branches / executed (Inf if 0)          │
-│  → HighImpactTarget sorted by severity descending     │
+│  Combines Stage 1 + 2 + 3                             │
+│  → Function-level measurement                         │
+│  → Materialized branch-level measurement              │
+│  → Branch-level admissibility on runtime denominator  │
+│  → High impact targets                                │
+│  → WasmCoverageResult                                 │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -60,7 +68,25 @@ The SourceMap (Stage 2) bridges this gap by mapping WASM function indices to
 Idris2 qualified names, so we know which Idris functions correspond to which
 WASM functions without needing full tracing support.
 
-### Consumer API (LazyDfx Ask.idr)
+For branch-level claims, the extra ingredient is branch probe instrumentation.
+`idris2-icwasm` now emits a probe map and `Idris2DfxCoverage` reads runtime
+probe hits back through `__get_branch_probes`. That is what makes the current
+branch-level runtime denominator/numerator pair possible.
+
+## Current Practical Result
+
+The current DFX path is no longer only a function-level fallback.
+
+On `TheWorld`, `lazy dfx ask --steps=4` now reaches:
+
+- `Materialized branches: 25`
+- `Branches hit: 25/25 (100%)`
+- `Claim admissible (runtime branch-level): True`
+
+This is intentionally stated on the materialized runtime denominator, not on a
+purely static canonical branch set.
+
+### Consumer API (`LazyDfx` Step 4)
 
 ```idris
 import DfxCoverage.IcWasm.ProfilingParser     -- parseProfilingOutput, toWasmTraces
@@ -81,9 +107,10 @@ Right ccResult <- analyzeCodeCoverage config wasmTraces
 
 `DfxCoverage.FunctionCoverage` was removed (2026-03-13). It was a broken
 shortcut parser that:
-- Split profiling output by `;` instead of `{`, causing 0 entries parsed
-- Used `isIdrisFunctionName` heuristic that passed C runtime functions
-- Duplicated types already properly defined in `CodeCoverageResult.idr`
+
+- split profiling output by `;` instead of `{`, causing 0 entries parsed
+- used `isIdrisFunctionName` heuristic that passed C runtime functions
+- duplicated types already properly defined in `CodeCoverageResult.idr`
 
 **Do not recreate it.** Use `CodeCoverageAnalyzer.analyzeCodeCoverage` instead.
 
@@ -105,12 +132,12 @@ shortcut parser that:
 - `ProfilingParser` の結果から直接カバレッジを計算する独自モジュールを作る → **NG** (`CodeCoverageAnalyzer.analyzeCodeCoverage` を使う)
 - WASM 関数名を取得するために新しいパーサーを書く → **NG** (`NameSection.buildMappingTableFromWasm` を使う)
 
-## High Impact Targets (Severity-Based Ranking)
+## High Impact Targets
 
 DumpcasesParser の `getHighImpactTargetsWithCoverage` は、dumpcases の型レベルブランチ分析と
 CodeCoverageAnalyzer のプロファイリングデータを突合して、最も改善効果の高い関数を特定する。
 
-### アルゴリズム
+### Severity heuristic
 
 ```
 severity = totalBranches / executedCount
@@ -138,7 +165,7 @@ FuncCases                          CodeCoverageResult
       .severity = 6.5
 ```
 
-### coverageLookup の構築 (Ask.idr)
+### `coverageLookup` construction
 
 `buildCoverageLookup` が `CodeCoverageResult.functionDetails` から
 Idris2 qualified name → hit count のマップを構築する。
@@ -168,7 +195,7 @@ High Impact Targets (by severity = branches/executed):
 
 ```
 src/DfxCoverage/
-├── Idris2Coverage.idr            # High-level API (dumpcases + profiling + mapping)
+├── Idris2Coverage.idr            # High-level API
 ├── CandidParser.idr              # Parse .did files
 ├── CanisterCall.idr              # Execute dfx canister calls
 ├── CoverageAnalyzer.idr          # Candid method coverage gap analysis
@@ -186,13 +213,38 @@ src/DfxCoverage/
 ├── WasmTrace/
 │   ├── TraceEntry.idr            # WasmTraceEntry, FuncHitCount, WasmBranchPoint (型定義のみ)
 │   └── TraceParser.idr           # wasmtime perf/JSON ファイル → List WasmTraceEntry
-├── CodeCoverage/                 # Integrated coverage (combines Stage 2 + 3)
+├── CodeCoverage/                 # Legacy integrated function coverage
 │   ├── CodeCoverageResult.idr    # Result types: CodeCoverageResult, FuncCoverageInfo, etc.
 │   └── CodeCoverageAnalyzer.idr  # Main entry: analyzeCodeCoverage
 └── Ic0Mock/
     ├── Ic0Stubs.idr              # IC0 system API stubs
     └── MockContext.idr            # Mock context for testing
 ```
+
+## Runtime Notes
+
+### Instrumentation cost
+
+Branch probes are runtime instrumentation. They increase execution cost and
+should be treated as coverage-build machinery, not production-build defaults.
+
+The intended split is:
+
+- production canister artifact: no branch probe instrumentation
+- coverage/staging artifact: branch probes enabled
+
+### Materialized denominator
+
+DFX does not currently claim branch coverage over every static branch emitted by
+dumpcases. It claims branch coverage over the subset that materializes in the
+instrumented runtime and can be mapped back to stable branch obligation IDs
+within the current backend.
+
+That is why the report distinguishes:
+
+- static semantic analysis
+- materialized branch measurement
+- `claim_admissible`
 
 ## ic-wasm Profiling
 

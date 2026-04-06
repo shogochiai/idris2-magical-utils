@@ -28,7 +28,7 @@ This repo currently has two major threads:
 | --- | --- |
 | `Idris2CoverageCore` | Shared coverage types, obligation maps, and classification helpers |
 | `Idris2Coverage` | Chez/native function-level semantic test obligation coverage |
-| `Idris2DfxCoverage` | IC WASM function-level semantic test obligation coverage |
+| `Idris2DfxCoverage` | IC WASM branch-aware runtime coverage with branch-level semantic claims on the materialized runtime denominator |
 | `Idris2EvmCoverage` | EVM branch-level semantic test obligation coverage |
 | `Idris2WebCoverage` | Web/runtime coverage adapters and semantic function-level runner |
 | `Idris2CoverageStandardization` | Draft standard, upstream requirements, and maintainer prep material |
@@ -41,7 +41,7 @@ The coverage packages do not all make the same strength of claim.
 | Backend | Strongest current profile |
 | --- | --- |
 | Chez / `Idris2Coverage` | function-level semantic test obligation coverage |
-| IC WASM / `Idris2DfxCoverage` | function-level semantic test obligation coverage |
+| IC WASM / `Idris2DfxCoverage` | branch-level semantic test obligation coverage on the materialized runtime denominator |
 | EVM / `Idris2EvmCoverage` | branch-level semantic test obligation coverage |
 | Web Idris runner | function-level semantic test obligation coverage |
 | Web JS CLI | runtime observation measurement |
@@ -103,11 +103,14 @@ export IDRIS2_PACKAGE_PATH=/path/to/installed/idris2/packages
 ```
 
 This is especially relevant for `Idris2EvmCoverage`, which is already prepared
-to consume structured case-tree export when upstream support lands.
+to consume structured case-tree export when upstream support lands. The same
+forked Idris2 support is now useful for `Idris2DfxCoverage`, whose strongest
+semantic path also prefers harness-local dumpcases over project-main fallback.
 
 ## Recommended Reading
 
 - [`pkgs/Idris2Coverage/README.md`](pkgs/Idris2Coverage/README.md)
+- [`pkgs/Idris2DfxCoverage/README.md`](pkgs/Idris2DfxCoverage/README.md)
 - [`pkgs/Idris2EvmCoverage/README.md`](pkgs/Idris2EvmCoverage/README.md)
 - [`pkgs/Idris2CoverageStandardization/README.md`](pkgs/Idris2CoverageStandardization/README.md)
 - [`pkgs/Idris2ExecutionStandardization/`](pkgs/Idris2ExecutionStandardization)
@@ -117,5 +120,6 @@ to consume structured case-tree export when upstream support lands.
 If you need the shortest accurate description of the current work:
 
 - coverage is obligation-aware and conservative
-- EVM is the most advanced branch-level backend
+- EVM and DFX now have practical branch-level runtime paths
+- DFX currently makes its strong claim on the materialized runtime denominator
 - upstream Idris2 structured export is still the main remaining external dependency

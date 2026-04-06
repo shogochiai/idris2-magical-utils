@@ -65,7 +65,7 @@ The repo now has concrete downstream implementations that consume this
 vocabulary:
 
 - `Idris2Coverage`: function-level semantic obligations on native/Chez
-- `Idris2DfxCoverage`: function-level semantic obligations on IC WASM
+- `Idris2DfxCoverage`: branch-level semantic obligations on the materialized IC WASM runtime denominator, with function-level static analysis retained as advisory context
 - `Idris2EvmCoverage`: branch-level semantic obligations on EVM
 - `Idris2WebCoverage`: semantic function-level runner plus weaker JS CLI measurement
 

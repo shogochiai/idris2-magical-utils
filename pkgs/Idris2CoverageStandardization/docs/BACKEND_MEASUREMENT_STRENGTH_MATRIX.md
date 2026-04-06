@@ -16,7 +16,7 @@ back to stable branch obligations.
 | Backend | Runtime observation | Current measurement layer | Strong claim today | Main remaining gap |
 |---|---|---|---|---|
 | Chez / `idris2-coverage` | Chez profiler function hits | Function-level semantic obligations | Function-level semantic test obligation coverage | Stable branch-level obligation IDs from Idris2 |
-| IC WASM / `idris2-dfx-coverage` | ic-wasm function IDs + cycles | Function-level semantic obligations | Function-level semantic test obligation coverage | More precise dumpcases classification and stronger provenance |
+| IC WASM / `idris2-dfx-coverage` | ic-wasm function IDs + cycles plus branch probe hit indices | Branch-level semantic obligations on the materialized runtime denominator | Branch-level semantic test obligation coverage on the materialized runtime denominator | Stronger upstream provenance and a cleaner relation between static canonical branches and runtime-materialized branches |
 | EVM / `idris2-evm-coverage` | Chez profiler hits plus dumpcases-derived branch sets | Branch-level semantic obligations | Conservative branch-level semantic test obligation coverage | Dumpcases parsing and runtime mapping are still downstream approximations, so provenance remains weaker than the desired upstream interface |
 | Web Idris runner / `LazyWeb` integration | V8 hits mapped through Idris-side static analysis | Function-level semantic obligations | Function-level semantic test obligation coverage | Stable obligation-aware source map for branch-level claims |
 | Web JS CLI / `idris2-web-cov` | Raw V8 function observations | Runtime function observation set | Runtime observation measurement only | No static semantic obligation mapping in the JS-only path |
@@ -51,6 +51,9 @@ Today the main gaps are:
 - `idris2-evm-coverage` now exposes shared `CoverageMeasurement` and claim
   admissibility, but its branch parser and runtime mapping are still
   downstream approximations rather than upstream provenance-backed identities.
+- `idris2-dfx-coverage` now has a practical branch-level runtime path, but the
+  strongest claim is still scoped to the materialized runtime denominator
+  rather than the full static canonical branch set.
 - The Web JS CLI shares the report schema but not yet the semantic static
   obligation model used by the Idris-side runner.
 - Branch-level claims remain downstream approximations until Idris2 exposes
