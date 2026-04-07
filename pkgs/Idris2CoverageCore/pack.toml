@@ -1,0 +1,7 @@
+[custom.all.idris2-coverage-standardization]
+type = "local"
+path = "../Idris2CoverageStandardization"
+ipkg = "idris2-coverage-standardization.ipkg"
+
+[install]
+libs = ["idris2-coverage-standardization", "idris2-coverage-core"]

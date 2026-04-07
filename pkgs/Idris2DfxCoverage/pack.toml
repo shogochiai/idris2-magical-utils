@@ -14,4 +14,4 @@ path = "."
 ipkg = "idris2-dfx-coverage.ipkg"
 
 [install]
-libs = ["idris2-dfx-coverage"]
+libs = ["idris2-coverage-core", "idris2-icwasm", "idris2-dfx-coverage"]

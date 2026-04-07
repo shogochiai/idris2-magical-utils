@@ -6,6 +6,7 @@ import Coverage.Types
 import public Coverage.Collector
 import public Coverage.DumpcasesParser
 import public Coverage.Core.RuntimeHit
+import public Coverage.Core.PathCoverage
 import System
 import System.Clock
 import System.File
