@@ -422,6 +422,12 @@ toStaticBranchAnalysis funcs =
       canonCount = countByClass BCCanonical allBranches
   in MkStaticBranchAnalysis analyses allBranches canonCount
 
+||| Backward-compatible entry point expected by older lazy code.
+||| Parses dumpcases content and lifts it into shared static branch analysis.
+export
+parseStaticBranchAnalysis : String -> StaticBranchAnalysis
+parseStaticBranchAnalysis = toStaticBranchAnalysis . parseDumpcases
+
 -- =============================================================================
 -- DFX-Specific Dumpcases Execution (RefC backend)
 -- =============================================================================
