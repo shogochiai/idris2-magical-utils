@@ -46,6 +46,15 @@ installedIdrisPrelude =
 trimLog : String -> String
 trimLog = trim
 
+toAbsolutePath : String -> IO String
+toAbsolutePath path =
+  if isPrefixOf "/" path
+     then pure path
+     else do
+       Just cwd <- currentDir
+         | Nothing => pure path
+       pure (cwd ++ "/" ++ path)
+
 removeFileIfExistsSafe : String -> IO ()
 removeFileIfExistsSafe path = do
   _ <- removeFile path
@@ -66,20 +75,21 @@ buildPrelude idris2Override =
 buildIpkgWithClean : Bool -> String -> String -> IO (Either String ())
 buildIpkgWithClean cleanFirst projectDir ipkgName = do
   idris2Override <- getEnv "IDRIS2_BIN"
-  let directLog = projectDir ++ "/.idris2-coverage-build-direct.log"
-  let packLog = projectDir ++ "/.idris2-coverage-build-pack.log"
+  absProjectDir <- toAbsolutePath projectDir
+  let directLog = absProjectDir ++ "/.idris2-coverage-build-direct.log"
+  let packLog = absProjectDir ++ "/.idris2-coverage-build-pack.log"
   removeFileIfExistsSafe directLog
   removeFileIfExistsSafe packLog
 
   let appPrelude = buildPrelude idris2Override
   when cleanFirst $
     do let cleanCmd = appPrelude
-                   ++ " && cd " ++ projectDir
+                   ++ " && cd " ++ absProjectDir
                    ++ " && \"$APP\" --clean " ++ ipkgName ++ " > /dev/null 2>&1"
        _ <- system cleanCmd
        pure ()
   let directCmd = appPrelude
-               ++ " && cd " ++ projectDir
+               ++ " && cd " ++ absProjectDir
                ++ " && \"$APP\" --build " ++ ipkgName ++ " > " ++ directLog ++ " 2>&1"
   directExit <- system directCmd
   if directExit == 0
@@ -95,7 +105,7 @@ buildIpkgWithClean cleanFirst projectDir ipkgName = do
                                       trimLog directMsg
            pure $ Left $ "direct idris2 build failed: " ++ directSummary
          Nothing => do
-           let packCmd = "cd " ++ projectDir ++ " && pack build " ++ ipkgName ++ " > " ++ packLog ++ " 2>&1"
+           let packCmd = "cd " ++ absProjectDir ++ " && pack build " ++ ipkgName ++ " > " ++ packLog ++ " 2>&1"
            packExit <- system packCmd
            if packExit == 0
               then do
