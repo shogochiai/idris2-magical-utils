@@ -1,39 +1,27 @@
 # idris2-coverage
 
-A pragmatic, proof-aware test coverage tool for Idris2.
+A path-first, proof-aware coverage tool for Idris2.
 
 [![CI](https://github.com/shogochiai/idris2-coverage/actions/workflows/ci.yml/badge.svg)](https://github.com/shogochiai/idris2-coverage/actions/workflows/ci.yml)
 [![Idris2](https://img.shields.io/badge/Idris2-0.7.0+-blue)]()
 
 ## What is this?
 
-A coverage tool that interprets Idris2 compiler output conservatively in the
-presence of dependent types.
+`idris2-cov` is now a path-first tool.
 
-Current positioning:
-
-- profile: function-level semantic test obligation coverage
-- profile: path-level semantic test obligation coverage is also available via
-  `idris2-cov paths`
-- implementation style: downstream and proof-aware
+- primary profile: path obligations from `--dumppaths-json`
+- primary runtime evidence: path-id hits from `--dumppathshits`
 - strong claim policy: only when `claim_admissible = true`
-- common measurement schema: aligned with `Idris2CoverageCore` and
-  `Idris2CoverageStandardization`
+- implementation style: downstream and proof-aware
 
-This tool may emit a numeric coverage measurement even when compiler provenance
-is incomplete, but it does not treat every measurement as a strong semantic
-coverage claim.
+If you are integrating coverage into another tool, start from:
 
-```bash
-$ idris2-cov myproject/
-Coverage: 847/901 (94%)
-Profile: function-level semantic test obligation coverage
-Claim admissible: true
+- `Coverage.PathCoverage`
+- `Coverage.UnifiedRunner.runTestsWithPathCoverageArtifacts`
+- `idris2-cov [options] <dir-or-ipkg>`
 
-Excluded (unreachable):
-  - void/absurd patterns: 45
-  - optimizer artifacts: 12
-```
+Legacy `dumpcases` / function-hit APIs still exist in the repo for migration,
+but they are no longer the recommended entrypoint.
 
 ## Quick Start
 
@@ -47,22 +35,20 @@ idris2 --build idris2-coverage.ipkg
 # Or with an ipkg file
 ./build/exec/idris2-cov myproject.ipkg
 
-# Show only uncovered functions
-./build/exec/idris2-cov --uncovered path/to/project/
-
 # JSON output for CI
 ./build/exec/idris2-cov --json path/to/project/
 
 # Path coverage from dumppaths-json + runtime hits
-./build/exec/idris2-cov paths --dumppaths-json path/to/dumppaths.json --path-hits path/to/path-hits.txt
+./build/exec/idris2-cov --dumppaths-json path/to/dumppaths.json --path-hits path/to/path-hits.txt
 
 # Path coverage by asking a forked compiler to emit dumppaths-json on demand
-IDRIS2_BIN=/path/to/forked/idris2 ./build/exec/idris2-cov paths myproject.ipkg
+IDRIS2_BIN=/path/to/forked/idris2 ./build/exec/idris2-cov myproject.ipkg
 ```
 
 ## Path Coverage
 
-`idris2-cov paths` is the current entrypoint for missing-path analysis.
+`idris2-cov` itself is now the current entrypoint for missing-path analysis.
+The `paths` subcommand remains accepted as a no-op alias.
 
 It consumes the same semantic vocabulary used elsewhere in the repo:
 
@@ -82,22 +68,32 @@ EtherClaw HardHarness integration.
 
 ## Key Features
 
+- **Path-first**: Reports exact missing path obligations rather than only function summaries
 - **Proof-aware**: Separates reachable obligations, logical unreachability, partial gaps, artifacts, and unknowns
 - **Admissibility-aware**: Distinguishes a numeric measurement from a strong semantic claim
-- **CRASH classification**: Distinguishes multiple compiler/runtime artifact sources instead of treating all `CRASH` nodes alike
 - **CI-friendly**: Exit codes and JSON output for automation
-- **Zero compiler changes**: Works with vanilla Idris2
+- **Fork-aware**: Uses a forked Idris2 when `IDRIS2_BIN` exposes `--dumppaths-json`
+
+## Legacy APIs
+
+The following modules are legacy migration surfaces and should not be used for
+new integrations unless you intentionally want dumpcases/function-hit behavior:
+
+- `Coverage.DumpcasesParser`
+- `Coverage.TestCoverage`
+- `runTestsWithFunctionHits`
+- `runTestsWithTestCoverage`
 
 ## Relation To The Draft Standard
 
 This tool is intended to implement the draft standard defined in
-`idris2-coverage-standardization`, but current Idris2 compiler interfaces are
-not yet sufficient for a fully upstream-backed branch-level standard.
+`idris2-coverage-standardization`, with path obligations as the preferred
+runtime-facing profile.
 
 Accordingly, the current implementation should be described as:
 
 - a conservative downstream implementation
-- of the function-level profile
+- of the path-obligation profile
 - with explicit unknown handling
 - and explicit `claim_admissible` reporting
 
@@ -125,35 +121,26 @@ That keeps the observed numerator and the tested obligation layer explicit.
 
 ## How It Works
 
-```
-idris2 --dumpcases  →  Parse case trees  →  Classify branches
-                                                    ↓
-                              Obligation classification + admissibility
-                                                    ↓
-Chez Scheme profiler  →  Runtime hits  →  Coverage measurement + claim status
-```
-
-The strong claim boundary is function-level because that is the layer where the
-current native runtime observations can be mapped back conservatively.
-
-For path coverage, the tool uses a stricter export/runtime pair:
+The primary path-coverage flow is:
 
 ```
 idris2 --dumppaths-json  →  canonical path obligations
 runtime path hits        →  covered_ids on the same path_id layer
 ```
 
-The result is a missing-path list rather than only a per-function summary.
+The result is a missing-path list over the same path-id layer.
+
+Legacy dumpcases/function-hit analysis remains in the repo only for migration.
 
 ## What To Cite
 
 If you need a concept name in a paper, note, or issue, prefer:
 
-- `semantic test obligation coverage`
+- `path test obligation coverage`
 
 If you need implementation status, say:
 
-- `idris2-coverage currently implements the function-level profile conservatively`
+- `idris2-coverage currently implements the path-obligation profile conservatively`
 
 ## Exit Codes
 
@@ -170,7 +157,7 @@ If you need implementation status, say:
 
 Optional:
 
-- forked Idris2 with structured dumpcases JSON export via `IDRIS2_BIN`
+- forked Idris2 with `--dumppaths-json` / `--dumppathshits` via `IDRIS2_BIN`
 
 ## Related Projects
 
