@@ -132,29 +132,37 @@ run_idris_build() {
     local log_file="$BUILD_DIR/idris-refc.log"
     local status=0
 
+    mkdir -p "$BUILD_DIR"
+    : >"$log_file" || {
+        echo "Failed to create RefC build log: $log_file" >&2
+        return 1
+    }
+
     set +e
     if [ -n "$BUILD_FN" ] && declare -f "$BUILD_FN" >/dev/null 2>&1; then
-        "$BUILD_FN" >"$log_file" 2>&1
-        status=$?
+        "$BUILD_FN" 2>&1 | tee "$log_file"
+        status=${PIPESTATUS[0]}
     else
-        echo "Step 2: Generating C with RefC codegen..."
+        echo "Step 2: Generating C with RefC codegen..." | tee -a "$log_file"
         cd "$SOURCE_DIR"
-        CPATH="$MINI_GMP${CPATH:+:$CPATH}" idris2 --codegen refc --build-dir "$BUILD_DIR" -o "$DEFAULT_OUTPUT_NAME" Main.idr >"$log_file" 2>&1
-        status=$?
+        CPATH="$MINI_GMP${CPATH:+:$CPATH}" idris2 --codegen refc --build-dir "$BUILD_DIR" -o "$DEFAULT_OUTPUT_NAME" Main.idr 2>&1 | tee -a "$log_file"
+        status=${PIPESTATUS[0]}
     fi
     set -e
 
     if [ $status -ne 0 ]; then
         if find_generated_c_file_quiet; then
             echo "RefC native link failed; continuing with generated C: $C_FILE"
-            tail -n 20 "$log_file"
+            [ -s "$log_file" ] && tail -n 20 "$log_file"
             return 0
         fi
-        cat "$log_file"
+        if [ -s "$log_file" ]; then
+            echo "RefC backend failed; see log above and $log_file"
+        else
+            echo "RefC backend failed and produced no log output" >&2
+        fi
         return $status
     fi
-
-    cat "$log_file"
 }
 
 find_generated_c_file() {
