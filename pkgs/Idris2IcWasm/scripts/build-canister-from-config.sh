@@ -49,117 +49,247 @@ declare -a EXTRA_INCLUDE_DIRS=()
 declare -a EXTRA_EMCC_FLAGS=()
 
 load_config() {
-    eval "$(
-        python3 - "$CONFIG_PATH" <<'PY'
-import os
-import shlex
-import sys
+    trim() {
+        local s="$1"
+        s="${s#"${s%%[![:space:]]*}"}"
+        s="${s%"${s##*[![:space:]]}"}"
+        printf '%s' "$s"
+    }
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
+    strip_quotes() {
+        local s
+        s="$(trim "$1")"
+        if [[ "$s" == \"*\" && "$s" == *\" ]]; then
+            s="${s#\"}"
+            s="${s%\"}"
+        elif [[ "$s" == \'*\' && "$s" == *\' ]]; then
+            s="${s#\'}"
+            s="${s%\'}"
+        fi
+        printf '%s' "$s"
+    }
 
-config_path = os.path.abspath(sys.argv[1])
-config_dir = os.path.dirname(config_path)
+    abs_dirname() {
+        local path="$1"
+        (cd "$(dirname "$path")" && pwd)
+    }
 
-with open(config_path, "rb") as f:
-    data = tomllib.load(f)
+    normalize_path() {
+        local input="$1"
+        local absolute=0
+        local -a parts
+        local -a out
+        local part
 
-def q(value):
-    return shlex.quote(str(value))
+        [[ "$input" == /* ]] && absolute=1
+        IFS='/' read -r -a parts <<< "$input"
+        out=()
+        for part in "${parts[@]}"; do
+            case "$part" in
+                ""|".")
+                    continue
+                    ;;
+                "..")
+                    if [[ ${#out[@]} -gt 0 ]]; then
+                        unset 'out[${#out[@]}-1]'
+                    fi
+                    ;;
+                *)
+                    out+=("$part")
+                    ;;
+            esac
+        done
 
-def emit_scalar(name, value):
-    if value is None:
-        return
-    print(f"{name}={q(value)}")
+        local joined=""
+        if [[ ${#out[@]} -gt 0 ]]; then
+            local IFS='/'
+            joined="${out[*]}"
+        fi
 
-def emit_bool(name, value):
-    print(f"{name}={'1' if value else '0'}")
+        if [[ $absolute -eq 1 ]]; then
+            if [[ -n "$joined" ]]; then
+                printf '/%s' "$joined"
+            else
+                printf '/'
+            fi
+        else
+            printf '%s' "$joined"
+        fi
+    }
 
-def emit_array(name, values):
-    quoted = " ".join(q(v) for v in values)
-    print(f"{name}=({quoted})")
+    resolve_path() {
+        local value="$1"
+        if [[ -z "$value" ]]; then
+            printf '%s' ""
+        elif [[ "$value" = /* ]]; then
+            normalize_path "$value"
+        else
+            normalize_path "$CONFIG_DIR/$value"
+        fi
+    }
 
-def path(value):
-    if value in (None, ""):
-        return ""
-    if os.path.isabs(value):
-        return os.path.normpath(value)
-    return os.path.normpath(os.path.join(config_dir, value))
+    toml_get_raw() {
+        local section="$1"
+        local key="$2"
+        awk -v section="$section" -v key="$key" '
+            function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+            /^[ \t]*#/ { next }
+            /^[ \t]*$/ { next }
+            match($0, /^[ \t]*\[[^]]+\][ \t]*$/) {
+                current = substr(trim($0), 2, length(trim($0)) - 2)
+                next
+            }
+            current == section {
+                if (!capturing && $0 ~ ("^[ \t]*" key "[ \t]*=")) {
+                    line = $0
+                    sub("^[ \t]*" key "[ \t]*=[ \t]*", "", line)
+                    print line
+                    if (line ~ /^\[/ && line !~ /\]/) capturing = 1
+                    else exit
+                    next
+                }
+                if (capturing) {
+                    print $0
+                    if ($0 ~ /\]/) exit
+                }
+            }
+        ' "$CONFIG_PATH"
+    }
 
-def paths(values):
-    return [path(v) for v in values]
+    toml_get_string() {
+        local raw
+        raw="$(toml_get_raw "$1" "$2" | head -n 1)"
+        strip_quotes "$raw"
+    }
 
-paths_cfg = data.get("paths", {})
-build_cfg = data.get("build", {})
-gen_cfg = data.get("gen_entry", {})
-preflight_cfg = data.get("preflight", {})
-pre_link_cfg = data.get("pre_link", {})
-ffi_cfg = data.get("ffi", {})
-link_cfg = data.get("link", {})
-wasi_cfg = data.get("wasi", {})
+    toml_get_bool() {
+        local raw
+        raw="$(trim "$(toml_get_raw "$1" "$2" | head -n 1)")"
+        if [[ "$raw" == "true" ]]; then
+            printf '1'
+        else
+            printf '0'
+        fi
+    }
 
-project_dir = path(paths_cfg.get("project_dir", "."))
-workdir = path(build_cfg.get("workdir", project_dir))
-build_dir = path(build_cfg.get("build_dir", os.path.join(project_dir, "build")))
-ic0_support = path(paths_cfg.get("ic0_support", os.path.join(project_dir, "support", "ic0")))
-icwasm_support = path(paths_cfg.get("icwasm_support", ic0_support))
-local_idris2_icwasm = path(paths_cfg.get("local_idris2_icwasm", os.environ.get("IDRIS2_ICWASM_BINARY", "")))
+    toml_get_array() {
+        local raw
+        raw="$(toml_get_raw "$1" "$2")"
+        if [[ -z "$raw" ]]; then
+            return 0
+        fi
+        printf '%s\n' "$raw" \
+          | grep -oE "\"[^\"]*\"|'[^']*'" \
+          | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+    }
 
-emit_scalar("PROJECT_DIR", project_dir)
-emit_scalar("WORKDIR", workdir)
-emit_scalar("BUILD_DIR", build_dir)
-emit_scalar("IC0_SUPPORT", ic0_support)
-emit_scalar("ICWASM_SUPPORT", icwasm_support)
-emit_scalar("LOCAL_IDRIS2_ICWASM", local_idris2_icwasm)
-emit_scalar("BUILD_LABEL", build_cfg.get("label", os.path.basename(project_dir)))
-emit_scalar("DEFAULT_OUTPUT_NAME", build_cfg.get("output_name", "canister"))
-emit_scalar("BUILD_COMMAND", build_cfg.get("command", ""))
-emit_scalar("C_FILE_EXPECTED", path(build_cfg.get("c_file_expected", "")))
-emit_scalar("C_FILE_PATTERN", build_cfg.get("c_file_pattern", "*.c"))
-emit_array("C_FILE_FIND_DIRS", paths(build_cfg.get("c_file_find_dirs", [build_dir])))
+    load_array_var() {
+        local var_name="$1"
+        local section="$2"
+        local key="$3"
+        local line
+        eval "$var_name=()"
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            eval "$var_name+=(\"\$line\")"
+        done < <(toml_get_array "$section" "$key")
+    }
 
-gen_enabled = gen_cfg.get("enabled", False)
-emit_bool("GEN_ENTRY_ENABLED", gen_enabled)
-if gen_enabled:
-    gen_args = [
-        f"--did={path(gen_cfg['did'])}",
-        f"--prefix={gen_cfg['prefix']}",
-    ]
-    if "lib" in gen_cfg:
-        gen_args.append(f"--lib={gen_cfg['lib']}")
-    if "init" in gen_cfg and gen_cfg["init"]:
-        gen_args.append(f"--init={gen_cfg['init']}")
-    if "cmd_map" in gen_cfg and gen_cfg["cmd_map"]:
-        gen_args.append(f"--cmd-map={path(gen_cfg['cmd_map'])}")
-    if "timer_cmd" in gen_cfg and gen_cfg["timer_cmd"] is not None:
-        gen_args.append(f"--timer-cmd={gen_cfg['timer_cmd']}")
-    if "heartbeat_checkpoint" in gen_cfg and gen_cfg["heartbeat_checkpoint"] is not None:
-        gen_args.append(f"--heartbeat-checkpoint={gen_cfg['heartbeat_checkpoint']}")
-    if "heartbeat_cmd" in gen_cfg and gen_cfg["heartbeat_cmd"] is not None:
-        gen_args.append(f"--heartbeat-cmd={gen_cfg['heartbeat_cmd']}")
-    if gen_cfg.get("sql_stable", False):
-        gen_args.append("--sql-stable")
-    out_path = path(gen_cfg.get("out", os.path.join(ic0_support, "canister_entry.c")))
-    gen_args.append(f"--out={out_path}")
-    emit_array("GEN_ENTRY_ARGS", gen_args)
-    emit_scalar("DEFAULT_CANISTER_ENTRY", out_path)
-else:
-    emit_array("GEN_ENTRY_ARGS", [])
-    emit_scalar("DEFAULT_CANISTER_ENTRY", path(gen_cfg.get("out", os.path.join(ic0_support, "canister_entry.c"))))
+    CONFIG_PATH="$(cd "$(dirname "$CONFIG_PATH")" && pwd)/$(basename "$CONFIG_PATH")"
+    CONFIG_DIR="$(abs_dirname "$CONFIG_PATH")"
 
-emit_array("PREFLIGHT_COMMANDS", preflight_cfg.get("commands", []))
-emit_array("PRE_LINK_COMMANDS", pre_link_cfg.get("commands", []))
-emit_array("FFI_HEADERS", ffi_cfg.get("headers", []))
-emit_array("EXTRA_FORCE_INCLUDES", paths(ffi_cfg.get("force_includes", [])))
-emit_array("EXTRA_C_FILES", paths(link_cfg.get("extra_c_files", [])))
-emit_array("EXTRA_INCLUDE_DIRS", paths(link_cfg.get("extra_include_dirs", [])))
-emit_array("EXTRA_EMCC_FLAGS", [str(v) for v in link_cfg.get("extra_emcc_flags", [])])
-emit_bool("ENABLE_WASI_STUB", wasi_cfg.get("stub", False))
-emit_scalar("STUB_WASI_SCRIPT", path(wasi_cfg.get("stub_script", "")))
-PY
-    )"
+    local project_dir_raw ic0_support_raw icwasm_support_raw local_icwasm_raw
+    local workdir_raw build_dir_raw build_label output_name build_command
+    local c_file_expected_raw c_file_pattern gen_enabled did_raw prefix lib init cmd_map_raw
+    local timer_cmd heartbeat_checkpoint heartbeat_cmd sql_stable out_raw stub_wasi stub_script_raw
+
+    project_dir_raw="$(toml_get_string "paths" "project_dir")"
+    ic0_support_raw="$(toml_get_string "paths" "ic0_support")"
+    icwasm_support_raw="$(toml_get_string "paths" "icwasm_support")"
+    local_icwasm_raw="$(toml_get_string "paths" "local_idris2_icwasm")"
+
+    PROJECT_DIR="$(resolve_path "${project_dir_raw:-.}")"
+    IC0_SUPPORT="$(resolve_path "${ic0_support_raw:-$PROJECT_DIR/support/ic0}")"
+    ICWASM_SUPPORT="$(resolve_path "${icwasm_support_raw:-$IC0_SUPPORT}")"
+    LOCAL_IDRIS2_ICWASM="$(resolve_path "${local_icwasm_raw:-${IDRIS2_ICWASM_BINARY:-}}")"
+
+    build_label="$(toml_get_string "build" "label")"
+    workdir_raw="$(toml_get_string "build" "workdir")"
+    build_dir_raw="$(toml_get_string "build" "build_dir")"
+    output_name="$(toml_get_string "build" "output_name")"
+    build_command="$(toml_get_string "build" "command")"
+    c_file_expected_raw="$(toml_get_string "build" "c_file_expected")"
+    c_file_pattern="$(toml_get_string "build" "c_file_pattern")"
+
+    BUILD_LABEL="${build_label:-$(basename "$PROJECT_DIR")}"
+    WORKDIR="$(resolve_path "${workdir_raw:-$PROJECT_DIR}")"
+    BUILD_DIR="$(resolve_path "${build_dir_raw:-$PROJECT_DIR/build}")"
+    DEFAULT_OUTPUT_NAME="${output_name:-canister}"
+    BUILD_COMMAND="${build_command:-}"
+    C_FILE_EXPECTED="$(resolve_path "${c_file_expected_raw:-}")"
+    C_FILE_PATTERN="${c_file_pattern:-*.c}"
+
+    load_array_var C_FILE_FIND_DIRS "build" "c_file_find_dirs"
+    if [[ ${#C_FILE_FIND_DIRS[@]} -eq 0 ]]; then
+        C_FILE_FIND_DIRS=("$BUILD_DIR")
+    else
+        local i
+        for i in "${!C_FILE_FIND_DIRS[@]}"; do
+            C_FILE_FIND_DIRS[$i]="$(resolve_path "${C_FILE_FIND_DIRS[$i]}")"
+        done
+    fi
+
+    gen_enabled="$(toml_get_bool "gen_entry" "enabled")"
+    did_raw="$(toml_get_string "gen_entry" "did")"
+    prefix="$(toml_get_string "gen_entry" "prefix")"
+    lib="$(toml_get_string "gen_entry" "lib")"
+    init="$(toml_get_string "gen_entry" "init")"
+    cmd_map_raw="$(toml_get_string "gen_entry" "cmd_map")"
+    timer_cmd="$(toml_get_string "gen_entry" "timer_cmd")"
+    heartbeat_checkpoint="$(toml_get_string "gen_entry" "heartbeat_checkpoint")"
+    heartbeat_cmd="$(toml_get_string "gen_entry" "heartbeat_cmd")"
+    sql_stable="$(toml_get_bool "gen_entry" "sql_stable")"
+    out_raw="$(toml_get_string "gen_entry" "out")"
+
+    DEFAULT_CANISTER_ENTRY="$(resolve_path "${out_raw:-$IC0_SUPPORT/canister_entry.c}")"
+    GEN_ENTRY_ENABLED="$gen_enabled"
+    GEN_ENTRY_ARGS=()
+    if [[ "$GEN_ENTRY_ENABLED" == "1" ]]; then
+        GEN_ENTRY_ARGS+=("--did=$(resolve_path "$did_raw")")
+        GEN_ENTRY_ARGS+=("--prefix=$prefix")
+        [[ -n "$lib" ]] && GEN_ENTRY_ARGS+=("--lib=$lib")
+        [[ -n "$init" ]] && GEN_ENTRY_ARGS+=("--init=$init")
+        [[ -n "$cmd_map_raw" ]] && GEN_ENTRY_ARGS+=("--cmd-map=$(resolve_path "$cmd_map_raw")")
+        [[ -n "$timer_cmd" ]] && GEN_ENTRY_ARGS+=("--timer-cmd=$timer_cmd")
+        [[ -n "$heartbeat_checkpoint" ]] && GEN_ENTRY_ARGS+=("--heartbeat-checkpoint=$heartbeat_checkpoint")
+        [[ -n "$heartbeat_cmd" ]] && GEN_ENTRY_ARGS+=("--heartbeat-cmd=$heartbeat_cmd")
+        [[ "$sql_stable" == "1" ]] && GEN_ENTRY_ARGS+=("--sql-stable")
+        GEN_ENTRY_ARGS+=("--out=$DEFAULT_CANISTER_ENTRY")
+    fi
+
+    load_array_var PREFLIGHT_COMMANDS "preflight" "commands"
+    load_array_var PRE_LINK_COMMANDS "pre_link" "commands"
+    load_array_var FFI_HEADERS "ffi" "headers"
+    load_array_var EXTRA_FORCE_INCLUDES "ffi" "force_includes"
+    load_array_var EXTRA_C_FILES "link" "extra_c_files"
+    load_array_var EXTRA_INCLUDE_DIRS "link" "extra_include_dirs"
+    load_array_var EXTRA_EMCC_FLAGS "link" "extra_emcc_flags"
+
+    local i
+    for i in "${!EXTRA_FORCE_INCLUDES[@]}"; do
+        EXTRA_FORCE_INCLUDES[$i]="$(resolve_path "${EXTRA_FORCE_INCLUDES[$i]}")"
+    done
+    for i in "${!EXTRA_C_FILES[@]}"; do
+        EXTRA_C_FILES[$i]="$(resolve_path "${EXTRA_C_FILES[$i]}")"
+    done
+    for i in "${!EXTRA_INCLUDE_DIRS[@]}"; do
+        EXTRA_INCLUDE_DIRS[$i]="$(resolve_path "${EXTRA_INCLUDE_DIRS[$i]}")"
+    done
+
+    stub_wasi="$(toml_get_bool "wasi" "stub")"
+    stub_script_raw="$(toml_get_string "wasi" "stub_script")"
+    ENABLE_WASI_STUB="$stub_wasi"
+    STUB_WASI_SCRIPT="$(resolve_path "${stub_script_raw:-}")"
 }
 
 run_shell_command_in_workdir() {
