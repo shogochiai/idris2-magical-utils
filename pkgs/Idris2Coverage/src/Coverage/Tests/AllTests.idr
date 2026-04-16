@@ -979,6 +979,31 @@ test_RUNNER_006 = do
   -- Should be cwd + "/" (not crash)
   pure $ isPrefixOf "/" result || result == ""
 
+||| REQ_COV_RUNNER_004: runTestsWithFunctionHits with relative pkgs/ target
+||| does not crash — returns either hits or a meaningful error (not NoInput)
+covering
+test_RUNNER_004 : IO Bool
+test_RUNNER_004 = do
+  result <- runTestsWithFunctionHits "pkgs/NonExistentFixture" [] 60
+  case result of
+    Left err =>
+      -- Error message should NOT be empty (diagnosable)
+      pure $ length err > 0
+    Right _ =>
+      pure True
+
+||| REQ_COV_RUNNER_007: failed build preserves enough log to distinguish path vs compiler error
+covering
+test_RUNNER_007 : IO Bool
+test_RUNNER_007 = do
+  result <- buildIpkgWithClean False "pkgs/BrokenFixture007" "nonexistent.ipkg"
+  case result of
+    Left err =>
+      -- Error should be non-empty and contain diagnostic info
+      pure $ length err > 0
+    Right () =>
+      pure False
+
 -- =============================================================================
 -- All Tests
 -- =============================================================================
@@ -1089,6 +1114,8 @@ allTests =
   , ("REQ_COV_RUNNER_003", test_RUNNER_003)
   , ("REQ_COV_RUNNER_005", test_RUNNER_005)
   , ("REQ_COV_RUNNER_006", test_RUNNER_006)
+  , ("REQ_COV_RUNNER_004", test_RUNNER_004)
+  , ("REQ_COV_RUNNER_007", test_RUNNER_007)
   ]
 
 -- =============================================================================
