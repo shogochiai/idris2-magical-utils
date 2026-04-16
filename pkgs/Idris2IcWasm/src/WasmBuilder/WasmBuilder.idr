@@ -136,12 +136,15 @@ detectTestHarnessStyle content =
         then TupleHarness
      else ExistingHarness
 
-generateTestHarnessShimContent : TestHarnessStyle -> String -> String
-generateTestHarnessShimContent ExistingHarness testModuleName =
-  unlines
+generateTestHarnessShimContent : TestHarnessStyle -> String -> String -> String
+generateTestHarnessShimContent ExistingHarness testModuleName testContent =
+  let hideMain = if isInfixOf "main :" testContent || isInfixOf "main:" testContent
+                   then "%hide TestModule.main"
+                   else "-- no main to hide"
+  in unlines
     [ "module TestHarness"
     , "import " ++ testModuleName ++ " as TestModule"
-    , "%hide TestModule.main"
+    , hideMain
     , ""
     , "export"
     , "allTestsGeneric : List (String, IO Bool)"
@@ -159,12 +162,15 @@ generateTestHarnessShimContent ExistingHarness testModuleName =
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = TestModule.runTrivialTest"
     ]
-generateTestHarnessShimContent TupleHarness testModuleName =
-  unlines
+generateTestHarnessShimContent TupleHarness testModuleName testContent =
+  let hideMain = if isInfixOf "main :" testContent || isInfixOf "main:" testContent
+                   then "%hide TestModule.main"
+                   else "-- no main to hide"
+  in unlines
     [ "module TestHarness"
     , "import " ++ testModuleName ++ " as TestModule"
     , "import Data.List"
-    , "%hide TestModule.main"
+    , hideMain
     , ""
     , "%default covering"
     , ""
@@ -193,12 +199,15 @@ generateTestHarnessShimContent TupleHarness testModuleName =
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
     ]
-generateTestHarnessShimContent RecordHarness testModuleName =
-  unlines
+generateTestHarnessShimContent RecordHarness testModuleName testContent =
+  let hideMain = if isInfixOf "main :" testContent || isInfixOf "main:" testContent
+                   then "%hide TestModule.main"
+                   else "-- no main to hide"
+  in unlines
     [ "module TestHarness"
     , "import " ++ testModuleName ++ " as TestModule"
     , "import Data.List"
-    , "%hide TestModule.main"
+    , hideMain
     , ""
     , "%default covering"
     , ""
@@ -227,11 +236,14 @@ generateTestHarnessShimContent RecordHarness testModuleName =
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
     ]
-generateTestHarnessShimContent PureSummaryHarness testModuleName =
-  unlines
+generateTestHarnessShimContent PureSummaryHarness testModuleName testContent =
+  let hideMain = if isInfixOf "main :" testContent || isInfixOf "main:" testContent
+                   then "%hide TestModule.main"
+                   else "-- no main to hide"
+  in unlines
     [ "module TestHarness"
     , "import " ++ testModuleName ++ " as TestModule"
-    , "%hide TestModule.main"
+    , hideMain
     , ""
     , "%default covering"
     , ""
@@ -672,7 +684,7 @@ setupTestBuild projectDir originalIpkg customTestPath = do
   -- Write generated Main.idr to temp (not a symlink, actual generated file)
   let tempHarnessPath = tempSrcDir ++ "/TestHarness.idr"
   let tempMainPath = tempSrcDir ++ "/Main.idr"
-  Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName)
+  Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName testModuleContent)
     | Left err => pure (Left $ "Failed to write temp TestHarness: " ++ show err)
   Right () <- writeFile tempMainPath generateTestMainContent
     | Left err => pure (Left $ "Failed to write temp Main: " ++ show err)
@@ -858,7 +870,7 @@ compileToRefC opts buildDir = do
       _ <- traverse_ (\item => system $ "ln -sf " ++ absProjectDir ++ "/src/" ++ item ++ " " ++ tempSrcDir ++ "/" ++ item) srcItems
       putStrLn $ "        Direct RefC test compile via temp sources: " ++ tempDir
       putStrLn $ "        Direct RefC packages: " ++ show opts'.packages
-      Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName)
+      Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName testModuleContent)
         | Left err => pure $ Left $ "Failed to write temp TestHarness: " ++ show err
       Right () <- writeFile tempMainPath generateTestMainContent
         | Left err => pure $ Left $ "Failed to write temp Main: " ++ show err

@@ -112,6 +112,11 @@ title = "setupTestBuild generates valid test harness for src/Tests/AllTests.idr"
 invariant = "Generated temp test build compiles when Tests.AllTests exposes runTests/runMinimalTests/runTrivialTest without requiring Main.idr in temp tree"
 
 [[spec]]
+id = "REQ_ICWASM_TESTBUILD_003"
+title = "setupTestBuild output compiles successfully"
+invariant = "setupTestBuild が生成した temp ipkg SHALL compile successfully with the standard Tests.AllTests surface"
+
+[[spec]]
 id = "REQ_ICWASM_TESTBUILD_002"
 title = "Test-build preserves package-local imports"
 invariant = "All source imports needed by Tests.AllTests (including package-local modules under src/<PkgName>/...) are available in the temp tree via symlinks"

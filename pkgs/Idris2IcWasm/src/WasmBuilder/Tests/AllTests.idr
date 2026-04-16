@@ -217,6 +217,40 @@ test_TESTBUILD_002_imports = do
       _ <- system $ "rm -rf /tmp/idris2-icwasm-test-*"
       pure $ hasTests && hasMain && testsOk
 
+||| REQ_ICWASM_TESTBUILD_003: setupTestBuild output compiles successfully
+||| E2E: call setupTestBuild, then actually build the temp ipkg with pack.
+||| This proves the generated temp package typechecks — not just string content.
+covering
+test_TESTBUILD_003_builds_temp_ipkg : IO Bool
+test_TESTBUILD_003_builds_temp_ipkg = do
+  result <- setupTestBuild fixtureDir fixtureIpkg Nothing
+  case result of
+    Left err => do
+      putStrLn $ "  TESTBUILD_003 setup failed: " ++ err
+      pure False
+    Right tempIpkgPath => do
+      let tempDir = tempDirFromIpkg tempIpkgPath
+      -- Extract just the ipkg filename for pack build
+      let ipkgName = case reverse (forget (split (== '/') tempIpkgPath)) of
+            (name :: _) => name
+            [] => tempIpkgPath
+      -- Build: cd to temp dir and run pack build
+      let buildCmd = "cd " ++ tempDir ++ " && pack build " ++ ipkgName ++ " 2>&1"
+      putStrLn $ "  TESTBUILD_003 building: " ++ buildCmd
+      exitCode <- system buildCmd
+      if exitCode == 0
+        then do
+          putStrLn "  TESTBUILD_003 build succeeded"
+          _ <- system $ "rm -rf " ++ tempDir
+          pure True
+        else do
+          -- Show tail of build output for diagnosis
+          let logCmd = "cd " ++ tempDir ++ " && pack build " ++ ipkgName ++ " 2>&1 | tail -20"
+          _ <- system logCmd
+          putStrLn $ "  TESTBUILD_003 build FAILED (exit " ++ show exitCode ++ ")"
+          putStrLn $ "  Temp dir preserved for investigation: " ++ tempDir
+          pure False
+
 ||| REQ_ICWASM_RUNTIME_001: prepareRefCRuntime downloads idris_memory.h
 ||| E2E: verify idris_memory.h is present after runtime preparation.
 ||| Failure here means the root-cause bug (missing header) has regressed.
@@ -275,6 +309,7 @@ ioTests =
   , ("REQ_ICWASM_TESTBUILD_001", test_TESTBUILD_001_contract)
   , ("REQ_ICWASM_RUNTIME_005", test_RUNTIME_005_self_contained)
   , ("REQ_ICWASM_TESTBUILD_002", test_TESTBUILD_002_imports)
+  , ("REQ_ICWASM_TESTBUILD_003", test_TESTBUILD_003_builds_temp_ipkg)
   , ("REQ_ICWASM_RUNTIME_001", test_RUNTIME_001_idris_memory)
   , ("REQ_ICWASM_RUNTIME_006", test_RUNTIME_006_test_surface)
   ]
