@@ -118,15 +118,18 @@ pathToModuleName path =
   in pack $ map (\c => if c == '/' then '.' else c) (unpack noExt)
 
 public export
-data TestHarnessStyle = ExistingHarness | TupleHarness | RecordHarness
+data TestHarnessStyle = ExistingHarness | TupleHarness | RecordHarness | PureSummaryHarness
 
 detectTestHarnessStyle : String -> TestHarnessStyle
 detectTestHarnessStyle content =
   let hasRunTests = isInfixOf "runTests : IO (Int, Int)" content
+      hasPureRunAllTests = isInfixOf "runAllTests : (Nat, Nat)" content
       hasRecordTestDef = isInfixOf "record TestDef where" content && isInfixOf "testFn : IO Bool" content
       hasTupleTests = isInfixOf "allTests : List (String, IO Bool)" content
   in if hasRunTests
         then ExistingHarness
+     else if hasPureRunAllTests
+        then PureSummaryHarness
      else if hasRecordTestDef
         then RecordHarness
      else if hasTupleTests
@@ -223,6 +226,33 @@ generateTestHarnessShimContent RecordHarness testModuleName =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
+    ]
+generateTestHarnessShimContent PureSummaryHarness testModuleName =
+  unlines
+    [ "module TestHarness"
+    , "import " ++ testModuleName ++ " as TestModule"
+    , "%hide TestModule.main"
+    , ""
+    , "%default covering"
+    , ""
+    , "export"
+    , "allTestsGeneric : List (String, IO Bool)"
+    , "allTestsGeneric = []"
+    , ""
+    , "summary : IO (Int, Int)"
+    , "summary = pure (let (passed, failed) = TestModule.runAllTests in (cast passed, cast failed))"
+    , ""
+    , "export"
+    , "runTests : IO (Int, Int)"
+    , "runTests = summary"
+    , ""
+    , "export"
+    , "runMinimalTests : IO (Int, Int)"
+    , "runMinimalTests = summary"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = summary"
     ]
 
 ||| Generate test Main.idr content that imports the standardized shim module
@@ -610,6 +640,7 @@ generateTestIpkg originalIpkg projectDir tempSrcDir = do
 ||| Uses symlinks to original src/ files but generates new Main.idr
 ||| Returns (tempIpkgPath) on success - atomic: never modifies original files
 ||| @customTestPath - Optional custom test module path (relative to projectDir, e.g., "src/Economics/Tests/AllTests.idr")
+export
 setupTestBuild : String -> String -> Maybe String -> IO (Either String String)
 setupTestBuild projectDir originalIpkg customTestPath = do
   -- Convert projectDir to absolute path (needed for symlinks to work from temp dir)
@@ -680,7 +711,56 @@ resolvePackagesFromIpkg ipkg = do
         ++ tmpJson
   (_, output, _) <- executeCommand parseCmd
   _ <- system $ "rm -f " ++ tmpJson
-  pure $ filter (\s => not (null s)) (lines (trim output))
+  let parsedJson = filter (\s => not (null s)) (lines (trim output))
+  if not (null parsedJson)
+     then pure parsedJson
+     else do
+       Right content <- readFile ipkg
+         | Left _ => pure []
+       pure (extractDependsFromIpkgText content)
+  where
+    stripComment : String -> String
+    stripComment line =
+      let chars = unpack line in
+      pack (go chars)
+      where
+        go : List Char -> List Char
+        go ('-' :: '-' :: _) = []
+        go (c :: rest) = c :: go rest
+        go [] = []
+
+    normalizeDep : String -> String
+    normalizeDep raw =
+      let token = trim raw
+          chars = unpack token
+          headToken = pack (takeWhile (\c => c /= ' ' && c /= '\t') chars)
+       in trim headToken
+
+    extractDependsFromIpkgText : String -> List String
+    extractDependsFromIpkgText content =
+      nub (collect False (lines content))
+      where
+        extractLine : String -> List String
+        extractLine rhs =
+          map normalizeDep $
+            filter (\s => not (null (normalizeDep s))) $
+            forget (split (== ',') rhs)
+
+        collect : Bool -> List String -> List String
+        collect _ [] = []
+        collect inDepends (line :: rest) =
+          let stripped = trim (stripComment line) in
+          if null stripped then
+             collect inDepends rest
+          else if isPrefixOf "depends" stripped && isInfixOf "=" stripped then
+             let rhs = trim (pack (drop 1 (snd (break (== '=') (unpack stripped)))))
+              in extractLine rhs ++ collect True rest
+          else if inDepends && isPrefixOf "," stripped then
+             extractLine (trim (pack (drop 1 (unpack stripped)))) ++ collect True rest
+          else if inDepends then
+             []
+          else
+             collect False rest
 
 public export
 compileToRefC : BuildOptions -> String -> IO (Either String String)
@@ -739,12 +819,15 @@ compileToRefC opts buildDir = do
       _ <- executeCommand clearCmd
       -- RefC generates C file then tries native compile (which fails without GMP)
       -- We ignore the exit code and just check if C file was generated
-      _ <- executeCommand cmd
+      (_, stdout, stderr) <- executeCommand cmd
 
       -- Find generated C file in either the project build dir or temp build dir
       (_, cFile, _) <- executeCommand findCmd
       if null (trim cFile)
-        then pure $ Left "No C file generated by RefC"
+        then pure $ Left $
+               "No C file generated by RefC\n"
+               ++ trim stdout
+               ++ (if null (trim stderr) then "" else "\n" ++ trim stderr)
         else do
           putStrLn $ "        Generated: " ++ trim cFile
           pure $ Right (trim cFile)
@@ -800,7 +883,7 @@ compileToRefC opts buildDir = do
       _ <- system $ "mkdir -p " ++ buildDir'
       _ <- system $ "mkdir -p " ++ opts'.projectDir ++ "/build"
       _ <- executeCommand clearCmd
-      (_, _, stderr) <- executeCommand cmd
+      (_, stdout, stderr) <- executeCommand cmd
       _ <- executeCommand dumpcasesCmd
       _ <- system $ "sh -c 'test -f " ++ tempDumpcasesPath ++
                     " && cp " ++ tempDumpcasesPath ++ " " ++ projectDumpcasesPath ++
@@ -814,7 +897,10 @@ compileToRefC opts buildDir = do
                   ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
             (_, cFile, _) <- executeCommand findCmd
             if null (trim cFile)
-              then pure $ Left $ "No C file generated by RefC\n" ++ stderr
+              then pure $ Left $
+                     "No C file generated by RefC\n"
+                     ++ trim stdout
+                     ++ (if null (trim stderr) then "" else "\n" ++ trim stderr)
               else do
                 putStrLn $ "        Generated: " ++ trim cFile
                 pure $ Right (trim cFile)
@@ -835,11 +921,14 @@ compileToRefC opts buildDir = do
                 opts'.mainModule
       let clearCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" -delete 2>/dev/null || true'"
       _ <- executeCommand clearCmd
-      _ <- executeCommand cmd
+      (_, stdout, stderr) <- executeCommand cmd
       let findCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
       (_, cFile, _) <- executeCommand findCmd
       if null (trim cFile)
-        then pure $ Left "No C file generated by RefC"
+        then pure $ Left $
+               "No C file generated by RefC\n"
+               ++ trim stdout
+               ++ (if null (trim stderr) then "" else "\n" ++ trim stderr)
         else do
           putStrLn $ "        Generated: " ++ trim cFile
           pure $ Right (trim cFile)
@@ -880,8 +969,8 @@ prepareRefCRuntime = do
                          "refc_util.h", "mathFunctions.h", "memoryManagement.h",
                          "stringOps.h", "casts.h", "clock.h", "buffer.h",
                          "prim.h", "threads.h"]
-      let cFiles : List String = ["idris_support.c", "idris_file.c", "idris_directory.c", "idris_util.c"]
-      let cHeaders : List String = ["idris_support.h", "idris_file.h", "idris_directory.h", "idris_util.h"]
+      let cFiles : List String = ["idris_support.c", "idris_file.c", "idris_directory.c", "idris_util.c", "idris_memory.c"]
+      let cHeaders : List String = ["idris_support.h", "idris_file.h", "idris_directory.h", "idris_util.h", "idris_memory.h"]
 
       _ <- system $ "mkdir -p " ++ refcSrc ++ " " ++ miniGmp
 

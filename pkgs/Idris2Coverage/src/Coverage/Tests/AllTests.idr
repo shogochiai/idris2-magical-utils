@@ -922,17 +922,18 @@ test_CFG_003 = do
       && emptyExclusionConfig.packageNames == []
 
 -- =============================================================================
--- Coverage Runner Path Contract Tests (RUNNER_001-006)
+-- Coverage Runner Path Contract Tests (RUNNER_001-007)
+-- Fixture: tests/fixtures/MinimalPkg/ (relative from Idris2Coverage root)
 -- =============================================================================
 
 ||| REQ_COV_RUNNER_001: relative project dir is absolutized by toAbsolutePath
 covering
 test_RUNNER_001 : IO Bool
 test_RUNNER_001 = do
-  result <- toAbsolutePath "pkgs/SomePkg"
-  -- Must start with / (absolute) and end with pkgs/SomePkg
+  result <- toAbsolutePath "tests/fixtures/MinimalPkg"
+  -- Must start with / (absolute) and end with the fixture path
   pure $ isPrefixOf "/" result
-      && isSuffixOf "pkgs/SomePkg" result
+      && isSuffixOf "tests/fixtures/MinimalPkg" result
 
 ||| REQ_COV_RUNNER_002: absolute path is returned unchanged by toAbsolutePath
 covering
@@ -942,65 +943,74 @@ test_RUNNER_002 = do
   result <- toAbsolutePath absPath
   pure $ result == absPath
 
-||| REQ_COV_RUNNER_003: buildIpkgWithClean log paths are under the resolved project root
-||| We verify this by checking that a relative target produces logs with absolute paths.
-||| This is tested indirectly: buildIpkgWithClean on a nonexistent dir returns Left with
-||| an error that references the absolutized path (not a double-nested relative path).
+||| REQ_COV_RUNNER_003: runProjectDumpcasesWithTempIpkg succeeds with relative pkgs/ path
+||| This is the E2E test that proves NoInput does not occur for relative targets.
 covering
 test_RUNNER_003 : IO Bool
 test_RUNNER_003 = do
-  result <- buildIpkgWithClean False "pkgs/NonExistentPkg" "test.ipkg"
+  result <- runProjectDumpcasesWithTempIpkg "tests/fixtures/MinimalPkg/minimalpkg.ipkg"
   case result of
     Left err =>
-      -- Error message should contain an absolute path (starts with /)
-      -- and should NOT contain "pkgs/NonExistentPkg/pkgs/NonExistentPkg" (double nesting)
-      pure $ not (isInfixOf "pkgs/NonExistentPkg/pkgs/NonExistentPkg" err)
-    Right () =>
-      -- Unexpected success — still valid for the contract test
+      -- Compiler error is acceptable (may not have deps), but NOT "No modules" or empty
+      -- The key is that it got past path resolution without NoInput
+      pure $ not (isInfixOf "NoInput" err)
+          && not (isInfixOf "No modules" err)
+    Right content =>
+      -- Success: dumpcases content should be non-empty
+      pure $ length content > 0
+
+||| REQ_COV_RUNNER_004: runTestsWithFunctionHits succeeds or gives meaningful error
+||| with relative path — must NOT return empty error or NoInput
+covering
+test_RUNNER_004 : IO Bool
+test_RUNNER_004 = do
+  result <- runTestsWithFunctionHits "tests/fixtures/MinimalPkg"
+              ["MinimalPkg.Tests.AllTests"] 120
+  case result of
+    Left err =>
+      -- Must be non-empty, must NOT be "NoInput", must NOT contain double-nested path
+      pure $ length err > 0
+          && not (isInfixOf "NoInput" err)
+          && not (isInfixOf "fixtures/MinimalPkg/tests/fixtures/MinimalPkg" err)
+    Right hits =>
+      -- Success: any hit list is fine (even empty)
       pure True
 
-||| REQ_COV_RUNNER_005: failure message from buildIpkgWithClean includes resolved paths
+||| REQ_COV_RUNNER_005: failure message includes absolute path, not double-nested relative
 covering
 test_RUNNER_005 : IO Bool
 test_RUNNER_005 = do
-  result <- buildIpkgWithClean False "pkgs/BrokenFixture" "nonexistent.ipkg"
+  result <- buildIpkgWithClean False "tests/fixtures/MinimalPkg" "nonexistent.ipkg"
   case result of
     Left err =>
-      -- Error should contain a path starting with / (absolute, diagnosable)
-      let hasAbsPath = any (\w => isPrefixOf "/" w) (words err)
-      in pure True  -- buildIpkgWithClean failing is expected; we just verify no crash
-    Right () => pure True
+      -- Error must be non-empty
+      -- Error must NOT contain double-nested path (path resolution bug)
+      -- Error must contain some slash (diagnosable path reference)
+      pure $ length err > 0
+          && not (isInfixOf "MinimalPkg/tests/fixtures/MinimalPkg" err)
+          && isInfixOf "/" err
+    Right () =>
+      -- Nonexistent ipkg should not succeed
+      pure False
 
-||| REQ_COV_RUNNER_006: toAbsolutePath handles empty string gracefully
+||| REQ_COV_RUNNER_006: toAbsolutePath handles empty string without crash
 covering
 test_RUNNER_006 : IO Bool
 test_RUNNER_006 = do
   result <- toAbsolutePath ""
-  -- Should be cwd + "/" (not crash)
-  pure $ isPrefixOf "/" result || result == ""
+  -- Must produce an absolute path (cwd/) or at least not crash
+  pure $ isPrefixOf "/" result
 
-||| REQ_COV_RUNNER_004: runTestsWithFunctionHits with relative pkgs/ target
-||| does not crash — returns either hits or a meaningful error (not NoInput)
-covering
-test_RUNNER_004 : IO Bool
-test_RUNNER_004 = do
-  result <- runTestsWithFunctionHits "pkgs/NonExistentFixture" [] 60
-  case result of
-    Left err =>
-      -- Error message should NOT be empty (diagnosable)
-      pure $ length err > 0
-    Right _ =>
-      pure True
-
-||| REQ_COV_RUNNER_007: failed build preserves enough log to distinguish path vs compiler error
+||| REQ_COV_RUNNER_007: failed build log distinguishes path-resolution from compiler failure
 covering
 test_RUNNER_007 : IO Bool
 test_RUNNER_007 = do
-  result <- buildIpkgWithClean False "pkgs/BrokenFixture007" "nonexistent.ipkg"
+  result <- buildIpkgWithClean False "tests/fixtures/MinimalPkg" "nonexistent.ipkg"
   case result of
     Left err =>
-      -- Error should be non-empty and contain diagnostic info
-      pure $ length err > 0
+      -- Error must be non-empty and contain diagnostic content
+      -- Must not be just whitespace
+      pure $ length (trim err) > 10
     Right () =>
       pure False
 
