@@ -1,4 +1,6 @@
-||| Unified test runner with coverage collection
+||| Unified test runner with coverage collection.
+||| Path coverage is the primary integration surface.
+||| Dumpcases/function-hit helpers below are legacy migration APIs.
 ||| REQ_COV_UNI_001 - REQ_COV_UNI_003
 module Coverage.UnifiedRunner
 
@@ -34,18 +36,10 @@ joinStrings sep [] = ""
 joinStrings sep [x] = x
 joinStrings sep (x :: xs) = x ++ sep ++ joinStrings sep xs
 
-||| Shell prelude for using the installed Idris2 app resolved from a neutral directory.
-||| This avoids local pack.toml interference when running inside target projects.
-installedIdrisPrelude : String
-installedIdrisPrelude =
-  "APP=\"$(cd /tmp && pack app-path idris2)\""
-  ++ " && export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
-  ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
-  ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
-
 trimLog : String -> String
 trimLog = trim
 
+export
 toAbsolutePath : String -> IO String
 toAbsolutePath path =
   if isPrefixOf "/" path
@@ -60,18 +54,40 @@ removeFileIfExistsSafe path = do
   _ <- removeFile path
   pure ()
 
-buildPrelude : Maybe String -> String
-buildPrelude idris2Override =
-  case idris2Override of
-    Just app =>
-      "APP=\"" ++ app ++ "\""
-      ++ " && export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
-      ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
-      ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
-    Nothing => installedIdrisPrelude
+resolveProjectToolchainVar : String -> String -> IO (Maybe String)
+resolveProjectToolchainVar projectDir subcmd = do
+  uid <- getUniqueId
+  let outPath = "/tmp/idris2-coverage-" ++ subcmd ++ "-" ++ uid ++ ".txt"
+  _ <- system $ "cd " ++ projectDir ++ " && pack " ++ subcmd ++ " > " ++ outPath ++ " 2>/dev/null"
+  result <- readFile outPath
+  removeFileIfExistsSafe outPath
+  pure $ case result of
+    Left _ => Nothing
+    Right content =>
+      let resolved = trim content in
+      if null resolved then Nothing else Just resolved
+
+mkExport : String -> Maybe String -> List String
+mkExport name Nothing = []
+mkExport name (Just value) = ["export " ++ name ++ "=\"" ++ value ++ "\""]
+
+buildPrelude : String -> Maybe String -> IO String
+buildPrelude projectDir idris2Override = do
+  mPackagePath <- resolveProjectToolchainVar projectDir "package-path"
+  mLibs <- resolveProjectToolchainVar projectDir "libs-path"
+  mData <- resolveProjectToolchainVar projectDir "data-path"
+  let appAssign = case idris2Override of
+        Just app => "APP=\"" ++ app ++ "\""
+        Nothing => "APP=\"$(cd " ++ projectDir ++ " && pack app-path idris2)\""
+  pure $ joinStrings " && " $
+    [appAssign]
+    ++ mkExport "IDRIS2_PACKAGE_PATH" mPackagePath
+    ++ mkExport "IDRIS2_LIBS" mLibs
+    ++ mkExport "IDRIS2_DATA" mData
 
 ||| Build an ipkg, preferring direct Idris2 and falling back to pack.
 ||| Returns captured failure logs so downstream callers can surface the real cause.
+export
 buildIpkgWithClean : Bool -> String -> String -> IO (Either String ())
 buildIpkgWithClean cleanFirst projectDir ipkgName = do
   idris2Override <- getEnv "IDRIS2_BIN"
@@ -81,7 +97,7 @@ buildIpkgWithClean cleanFirst projectDir ipkgName = do
   removeFileIfExistsSafe directLog
   removeFileIfExistsSafe packLog
 
-  let appPrelude = buildPrelude idris2Override
+  appPrelude <- buildPrelude absProjectDir idris2Override
   when cleanFirst $
     do let cleanCmd = appPrelude
                    ++ " && cd " ++ absProjectDir
@@ -127,18 +143,112 @@ buildIpkgWithClean cleanFirst projectDir ipkgName = do
 buildIpkg : String -> String -> IO (Either String ())
 buildIpkg = buildIpkgWithClean False
 
+emptyShards : Nat -> List (List String)
+emptyShards Z = []
+emptyShards (S k) = [] :: emptyShards k
+
+appendToShard : Nat -> String -> List (List String) -> List (List String)
+appendToShard _ m [] = [[m]]
+appendToShard Z m (bucket :: rest) = (bucket ++ [m]) :: rest
+appendToShard (S k) m (bucket :: rest) = bucket :: appendToShard k m rest
+
+advanceShard : Nat -> Nat -> Nat
+advanceShard current shardCount =
+  if S current >= shardCount then 0 else S current
+
+distributeLoop : Nat -> Nat -> List String -> List (List String) -> List (List String)
+distributeLoop _ _ [] buckets = buckets
+distributeLoop shardCount current (m :: ms) buckets =
+  distributeLoop shardCount
+                 (advanceShard current shardCount)
+                 ms
+                 (appendToShard current m buckets)
+
+export
+distributeTestModules : Nat -> List String -> List (List String)
+distributeTestModules Z testModules = [testModules]
+distributeTestModules (S k) testModules =
+  distributeLoop (S k) 0 testModules (emptyShards (S k))
+
+runnerShardName : Nat -> String
+runnerShardName shardIx = "runShard" ++ show shardIx
+
+generateShardFunction : Nat -> List String -> List String
+generateShardFunction shardIx modules =
+  [ runnerShardName shardIx ++ " : IO ()"
+  , runnerShardName shardIx ++ " = do"
+  ]
+  ++ map (\m => "  " ++ m ++ ".runAllTests") modules
+  ++ [""]
+
+generateShardFunctions : Nat -> List (List String) -> List String
+generateShardFunctions _ [] = []
+generateShardFunctions shardIx (modules :: rest) =
+  generateShardFunction shardIx modules ++ generateShardFunctions (S shardIx) rest
+
+generateShardCaseArms : Nat -> List (List String) -> List String
+generateShardCaseArms _ [] = ["  _ => runAllModules"]
+generateShardCaseArms shardIx (_ :: rest) =
+  [ "  \"" ++ show shardIx ++ "\" => " ++ runnerShardName shardIx ]
+  ++ generateShardCaseArms (S shardIx) rest
+
+||| Generate temporary test runner source code
+||| The test modules must export a `runAllTests : IO ()` function.
+||| When shardCount > 1, the generated runner accepts
+||| IDRIS2_COVERAGE_ACTIVE_SHARD=1..N and executes only that module bucket.
+export
+generateTempRunnerWithShards : String -> List String -> Nat -> String
+generateTempRunnerWithShards modName testModules shardCount =
+  let normalizedShards = if shardCount < 2 then 1 else shardCount
+      shardBuckets = distributeTestModules normalizedShards testModules
+  in unlines $
+       [ "module " ++ modName
+       , ""
+       , "import System"
+       , ""
+       ]
+       ++ map (\m => "import " ++ m) testModules
+       ++ [ ""
+          , "runAllModules : IO ()"
+          , "runAllModules = do"
+          ]
+       ++ map (\m => "  " ++ m ++ ".runAllTests") testModules
+       ++ [ "" ]
+       ++ if normalizedShards < 2 then
+            [ "main : IO ()"
+            , "main = runAllModules"
+            ]
+          else
+            generateShardFunctions 1 shardBuckets
+            ++ [ "runSelectedShard : String -> IO ()"
+               , "runSelectedShard shard = case shard of"
+               ]
+            ++ generateShardCaseArms 1 shardBuckets
+            ++ [ ""
+               , "main : IO ()"
+               , "main = do"
+               , "  mShard <- getEnv \"IDRIS2_COVERAGE_ACTIVE_SHARD\""
+               , "  case mShard of"
+               , "    Nothing => runAllModules"
+               , "    Just shard => runSelectedShard shard"
+               ]
+
 ||| Generate temporary test runner source code
 ||| The test modules must export a `runAllTests : IO ()` function
 generateTempRunner : String -> List String -> String
-generateTempRunner modName testModules = unlines
-  [ "module " ++ modName
-  , ""
-  , unlines (map (\m => "import " ++ m) testModules)
-  , ""
-  , "main : IO ()"
-  , "main = do"
-  , unlines (map (\m => "  " ++ m ++ ".runAllTests") testModules)
-  ]
+generateTempRunner modName testModules =
+  generateTempRunnerWithShards modName testModules 1
+
+resolvePathShardCount : Nat -> IO Nat
+resolvePathShardCount moduleCount = do
+  requested <- getEnv "IDRIS2_COVERAGE_PATH_SHARDS"
+  let parsed : Maybe Nat
+      parsed = requested >>= parsePositive
+  pure $ case parsed of
+    Just n =>
+      let upperBound = if moduleCount == 0 then 1 else moduleCount
+      in if n > upperBound then upperBound else n
+    Nothing => 1
 
 ||| Generate a temporary wrapper that imports all project modules.
 ||| This forces Idris2 to emit case trees for library packages with no executable.
@@ -308,13 +418,13 @@ parseIpkgDepends content =
        [] => []
        (firstLine :: rest) =>
          let continuations = takeWhile isContinuation rest
-             allLines = firstLine :: continuations
+             allLines = map stripInlineComment (firstLine :: continuations)
              joined = fastConcat $ intersperse " " (map trim allLines)
              afterEquals = trim $ snd $ break (== '=') joined
              pkgStr = if isPrefixOf "=" afterEquals
                         then trim (substr 1 (length afterEquals) afterEquals)
                         else afterEquals
-         in map trim $ filter (/= "") $ forget $ split (== ',') pkgStr
+         in nub $ map trim $ filter (/= "") $ forget $ split (== ',') pkgStr
   where
     isContinuation : String -> Bool
     isContinuation s =
@@ -322,6 +432,15 @@ parseIpkgDepends content =
       in not (null trimmed) &&
          (isPrefixOf "," trimmed) &&
          not (isInfixOf "=" trimmed)
+
+    stripInlineComment : String -> String
+    stripInlineComment s = pack (go (unpack s))
+      where
+        go : List Char -> List Char
+        go [] = []
+        go ['-'] = ['-']
+        go ('-' :: '-' :: _) = []
+        go (c :: cs) = c :: go cs
 
 ||| Parse sourcedir from ipkg content (defaults to "src")
 parseIpkgSourcedir : String -> String
@@ -346,10 +465,26 @@ parseIpkgModules content =
       afterEq = case break (== '=') (unpack joined) of
                   (_, rest) => pack $ drop 1 rest
       parts = forget $ split (== ',') afterEq
-  in map (trim . pack . filter isModuleChar . unpack . trim) parts
+      cleaned = map (trim . pack . filter isModuleChar . unpack . stripInlineComment . trim) parts
+  in nub $ filter isValidModule cleaned
   where
     isModuleChar : Char -> Bool
     isModuleChar c = isAlphaNum c || c == '.' || c == '_'
+
+    isValidModule : String -> Bool
+    isValidModule modName =
+      case unpack modName of
+        [] => False
+        (c :: _) => isUpper c
+
+    stripInlineComment : String -> String
+    stripInlineComment s = pack (go (unpack s))
+      where
+        go : List Char -> List Char
+        go [] = []
+        go ['-'] = ['-']
+        go ('-' :: '-' :: _) = []
+        go (c :: cs) = c :: go cs
 
     collectModuleLines : List String -> Bool -> List String
     collectModuleLines [] _ = []
@@ -359,7 +494,7 @@ parseIpkgModules content =
          else collectModuleLines ls False
     collectModuleLines (l :: ls) True =
       let trimmed = trim l
-      in if null trimmed
+      in if null trimmed || isPrefixOf "--" trimmed
             then collectModuleLines ls True
             else if isPrefixOf "," trimmed || isPrefixOf " " l || isPrefixOf "\t" l
                     then l :: collectModuleLines ls True
@@ -879,6 +1014,38 @@ parsePathHitLineLocal line =
               in Just (MkPathRuntimeHit (trim pathId) parsed)
             _ => Just (MkPathRuntimeHit trimmed 1)
 
+runPathCoverageShards : String -> String -> String -> Nat -> IO (List PathRuntimeHit)
+runPathCoverageShards projectDir relExecPath pathHitsPath shardCount =
+  if shardCount < 2
+     then runOne Nothing
+     else go 1 []
+  where
+    runCmdFor : Maybe Nat -> String
+    runCmdFor Nothing =
+      "cd " ++ projectDir ++ " && " ++ relExecPath ++ " > /dev/null 2>&1"
+    runCmdFor (Just shardIx) =
+      "cd " ++ projectDir ++ " && IDRIS2_COVERAGE_ACTIVE_SHARD=\"" ++ show shardIx ++ "\" "
+      ++ relExecPath ++ " > /dev/null 2>&1"
+
+    runOne : Maybe Nat -> IO (List PathRuntimeHit)
+    runOne shardIx = do
+      removeFileIfExistsSafe pathHitsPath
+      _ <- system (runCmdFor shardIx)
+      hitsContent <- readFile pathHitsPath
+      pure $ case hitsContent of
+        Left _ => []
+        Right content => mapMaybe parsePathHitLineLocal (lines content)
+
+    go : Nat -> List PathRuntimeHit -> IO (List PathRuntimeHit)
+    go shardIx acc =
+      if shardIx > shardCount
+         then pure (reverse acc)
+         else do
+           when (shardCount > 1) $
+             putStrLn $ "Running path coverage shard " ++ show shardIx ++ "/" ++ show shardCount
+           hits <- runOne (Just shardIx)
+           go (S shardIx) (reverse hits ++ acc)
+
 ||| Build and run test modules with forked Idris2 path instrumentation enabled.
 ||| Returns static dumppaths JSON plus runtime path hits from the executed test binary.
 export
@@ -893,6 +1060,7 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
     _ => do
       projectDepends <- readProjectDepends projectDir
       sourcedir <- readProjectSourcedir projectDir
+      shardCount <- resolvePathShardCount (length testModules)
 
       uid <- getUniqueId
       let tempModName = "TempPathRunner_" ++ uid
@@ -908,7 +1076,11 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       let pathHitsPath = "/tmp/idris2_pathhits_runtime_" ++ uid ++ ".txt"
       let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
 
-      let runnerSource = generateTempRunner tempModName testModules
+      when (shardCount > 1) $
+        putStrLn $ "Path coverage runtime sharding enabled: " ++ show shardCount
+                ++ " shards across " ++ show (length testModules) ++ " test modules"
+
+      let runnerSource = generateTempRunnerWithShards tempModName testModules shardCount
       Right () <- writeFile tempIdrPath runnerSource
         | Left err => pure $ Left $ "Failed to write temp runner: " ++ show err
 
@@ -947,12 +1119,7 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
                 removeFileIfExists pathHitsPath
                 pure $ Left $ "Failed to read dumppaths JSON: " ++ show err
 
-          _ <- system $ "cd " ++ projectDir ++ " && " ++ relExecPath ++ " > /dev/null 2>&1"
-
-          hitsContent <- readFile pathHitsPath
-          let hits = case hitsContent of
-                       Left _ => []
-                       Right content => mapMaybe parsePathHitLineLocal (lines content)
+          hits <- runPathCoverageShards projectDir relExecPath pathHitsPath shardCount
 
           removeFileIfExists tempIdrPath
           removeFileIfExists tempIpkgPath

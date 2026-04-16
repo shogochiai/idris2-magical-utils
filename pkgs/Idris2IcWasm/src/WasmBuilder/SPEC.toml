@@ -98,3 +98,57 @@ invariant = "BuildError contains descriptive error from failed step"
 id = "${prefix}_BUILD_004"
 title = "Auto-detect IC0 support location"
 invariant = "buildCanisterAuto finds lib/ic0 or ../idris2-icwasm/support/ic0"
+
+# =============================================================================
+# Test Build Contract (lazy dfx coverage)
+# =============================================================================
+
+[[spec_area]]
+name = "Test Build Contract"
+
+[[spec]]
+id = "REQ_ICWASM_TESTBUILD_001"
+title = "setupTestBuild generates valid test harness for src/Tests/AllTests.idr"
+invariant = "Generated temp test build compiles when Tests.AllTests exposes runTests/runMinimalTests/runTrivialTest without requiring Main.idr in temp tree"
+
+[[spec]]
+id = "REQ_ICWASM_TESTBUILD_002"
+title = "Test-build preserves package-local imports"
+invariant = "All source imports needed by Tests.AllTests (including package-local modules under src/<PkgName>/...) are available in the temp tree via symlinks"
+
+# =============================================================================
+# Runtime Support Contract (lazy dfx coverage)
+# =============================================================================
+
+[[spec_area]]
+name = "Runtime Support Contract"
+
+[[spec]]
+id = "REQ_ICWASM_RUNTIME_001"
+title = "prepareRefCRuntime provides all headers required by RefC-generated C"
+invariant = "RefC compatibility headers (including idris_memory.h equivalent) are present after runtime preparation"
+
+[[spec]]
+id = "REQ_ICWASM_RUNTIME_002"
+title = "compileToWasmWithEntry fails with precise diagnostic on missing IC0 support"
+invariant = "Missing ic0_stubs.c or wasi_stubs.c produces error naming each missing path"
+
+[[spec]]
+id = "REQ_ICWASM_RUNTIME_003"
+title = "dfx coverage build requires ic0_stubs.c and wasi_stubs.c explicitly"
+invariant = "Requirement is in SPEC, not implicit in Emscripten command"
+
+[[spec]]
+id = "REQ_ICWASM_RUNTIME_004"
+title = "Default IC0 support bundle is sufficient for minimal coverage canister"
+invariant = "No downstream package needs to reverse-engineer missing support files"
+
+[[spec]]
+id = "REQ_ICWASM_RUNTIME_005"
+title = "RefC header compatibility aliases are created by the builder"
+invariant = "If compileToWasmWithEntry depends on header aliases, builder creates them, not downstream"
+
+[[spec]]
+id = "REQ_ICWASM_RUNTIME_006"
+title = "Generated test canister compiles with standard test surface"
+invariant = "Tests.AllTests with runTests/runMinimalTests/runTrivialTest/allTests compiles to valid WASM"

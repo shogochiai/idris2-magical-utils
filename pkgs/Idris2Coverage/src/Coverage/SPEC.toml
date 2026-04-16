@@ -814,3 +814,51 @@ text = "There exists a record `TestCoverageReport` containing testResults, total
 id = "REQ_TYPE_UNI_003"
 text = "There exists a function `runTestsWithCoverage` that executes tests and returns coverage data"
 
+# =============================================================================
+# Coverage Runner Path Contract (v0.5.0)
+# =============================================================================
+
+[[spec_area]]
+name = "Coverage Runner Path Contract"
+description = "Path resolution, log placement, and temp file handling for build orchestration"
+
+[[spec_area.sub_feature]]
+name = "Path Resolution"
+specs = [
+  "- [REQ_COV_RUNNER_001] buildIpkgWithClean SHALL resolve projectDir to an absolute path before constructing build commands or log file paths",
+  "- [REQ_COV_RUNNER_002] buildIpkgWithClean SHALL place direct-build and pack-build log files inside the resolved project root, regardless of whether the incoming target path is relative or absolute",
+  "- [REQ_COV_RUNNER_003] runProjectDumpcasesWithTempIpkg SHALL succeed when invoked with a package root given as a relative path under pkgs/...",
+  "- [REQ_COV_RUNNER_004] runTestsWithFunctionHits SHALL succeed when the package root is relative and the generated temporary ipkg is built from within that package root",
+  "- [REQ_COV_RUNNER_005] Coverage runner failures caused by missing build artifacts SHALL report the actual absolute paths attempted, so the failure is diagnosable without reading generated shell",
+  "- [REQ_COV_RUNNER_006] A successful direct build SHALL delete temporary coverage logs after completion",
+  "- [REQ_COV_RUNNER_007] A failed direct build followed by a failed pack fallback SHALL preserve enough log content to distinguish path-resolution failure from compiler failure"
+]
+
+[[spec]]
+id = "REQ_COV_RUNNER_001"
+description = "buildIpkgWithClean SHALL resolve projectDir to an absolute path before constructing build commands or log file paths"
+
+[[spec]]
+id = "REQ_COV_RUNNER_002"
+description = "buildIpkgWithClean SHALL place direct-build and pack-build log files inside the resolved project root, regardless of whether the incoming target path is relative or absolute"
+
+[[spec]]
+id = "REQ_COV_RUNNER_003"
+description = "runProjectDumpcasesWithTempIpkg SHALL succeed when invoked with a package root given as a relative path under pkgs/..."
+
+[[spec]]
+id = "REQ_COV_RUNNER_004"
+description = "runTestsWithFunctionHits SHALL succeed when the package root is relative and the generated temporary ipkg is built from within that package root"
+
+[[spec]]
+id = "REQ_COV_RUNNER_005"
+description = "Coverage runner failures caused by missing build artifacts SHALL report the actual absolute paths attempted, so the failure is diagnosable without reading generated shell"
+
+[[spec]]
+id = "REQ_COV_RUNNER_006"
+description = "A successful direct build SHALL delete temporary coverage logs after completion"
+
+[[spec]]
+id = "REQ_COV_RUNNER_007"
+description = "A failed direct build followed by a failed pack fallback SHALL preserve enough log content to distinguish path-resolution failure from compiler failure"
+
