@@ -153,58 +153,81 @@ fixtureDir = "tests/fixtures/MinimalCanister"
 fixtureIpkg : String
 fixtureIpkg = fixtureDir ++ "/minimal-canister.ipkg"
 
-||| REQ_ICWASM_TESTBUILD_001: setupTestBuild creates temp tree with generated Main.idr
-||| E2E: actually call setupTestBuild and verify temp tree contents
+||| Helper: extract temp dir from temp ipkg path
+||| e.g. "/tmp/idris2-icwasm-test-123/foo.ipkg" → "/tmp/idris2-icwasm-test-123"
+tempDirFromIpkg : String -> String
+tempDirFromIpkg path =
+  let parts = forget (split (== '/') path)
+      dirParts = case reverse parts of
+            (_ :: rest) => reverse rest
+            [] => []
+  in joinBy "/" dirParts
+
+||| REQ_ICWASM_TESTBUILD_001: setupTestBuild creates temp tree with valid generated files
+||| E2E: call setupTestBuild, verify ipkg + Main.idr + TestHarness.idr exist and
+||| Main.idr contains IO (Int, Int) typed entry points
 covering
 test_TESTBUILD_001_contract : IO Bool
 test_TESTBUILD_001_contract = do
   result <- setupTestBuild fixtureDir fixtureIpkg Nothing
   case result of
-    Left err =>
-      -- setupTestBuild may fail if idris2 not available, but error must be meaningful
-      pure $ not (null err) && not (isInfixOf "NoInput" err)
+    Left err => do
+      putStrLn $ "  TESTBUILD_001 setup failed: " ++ err
+      pure False
     Right tempIpkgPath => do
-      -- Verify temp tree has generated Main.idr (not symlinked from original)
-      let tempDir = fst (break (== '/') (substr 5 (length tempIpkgPath) tempIpkgPath))
-      -- The temp ipkg should exist and be readable
+      let tempDir = tempDirFromIpkg tempIpkgPath
+      -- Verify generated files exist
       ipkgExists <- fileExistsIO tempIpkgPath
+      mainExists <- fileExistsIO (tempDir ++ "/src/Main.idr")
+      -- Verify Main.idr contains IO (Int, Int) entry points (the real contract)
+      mainOk <- case !(readFile (tempDir ++ "/src/Main.idr")) of
+        Left _ => pure False
+        Right content => pure $
+             isInfixOf "runTests" content
+          && isInfixOf "IO (Int, Int)" content
+          && isInfixOf "runMinimalTests" content
+          && isInfixOf "runTrivialTest" content
       -- Clean up
       _ <- system $ "rm -rf /tmp/idris2-icwasm-test-*"
-      pure ipkgExists
+      pure $ ipkgExists && mainExists && mainOk
 
 ||| REQ_ICWASM_TESTBUILD_002: setupTestBuild preserves package-local imports via symlinks
-||| E2E: verify that Tests/AllTests.idr is accessible in temp tree
+||| E2E: verify Tests/AllTests.idr is symlinked and Main.idr is generated (not symlinked)
 covering
 test_TESTBUILD_002_imports : IO Bool
 test_TESTBUILD_002_imports = do
   result <- setupTestBuild fixtureDir fixtureIpkg Nothing
   case result of
-    Left _ => pure True  -- env issue, not contract violation
+    Left err => do
+      putStrLn $ "  TESTBUILD_002 setup failed: " ++ err
+      pure False
     Right tempIpkgPath => do
-      -- Extract temp dir: ipkg is at /tmp/idris2-icwasm-test-XXX/something.ipkg
-      -- dirname is everything before the last /
-      let parts = forget (split (== '/') tempIpkgPath)
-      let dirParts = case reverse parts of
-            (_ :: rest) => reverse rest
-            [] => []
-      let tempDir = joinBy "/" dirParts
-      -- Tests/AllTests.idr should be accessible (symlinked)
+      let tempDir = tempDirFromIpkg tempIpkgPath
+      -- Tests/AllTests.idr should be accessible (symlinked from fixture)
       hasTests <- fileExistsIO (tempDir ++ "/src/Tests/AllTests.idr")
-      -- Generated Main.idr should exist (not symlinked)
+      -- Generated Main.idr should exist
       hasMain <- fileExistsIO (tempDir ++ "/src/Main.idr")
+      -- Verify symlinked AllTests has the correct test surface type
+      testsOk <- case !(readFile (tempDir ++ "/src/Tests/AllTests.idr")) of
+        Left _ => pure False
+        Right content => pure $
+             isInfixOf "IO (Int, Int)" content
+          && isInfixOf "runTests" content
       -- Clean up
       _ <- system $ "rm -rf /tmp/idris2-icwasm-test-*"
-      pure $ hasTests && hasMain
+      pure $ hasTests && hasMain && testsOk
 
 ||| REQ_ICWASM_RUNTIME_001: prepareRefCRuntime downloads idris_memory.h
-||| The spec requires compatibility headers including idris_memory.h equivalent.
-||| We verify by checking that after runtime prep, the file exists in /tmp/refc-src/.
+||| E2E: verify idris_memory.h is present after runtime preparation.
+||| Failure here means the root-cause bug (missing header) has regressed.
 covering
 test_RUNTIME_001_idris_memory : IO Bool
 test_RUNTIME_001_idris_memory = do
   result <- prepareRefCRuntime
   case result of
-    Left _ => pure True  -- network issue, not contract violation
+    Left err => do
+      putStrLn $ "  RUNTIME_001 prep failed: " ++ err
+      pure False
     Right (refcSrc, _) => do
       -- idris_memory.h must exist (the specific file cited in the bug report)
       hasMemH <- fileExistsIO (refcSrc ++ "/idris_memory.h")
@@ -224,17 +247,17 @@ test_RUNTIME_005_self_contained = do
       results <- traverse (\f => fileExistsIO (dir ++ "/" ++ f)) requiredC
       pure $ all id results
 
-||| REQ_ICWASM_RUNTIME_006: fixture canister with standard test surface is valid
-||| E2E: verify fixture Tests.AllTests exposes expected functions
+||| REQ_ICWASM_RUNTIME_006: fixture canister matches the real lazy dfx test surface contract
+||| E2E: verify runTests/runMinimalTests/runTrivialTest are IO (Int, Int), not IO ()
 covering
 test_RUNTIME_006_test_surface : IO Bool
 test_RUNTIME_006_test_surface = do
   Right content <- readFile (fixtureDir ++ "/src/Tests/AllTests.idr")
     | Left _ => pure False
-  -- Must contain the standard test surface exports
-  pure $ isInfixOf "runTests" content
-      && isInfixOf "runMinimalTests" content
-      && isInfixOf "runTrivialTest" content
+  -- Must contain IO (Int, Int) typed entry points (the real contract)
+  pure $ isInfixOf "runTests : IO (Int, Int)" content
+      && isInfixOf "runMinimalTests : IO (Int, Int)" content
+      && isInfixOf "runTrivialTest : IO (Int, Int)" content
       && isInfixOf "allTests" content
 
 -- =============================================================================
