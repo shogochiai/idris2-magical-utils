@@ -367,6 +367,13 @@ test_BRANCH_005 () =
      && isStandardFunctionCoverageClaimAdmissible [excludedFn]
      && not (isStandardFunctionCoverageClaimAdmissible [excludedFn, unknownFn])
 
+test_BRANCH_006 : () -> Bool
+test_BRANCH_006 () =
+  -- The JavaScript backend can emit default Eq./= obligations as a trailing
+  -- "./" function name. Treat that as compiler/default-interface glue rather
+  -- than a source-level user obligation.
+  shouldExcludeFunctionName "TheWorldDashboard.Model./"
+
 -- =============================================================================
 -- Path Coverage Tests
 -- =============================================================================
@@ -491,6 +498,7 @@ allTests =
   , test "BRANCH_003" "Unknown branches block admissible claim" test_BRANCH_003
   , test "BRANCH_004" "Function obligations aggregate partial branches" test_BRANCH_004
   , test "BRANCH_005" "Function claims block on unknown branches" test_BRANCH_005
+  , test "BRANCH_006" "JS backend Eq default shorthand is excluded" test_BRANCH_006
 
   -- Path coverage
   , test "PATH_001" "parse dumppaths json" test_PATH_001

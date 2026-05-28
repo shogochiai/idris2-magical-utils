@@ -57,3 +57,13 @@ ipkg = "idris2-subcontract.ipkg"
 type = "local"
 path = "pkgs/Idris2BitcoinScript"
 ipkg = "idris2-bitcoin-script.ipkg"
+
+[custom.all.idris2-ffi-integration]
+type = "local"
+path = "pkgs/idris2ffiintegration"
+ipkg = "idris2-ffi-integration.ipkg"
+
+[custom.all.idris2-ffi-coverage]
+type = "local"
+path = "pkgs/idris2fficoverage"
+ipkg = "idris2-ffi-coverage.ipkg"

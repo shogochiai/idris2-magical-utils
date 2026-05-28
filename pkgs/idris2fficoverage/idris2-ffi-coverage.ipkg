@@ -1,0 +1,15 @@
+package idris2-ffi-coverage
+version = 0.1.0
+authors = "lazy-idris team"
+brief = "Integration FFI path coverage for repo-root System-of-Systems work"
+
+sourcedir = "src"
+
+depends = base, contrib, idris2-ffi-integration
+
+modules = FfiCoverage.Model
+        , Tests.AllTests
+        , Main
+
+main = Main
+executable = idris2-ffi-cov

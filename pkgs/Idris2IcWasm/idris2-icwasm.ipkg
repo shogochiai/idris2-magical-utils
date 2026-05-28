@@ -8,6 +8,7 @@ sourcedir = "src"
 depends = base, contrib
 
 modules = IcWasm.SQLite
+        , IcWasm.SQLiteVFS
         , IcWasm.StableStorage
         , IcWasm.InterCanisterCall
         , IcWasm.EvmAddress

@@ -120,17 +120,29 @@ filterPaths : (PathObligation -> Bool) -> List PathObligation -> List PathObliga
 filterPaths predicate = filter predicate
 
 public export
+dedupePathsById : List PathObligation -> List PathObligation
+dedupePathsById paths = reverse (go [] [] paths)
+  where
+    go : List String -> List PathObligation -> List PathObligation -> List PathObligation
+    go _ acc [] = acc
+    go seen acc (path :: rest) =
+      if elem path.pathId seen
+         then go seen acc rest
+         else go (path.pathId :: seen) (path :: acc) rest
+
+public export
 pathCoverageMeasurement : List PathObligation -> List String -> CoverageMeasurement
 pathCoverageMeasurement paths hitPathIds =
-  let obligations = map pathObligationToCoverageObligation paths
+  let uniquePaths = dedupePathsById paths
+      obligations = map pathObligationToCoverageObligation uniquePaths
       denominatorIds =
-        map (.obligationId) $
+        nub $ map (.obligationId) $
           filter (\ob => countsAsDenominator ob.classification) obligations
       excludedIds =
-        map (.obligationId) $
+        nub $ map (.obligationId) $
           filter (\ob => mustBeExcluded ob.classification) obligations
       unknownIds =
-        map (.obligationId) $
+        nub $ map (.obligationId) $
           filter (\ob => ob.classification == UnknownClassification) obligations
       coveredIds =
         filter (\oid => elem oid denominatorIds) (nub hitPathIds)
@@ -139,15 +151,16 @@ pathCoverageMeasurement paths hitPathIds =
 public export
 buildPathCoverageResult : List PathObligation -> List String -> PathCoverageResult
 buildPathCoverageResult paths hitPathIds =
-  let measurement = pathCoverageMeasurement paths hitPathIds
+  let uniquePaths = dedupePathsById paths
+      measurement = pathCoverageMeasurement uniquePaths hitPathIds
       covered =
-        filter (\path => elem path.pathId measurement.coveredIds) paths
+        filter (\path => elem path.pathId measurement.coveredIds) uniquePaths
       missing =
         filter (\path => elem path.pathId measurement.denominatorIds
-                      && not (elem path.pathId measurement.coveredIds)) paths
-      obligations = map pathObligationToCoverageObligation paths
+                      && not (elem path.pathId measurement.coveredIds)) uniquePaths
+      obligations = map pathObligationToCoverageObligation uniquePaths
   in MkPathCoverageResult
-       paths
+       uniquePaths
        covered
        missing
        measurement

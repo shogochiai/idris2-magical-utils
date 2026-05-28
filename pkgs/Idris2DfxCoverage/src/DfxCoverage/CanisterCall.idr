@@ -210,7 +210,8 @@ moduleToPath modName =
 
 resolveMainModulePath : String -> IO String
 resolveMainModulePath projectDir = do
-  let cmd = "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f | sort | head -1"
+  let stableIpkgFilter = " ! -name 'temp*.ipkg' ! -name 'dumpcases-temp-*.ipkg' ! -name 'dfx-dumppaths-temp-*.ipkg' ! -name '*-temp-*.ipkg'"
+  let cmd = "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f" ++ stableIpkgFilter ++ " | sort | head -1"
   (_, ipkgPath, _) <- executeCommand cmd
   if null (trim ipkgPath)
      then pure "src/Main.idr"
@@ -290,6 +291,62 @@ resolveIcWasmExecutable projectDir = do
       let resolved = trim stdout
       pure (if null resolved then Nothing else Just resolved)
 
+shellQuote : String -> String
+shellQuote s = "\"" ++ s ++ "\""
+
+hasGmpHeader : String -> IO Bool
+hasGmpHeader dir = do
+  Right _ <- readFile (dir ++ "/gmp.h")
+    | Left _ => pure False
+  pure True
+
+firstExistingGmpInclude : List String -> IO (Maybe String)
+firstExistingGmpInclude [] = pure Nothing
+firstExistingGmpInclude (dir :: rest) =
+  if null dir
+     then firstExistingGmpInclude rest
+     else do
+       found <- hasGmpHeader dir
+       if found
+          then pure (Just dir)
+          else firstExistingGmpInclude rest
+
+resolveGmpIncludePath : String -> IO (Maybe String)
+resolveGmpIncludePath projectDir = do
+  mMiniGmp <- getEnv "MINI_GMP"
+  pure !(firstExistingGmpInclude
+    (catMaybes
+      [ mMiniGmp
+      , Just "/tmp/mini-gmp"
+      , Just (projectDir ++ "/.ci-cache/mini-gmp")
+      , Just (projectDir ++ "/../.ci-cache/mini-gmp")
+      , Just (projectDir ++ "/../../.ci-cache/mini-gmp")
+      , Just "/opt/homebrew/opt/gmp/include"
+      , Just "/usr/local/opt/gmp/include"
+      ]))
+
+findPackInstallBase : IO (Maybe String)
+findPackInstallBase = do
+  let tmpFile = "/tmp/pack-install-base-dfx-canister.txt"
+  _ <- system $ "ls -td ~/.local/state/pack/install/*/ 2>/dev/null | head -1 > " ++ tmpFile
+  Right content <- readFile tmpFile
+    | Left _ => pure Nothing
+  let path = trim content
+  if null path then pure Nothing else pure (Just path)
+
+discoverPackagePath : IO String
+discoverPackagePath = do
+  mBase <- findPackInstallBase
+  case mBase of
+    Nothing => pure ""
+    Just basePath => do
+      let tmpFile = "/tmp/idris2-dfx-canister-package-paths.txt"
+      let cmd = "find " ++ basePath ++ " -type d -name 'idris2-*' 2>/dev/null > " ++ tmpFile
+      _ <- system cmd
+      Right content <- readFile tmpFile
+        | Left _ => pure ""
+      pure $ joinBy ":" (filter (not . null) (map trim (lines content)))
+
 buildWasmViaIcWasmCli : DeployOptions -> String -> Maybe String -> IO (Either String String)
 buildWasmViaIcWasmCli opts mainModulePath testModPath = do
   mIcWasm <- resolveIcWasmExecutable opts.projectDir
@@ -297,13 +354,26 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
     Nothing => pure (Left "Unable to locate idris2-icwasm executable")
     Just icwasmBin => do
       mPackagePath <- getEnv "IDRIS2_PACKAGE_PATH"
-      mIdris2Bin <- getEnv "IDRIS2_BIN"
+      discoveredPackagePath <- discoverPackagePath
       mCPath <- getEnv "CPATH"
+      mGmpInclude <- resolveGmpIncludePath opts.projectDir
+      let packagePathValue =
+            case mPackagePath of
+              Just old => Just old
+              Nothing =>
+                if null discoveredPackagePath
+                   then Nothing
+                   else Just discoveredPackagePath
+      let cpathValue =
+            case mGmpInclude of
+              Nothing => mCPath
+              Just inc => Just $ case mCPath of
+                                   Nothing => inc
+                                   Just old => inc ++ ":" ++ old
       let envVars =
             catMaybes
-              [ map (\v => "IDRIS2_PACKAGE_PATH=" ++ v) mPackagePath
-              , map (\v => "IDRIS2_BIN=" ++ v) mIdris2Bin
-              , map (\v => "CPATH=" ++ v) mCPath
+              [ map (\v => "IDRIS2_PACKAGE_PATH=" ++ shellQuote v) packagePathValue
+              , map (\v => "CPATH=" ++ shellQuote v) cpathValue
               ]
       let baseArgs =
             [ "build"

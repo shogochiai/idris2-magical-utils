@@ -205,6 +205,7 @@ shouldExcludeFunctionName name =
      isCompilerGeneratedName name
   || isStandardLibraryName name
   || isTypeConstructorName name
+  || isSuffixOf "./" name
 
 -- =============================================================================
 -- Static Function Analysis

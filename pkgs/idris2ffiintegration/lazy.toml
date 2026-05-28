@@ -1,0 +1,6 @@
+[lazyos]
+version = "0.1"
+
+[coverage.exclusions]
+module_prefixes = ["Main.", "Integration.Model.IntegrationOp.", "Integration.Model.TraceEvent.", "Integration.Model.ContextPolicy.", "Integration.Model.EvidenceKind.", "Integration.Trace.ParsedTraceEvent."]
+functions = []

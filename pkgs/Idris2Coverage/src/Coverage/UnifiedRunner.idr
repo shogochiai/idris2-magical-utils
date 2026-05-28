@@ -7,6 +7,8 @@ import public Coverage.Collector
 import public Coverage.DumpcasesParser
 import public Coverage.Core.RuntimeHit
 import public Coverage.Core.PathCoverage
+import Coverage.Core.DumppathsJson
+import Coverage.Standardization.Types
 import System
 import System.Clock
 import System.File
@@ -33,6 +35,14 @@ joinStrings : String -> List String -> String
 joinStrings sep [] = ""
 joinStrings sep [x] = x
 joinStrings sep (x :: xs) = x ++ sep ++ joinStrings sep xs
+
+splitPath : String -> (String, String)
+splitPath path =
+  let parts = forget $ split (== '/') path in
+  case reverse parts of
+    [] => (".", path)
+    [name] => (".", name)
+    (name :: revDirs) => (joinBy "/" (reverse revDirs), name)
 
 ||| Shell prelude for using the installed Idris2 app resolved from a neutral directory.
 ||| This avoids local pack.toml interference when running inside target projects.
@@ -86,12 +96,16 @@ buildIpkgWithClean cleanFirst projectDir ipkgName = do
     do let cleanCmd = appPrelude
                    ++ " && cd " ++ absProjectDir
                    ++ " && \"$APP\" --clean " ++ ipkgName ++ " > /dev/null 2>&1"
+       putStrLn "    Cleaning temp path coverage build..."
        _ <- system cleanCmd
+       putStrLn "    Clean complete."
        pure ()
   let directCmd = appPrelude
                ++ " && cd " ++ absProjectDir
                ++ " && \"$APP\" --build " ++ ipkgName ++ " > " ++ directLog ++ " 2>&1"
+  putStrLn "    Running direct path coverage build..."
   directExit <- system directCmd
+  putStrLn $ "    Direct path coverage build exit: " ++ show directExit
   if directExit == 0
      then do
        removeFileIfExistsSafe directLog
@@ -403,6 +417,217 @@ readProjectSourcedir projectDir = do
     | Nothing => pure "src"
   pure $ parseIpkgSourcedir content
 
+jsonString : String -> String
+jsonString s =
+  "\"" ++ fastConcat (map escapeChar (unpack s)) ++ "\""
+  where
+    escapeChar : Char -> String
+    escapeChar '"' = "\\\""
+    escapeChar '\\' = "\\\\"
+    escapeChar '\n' = "\\n"
+    escapeChar '\r' = "\\r"
+    escapeChar '\t' = "\\t"
+    escapeChar c = singleton c
+
+maybeNatJson : Maybe Nat -> String
+maybeNatJson Nothing = "null"
+maybeNatJson (Just n) = show n
+
+maybeStringJson : Maybe String -> String
+maybeStringJson Nothing = "null"
+maybeStringJson (Just s) = jsonString s
+
+obligationClassName : ObligationClass -> String
+obligationClassName ReachableObligation = "ReachableObligation"
+obligationClassName LogicallyUnreachable = "LogicallyUnreachable"
+obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
+obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
+obligationClassName UnknownClassification = "UnknownClassification"
+
+pathStepToJson : PathStep -> String
+pathStepToJson step =
+  "{"
+    ++ "\"node_id\":" ++ jsonString step.nodeId ++ ","
+    ++ "\"branch_index\":" ++ show step.branchIndex ++ ","
+    ++ "\"origin\":" ++ jsonString step.origin ++ ","
+    ++ "\"case_index\":" ++ maybeNatJson step.caseIndex ++ ","
+    ++ "\"branch_label\":" ++ maybeStringJson step.branchLabel ++ ","
+    ++ "\"source_span\":" ++ maybeStringJson step.sourceSpan
+    ++ "}"
+
+pathToJson : PathObligation -> String
+pathToJson path =
+  "{"
+    ++ "\"path_id\":" ++ jsonString path.pathId ++ ","
+    ++ "\"classification\":" ++ jsonString (obligationClassName path.classification) ++ ","
+    ++ "\"terminal_kind\":" ++ jsonString path.terminalKind ++ ","
+    ++ "\"terminal_clause_id\":" ++ maybeNatJson path.terminalClauseId ++ ","
+    ++ "\"steps\":[" ++ fastConcat (intersperse "," (map pathStepToJson path.steps)) ++ "],"
+    ++ "\"source_span_union\":" ++ maybeStringJson path.sourceSpanUnion ++ ","
+    ++ "\"path_length\":" ++ show path.pathLength
+    ++ "}"
+
+pathObligationFunctionToJson : PathObligation -> String
+pathObligationFunctionToJson path =
+  "{"
+    ++ "\"function_name\":" ++ jsonString path.functionName ++ ","
+    ++ "\"paths\":[" ++ pathToJson path ++ "]"
+    ++ "}"
+
+pathObligationsToDumppathsJson : List PathObligation -> String
+pathObligationsToDumppathsJson paths =
+  "{"
+    ++ "\"compiler_version\":\"chunked-static-fallback\","
+    ++ "\"export_kind\":\"canonical_intrafunction_paths\","
+    ++ "\"path_schema_version\":1,"
+    ++ "\"functions\":["
+    ++ fastConcat (intersperse "," (map pathObligationFunctionToJson paths))
+    ++ "]}"
+
+chunkList : Nat -> List a -> List (List a)
+chunkList _ [] = []
+chunkList Z xs = [xs]
+chunkList size xs =
+  let here = take size xs
+      rest = drop size xs
+  in if null here then [] else here :: chunkList size rest
+
+runStaticDumppathsJsonWhole : String -> IO (Either String String)
+runStaticDumppathsJsonWhole ipkgPath = do
+  let (projectDir, ipkgName) = splitPath ipkgPath
+  uid <- getUniqueId
+  idris2Override <- getEnv "IDRIS2_BIN"
+  absProjectDir <- toAbsolutePath projectDir
+  let dumppathsPath = "/tmp/idris2_static_dumppaths_" ++ uid ++ ".json"
+  let logPath = "/tmp/idris2_static_dumppaths_" ++ uid ++ ".log"
+  let appPrelude = buildPrelude idris2Override
+  let cmd = appPrelude
+         ++ " && cd " ++ absProjectDir
+         ++ " && \"$APP\" --dumppaths-json " ++ dumppathsPath
+         ++ " --build " ++ ipkgName
+         ++ " > " ++ logPath ++ " 2>&1"
+  _ <- system cmd
+  contentResult <- readFile dumppathsPath
+  logResult <- readFile logPath
+  removeFileIfExistsSafe dumppathsPath
+  removeFileIfExistsSafe logPath
+  case contentResult of
+    Right content =>
+      if null (trim content)
+         then pure $ Left "Static dumppaths JSON was empty"
+         else pure $ Right content
+    Left err =>
+      let logTail = case logResult of
+                      Left _ => ""
+                      Right logContent => unlines (reverse (take 20 (reverse (lines logContent))))
+      in pure $ Left $ "Failed to read static dumppaths JSON: " ++ show err
+                    ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
+
+runStaticDumppathsJsonChunk : String -> String -> String -> List String -> String -> List String -> Nat -> IO (Either String (List PathObligation))
+runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends packTomlContent modules idx = do
+  uid <- getUniqueId
+  idris2Override <- getEnv "IDRIS2_BIN"
+  absProjectDir <- toAbsolutePath projectDir
+  let tempModName = "TempStaticDumppaths_" ++ uid ++ "_" ++ show idx
+  let tempExecName = "temp-static-dumppaths-" ++ uid ++ "-" ++ show idx
+  let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
+  let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
+  let tempIpkgName = tempExecName ++ ".ipkg"
+  let dumppathsPath = "/tmp/idris2_static_dumppaths_chunk_" ++ uid ++ "_" ++ show idx ++ ".json"
+  let logPath = "/tmp/idris2_static_dumppaths_chunk_" ++ uid ++ "_" ++ show idx ++ ".log"
+  let packTomlPath = projectDir ++ "/pack.toml"
+  let runnerSource = generateImportWrapper tempModName modules
+  Right () <- writeFile tempIdrPath runnerSource
+    | Left err => pure $ Left $ "Failed to write static chunk wrapper: " ++ show err
+  let allModules = tempModName :: modules
+  let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just ("--dumppaths-json " ++ dumppathsPath)) (Just tempBuildDir)
+  Right () <- writeFile tempIpkgPath ipkgContent
+    | Left err => do
+        removeFileIfExists tempIdrPath
+        pure $ Left $ "Failed to write static chunk ipkg: " ++ show err
+  Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
+    | Left err => do
+        removeFileIfExists tempIdrPath
+        removeFileIfExists tempIpkgPath
+        pure $ Left err
+  let appPrelude = buildPrelude idris2Override
+  let cmd = appPrelude
+         ++ " && cd " ++ absProjectDir
+         ++ " && \"$APP\" --build " ++ tempIpkgName
+         ++ " > " ++ logPath ++ " 2>&1"
+  _ <- system cmd
+  contentResult <- readFile dumppathsPath
+  logResult <- readFile logPath
+  removeFileIfExists tempIdrPath
+  removeFileIfExists tempIpkgPath
+  cleanupPackToml packTomlPath createdPackToml
+  removeFileIfExistsSafe dumppathsPath
+  removeFileIfExistsSafe logPath
+  case contentResult of
+    Left err =>
+      let logTail = case logResult of
+                      Left _ => ""
+                      Right logContent => unlines (reverse (take 12 (reverse (lines logContent))))
+      in pure $ Left $ "Static chunk " ++ show idx ++ " failed to produce dumppaths JSON: " ++ show err
+                    ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
+    Right content =>
+      if null (trim content)
+         then pure $ Left $ "Static chunk " ++ show idx ++ " produced empty dumppaths JSON"
+         else case parseDumppathsJson content of
+                Left err => pure $ Left $ "Static chunk " ++ show idx ++ " produced unparsable dumppaths JSON: " ++ err
+                Right paths => pure $ Right paths
+
+runStaticDumppathsJsonChunks : String -> String -> IO (Either String String)
+runStaticDumppathsJsonChunks ipkgPath wholeErr = do
+  let (projectDir, _) = splitPath ipkgPath
+  Right ipkgContent <- readFile ipkgPath
+    | Left err => pure $ Left $ wholeErr ++ "\nChunked fallback could not read ipkg: " ++ show err
+  let projectDepends = parseIpkgDepends ipkgContent
+  let sourcedir = parseIpkgSourcedir ipkgContent
+  let projectModules = parseIpkgModules ipkgContent
+  if null projectModules
+     then pure $ Left $ wholeErr ++ "\nChunked fallback found no modules in ipkg."
+     else if length projectModules > 80
+             then pure $ Left $
+               wholeErr ++ "\nChunked fallback skipped: package has "
+               ++ show (length projectModules)
+               ++ " modules, which exceeds the local resource-ceiling threshold."
+     else do
+       uid <- getUniqueId
+       let tempBuildDir = ".idris2-static-dumppaths-build-" ++ uid
+       projectPackToml <- readProjectPackToml projectDir
+       let packTomlContent = generateTempPackToml projectPackToml
+       putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules)..."
+       chunkResults <- runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent (chunkList 8 projectModules) 0 []
+       _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
+       case chunkResults of
+         Left err => pure $ Left $ wholeErr ++ "\nChunked fallback failed: " ++ err
+         Right paths =>
+           let deduped = nub paths in
+           if null deduped
+              then pure $ Left $ wholeErr ++ "\nChunked fallback produced zero path obligations."
+              else pure $ Right $ pathObligationsToDumppathsJson deduped
+  where
+    runChunks : String -> String -> String -> List String -> String -> List (List String) -> Nat -> List PathObligation -> IO (Either String (List PathObligation))
+    runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
+    runChunks projectDir sourcedir tempBuildDir deps packTomlContent (mods :: rest) idx acc = do
+      result <- runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir deps packTomlContent mods idx
+      case result of
+        Left err => pure $ Left err
+        Right paths => runChunks projectDir sourcedir tempBuildDir deps packTomlContent rest (idx + 1) (paths ++ acc)
+
+||| Build an ipkg with forked Idris2 `--dumppaths-json` and return the static
+||| path-obligation JSON. This is a conservative fallback for projects whose
+||| runtime-instrumented test runner is too large to link or execute locally:
+||| the denominator remains real, while runtime hits are intentionally empty.
+export
+runStaticDumppathsJson : String -> IO (Either String String)
+runStaticDumppathsJson ipkgPath = do
+  whole <- runStaticDumppathsJsonWhole ipkgPath
+  case whole of
+    Right content => pure $ Right content
+    Left err => runStaticDumppathsJsonChunks ipkgPath err
+
 ||| Split "path/to/project.ipkg" into ("path/to", "project.ipkg")
 splitIpkgPathLocal : String -> (String, String)
 splitIpkgPathLocal path =
@@ -466,7 +691,7 @@ runProjectDumpcasesWithTempIpkg ipkgPath = do
             removeFileIfExists tempIpkgPath
             pure $ Left err
 
-      buildResult <- buildIpkgWithClean True projectDir tempIpkgName
+      buildResult <- buildIpkgWithClean False projectDir tempIpkgName
       case buildResult of
         Left err => do
           removeFileIfExists tempIdrPath
@@ -891,10 +1116,14 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
   case testModules of
     [] => pure $ Left "No test modules specified"
     _ => do
+      putStrLn "    Preparing path coverage runner..."
       projectDepends <- readProjectDepends projectDir
+      putStrLn $ "    Project dependencies: " ++ show projectDepends
       sourcedir <- readProjectSourcedir projectDir
+      putStrLn $ "    Project sourcedir: " ++ sourcedir
 
       uid <- getUniqueId
+      putStrLn $ "    Path coverage runner id: " ++ uid
       let tempModName = "TempPathRunner_" ++ uid
       let tempExecName = "temp-paths-" ++ uid
       let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
@@ -909,24 +1138,28 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
 
       let runnerSource = generateTempRunner tempModName testModules
+      putStrLn $ "    Writing temp path runner: " ++ tempIdrPath
       Right () <- writeFile tempIdrPath runnerSource
         | Left err => pure $ Left $ "Failed to write temp runner: " ++ show err
 
       let allModules = nub (tempModName :: (projectModules ++ testModules))
       let opts = "--dumppaths-json " ++ dumppathsPath ++ " --dumppathshits " ++ pathHitsPath
       let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just opts) (Just tempBuildDir)
+      putStrLn $ "    Writing temp path ipkg: " ++ tempIpkgPath
       Right () <- writeFile tempIpkgPath ipkgContent
         | Left err => do
             removeFileIfExists tempIdrPath
             pure $ Left $ "Failed to write temp ipkg: " ++ show err
 
+      putStrLn "    Ensuring path coverage pack.toml..."
       Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
         | Left err => do
             removeFileIfExists tempIdrPath
             removeFileIfExists tempIpkgPath
             pure $ Left err
 
-      buildResult <- buildIpkgWithClean True projectDir tempIpkgName
+      putStrLn "    Building temp path coverage runner..."
+      buildResult <- buildIpkgWithClean False projectDir tempIpkgName
       case buildResult of
         Left err => do
           removeFileIfExists tempIdrPath

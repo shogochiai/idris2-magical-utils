@@ -2,7 +2,9 @@
 module DfxCoverage.PathCoverage
 
 import Data.List
+import Data.List1
 import Data.Maybe
+import Data.String
 import System.File
 
 import DfxCoverage.Exclusions
@@ -12,9 +14,39 @@ import public Coverage.Core.RuntimeHit
 
 %default covering
 
+isAsciiUpper : Char -> Bool
+isAsciiUpper c = c >= 'A' && c <= 'Z'
+
+isAsciiLower : Char -> Bool
+isAsciiLower c = c >= 'a' && c <= 'z'
+
+startsWith : (Char -> Bool) -> String -> Bool
+startsWith predicate s =
+  case unpack s of
+    [] => False
+    c :: _ => predicate c
+
+isGeneratedRecordProjectionName : String -> Bool
+isGeneratedRecordProjectionName name =
+  case reverse (forget $ split (== '.') name) of
+    field :: recordName :: _ =>
+         startsWith isAsciiUpper recordName
+      && startsWith isAsciiLower field
+      && not (isInfixOf ":" field)
+      && not (isInfixOf "case block" name)
+    _ => False
+
+isGeneratedRecordProjectionPath : PathObligation -> Bool
+isGeneratedRecordProjectionPath path =
+     path.terminalKind == "reached_clause"
+  && path.steps == []
+  && isNothing path.sourceSpanUnion
+  && isGeneratedRecordProjectionName path.functionName
+
 shouldExcludePath : List ExclPattern -> PathObligation -> Bool
 shouldExcludePath patterns path =
-  isJust (isMethodExcluded patterns path.functionName)
+  isJust (isMethodExcluded patterns path.functionName) ||
+  isGeneratedRecordProjectionPath path
 
 export
 defaultPathExclusions : List ExclPattern

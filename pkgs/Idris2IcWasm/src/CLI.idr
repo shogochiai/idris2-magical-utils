@@ -120,6 +120,8 @@ Gen-entry Options:
   --timer-cmd=N     Generate canister_global_timer with CMD N (recommended)
   --heartbeat-cmd=N Generate canister_heartbeat with CMD N (deprecated, use --timer-cmd)
   --sql-stable      Emit sqlite_stable_save in pre_upgrade (auto if --init=sql_ffi_open)
+  --sql-vfs-memory-id=N
+                    Use SQLite stable-memory VFS anchored at memory/page id N
 
 Cmd-map Annotations:
   methodName=N @inject_time=SLOT        Inject ic0_time()/1e9 into arg slot
@@ -163,6 +165,7 @@ record GenEntryOptions where
   heartbeatCheckpoint  : Maybe Nat  -- --heartbeat-checkpoint=N (deprecated)
   timerCmd             : Maybe Nat  -- --timer-cmd=N
   sqlStable            : Maybe Bool -- --sql-stable (auto-detected from --init=sql_ffi_open)
+  sqlVfsMemoryId       : Maybe Nat  -- --sql-vfs-memory-id=N
 
 defaultGenEntryOptions : GenEntryOptions
 defaultGenEntryOptions = MkGenEntryOptions
@@ -176,6 +179,7 @@ defaultGenEntryOptions = MkGenEntryOptions
   , heartbeatCheckpoint = Nothing
   , timerCmd            = Nothing
   , sqlStable           = Nothing
+  , sqlVfsMemoryId      = Nothing
   }
 
 parseGenEntryArgs : List String -> GenEntryOptions
@@ -195,6 +199,7 @@ parseGenEntryArgs args = go defaultGenEntryOptions args
         Just ("--heartbeat-checkpoint", val) => go ({ heartbeatCheckpoint := parsePositive val } opts) rest
         Just ("--timer-cmd", val) => go ({ timerCmd := parsePositive val } opts) rest
         Just ("--sql-stable", _) => go ({ sqlStable := Just True } opts) rest
+        Just ("--sql-vfs-memory-id", val) => go ({ sqlVfsMemoryId := parsePositive val } opts) rest
         _                             => if arg == "--sql-stable"
                                            then go ({ sqlStable := Just True } opts) rest
                                            else go opts rest
@@ -225,13 +230,16 @@ runGenEntry args = do
   -- Auto-detect --sql-stable: any --init function implies SQLite usage.
   -- You can't init a canister DB without needing stable persistence.
   -- Explicit --sql-stable=false is respected (escape hatch for non-SQLite init).
-  let autoSqlStable = opts.initFn /= ""
+  when (isJust opts.sqlVfsMemoryId && opts.initFn /= "") $ do
+    putStrLn "Error: --sql-vfs-memory-id owns SQLite lifecycle; do not combine it with --init"
+    exitFailure
+  let autoSqlStable = opts.initFn /= "" && not (isJust opts.sqlVfsMemoryId)
       sqlStableFlag = case opts.sqlStable of
                         Just b  => b      -- explicit override
                         Nothing => autoSqlStable  -- auto: init → stable save
   let methods = parseDidFile didContent
       defs    = parseTypeDefinitions didContent
-      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint opts.timerCmd sqlStableFlag
+      genOpts = MkGenOptions opts.ffiPfx opts.libName opts.initFn opts.heartbeatCmd opts.heartbeatCheckpoint opts.timerCmd sqlStableFlag opts.sqlVfsMemoryId
       output  = generateCanisterEntryFull genOpts methods defs cmdMapEntries
   -- Write output file
   Right () <- writeFile opts.outPath output
@@ -242,7 +250,8 @@ runGenEntry args = do
              " (" ++ show (length methods) ++ " methods)" ++
              maybe "" (\n => " [heartbeat CMD=" ++ show n ++ "]") opts.heartbeatCmd ++
              maybe "" (\n => " [timer CMD=" ++ show n ++ "]") opts.timerCmd ++
-             (if sqlStableFlag then " [sql-stable]" else "")
+             (if sqlStableFlag then " [sql-stable]" else "") ++
+             maybe "" (\n => " [sql-vfs memory-id=" ++ show n ++ "]") opts.sqlVfsMemoryId
 
 -- =============================================================================
 -- build-canister options

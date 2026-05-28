@@ -169,6 +169,13 @@ sortFuncsByLine (x :: xs) = insert x (sortFuncsByLine xs)
 countFuncSites : String -> List BranchProbeSite -> Nat
 countFuncSites idrisName = length . filter (\s => s.idrisName == idrisName)
 
+isGeneratedCName : String -> Bool
+isGeneratedCName name =
+  isPrefixOf "tmp." name ||
+  isPrefixOf "var." name ||
+  isPrefixOf "primVar." name ||
+  isPrefixOf "closure." name
+
 mkProbeName : Nat -> String
 mkProbeName idx = "__dfxcov_probe_" ++ show idx
 
@@ -316,4 +323,7 @@ instrumentRefCCFile cFile buildDir projectDir = do
           pure $
             case mFullName of
               Just fullName => { idrisName := fullName } site
-              Nothing => { idrisName := loc.file } site
+              Nothing =>
+                if isGeneratedCName site.idrisName
+                   then { idrisName := loc.file } site
+                   else site

@@ -195,6 +195,10 @@ defaultExclusions =
 
     -- Default interface implementations (auto-generated, trivial)
   , suffixPattern "./=" "Default Eq./= implementation"
+  , suffixPattern "./" "Default Eq./= JavaScript backend shorthand"
+  , containsPattern ".(." "Record projection implementation"
+  , containsPattern " implementation at " "Interface implementation wrapper"
+  , containsPattern ".showPrec" "Show implementation wrapper"
   ]
 
 -- =============================================================================

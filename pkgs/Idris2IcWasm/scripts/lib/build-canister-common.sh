@@ -34,13 +34,13 @@ ensure_refc_runtime() {
         echo "Downloading RefC runtime sources..."
         mkdir -p "$REFC_SRC"
         for f in memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clock.c buffer.c prim.c refc_util.c; do
-            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/main/support/refc/$f"
+            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f"
         done
         for f in runtime.h cBackend.h datatypes.h _datatypes.h refc_util.h mathFunctions.h memoryManagement.h stringOps.h casts.h clock.h buffer.h prim.h threads.h; do
-            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/main/support/refc/$f"
+            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f"
         done
         for f in idris_support.c idris_file.c idris_directory.c idris_util.c idris_support.h idris_file.h idris_directory.h idris_util.h; do
-            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/main/support/c/$f"
+            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f"
         done
     fi
 }
@@ -233,7 +233,7 @@ link_canister_wasm() {
     fi
     include_dirs+=(${EXTRA_INCLUDE_DIRS[@]+"${EXTRA_INCLUDE_DIRS[@]}"})
 
-    local force_includes=("$MINI_GMP/gmp.h")
+    local force_includes=("$REFC_INCLUDE/datatypes.h" "$REFC_INCLUDE/cBackend.h" "$MINI_GMP/gmp.h")
     force_includes+=(${EXTRA_FORCE_INCLUDES[@]+"${EXTRA_FORCE_INCLUDES[@]}"})
 
     local emcc_flags=(

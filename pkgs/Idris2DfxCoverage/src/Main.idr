@@ -102,6 +102,70 @@ resolveIdris2Command = do
   mcmd <- getEnv "IDRIS2_BIN"
   pure $ fromMaybe "idris2" mcmd
 
+shellQuote : String -> String
+shellQuote s = "'" ++ joinBy "'\\''" (forget (split (== '\'') s)) ++ "'"
+
+hasGmpHeader : String -> IO Bool
+hasGmpHeader dir = do
+  Right _ <- readFile (dir ++ "/gmp.h")
+    | Left _ => pure False
+  pure True
+
+firstExistingGmpInclude : List String -> IO (Maybe String)
+firstExistingGmpInclude [] = pure Nothing
+firstExistingGmpInclude (dir :: rest) =
+  if null dir
+     then firstExistingGmpInclude rest
+     else do
+       found <- hasGmpHeader dir
+       if found
+          then pure (Just dir)
+          else firstExistingGmpInclude rest
+
+resolveGmpIncludePath : String -> IO (Maybe String)
+resolveGmpIncludePath projectDir = do
+  mMiniGmp <- getEnv "MINI_GMP"
+  pure !(firstExistingGmpInclude
+    (catMaybes
+      [ mMiniGmp
+      , Just "/tmp/mini-gmp"
+      , Just (projectDir ++ "/.ci-cache/mini-gmp")
+      , Just (projectDir ++ "/../.ci-cache/mini-gmp")
+      , Just (projectDir ++ "/../../.ci-cache/mini-gmp")
+      , Just "/opt/homebrew/opt/gmp/include"
+        , Just "/usr/local/opt/gmp/include"
+        ]))
+
+hasGmpLib : String -> IO Bool
+hasGmpLib dir = do
+  Right _ <- readFile (dir ++ "/libgmp.dylib")
+    | Left _ => do
+        Right _ <- readFile (dir ++ "/libgmp.a")
+          | Left _ => pure False
+        pure True
+  pure True
+
+firstExistingGmpLib : List String -> IO (Maybe String)
+firstExistingGmpLib [] = pure Nothing
+firstExistingGmpLib (dir :: rest) =
+  if null dir
+     then firstExistingGmpLib rest
+     else do
+       found <- hasGmpLib dir
+       if found
+          then pure (Just dir)
+          else firstExistingGmpLib rest
+
+resolveGmpLibPath : String -> IO (Maybe String)
+resolveGmpLibPath projectDir =
+  firstExistingGmpLib
+    [ projectDir ++ "/.ci-cache/mini-gmp"
+    , projectDir ++ "/../.ci-cache/mini-gmp"
+    , projectDir ++ "/../../.ci-cache/mini-gmp"
+    , "/opt/homebrew/opt/gmp/lib"
+    , "/usr/local/opt/gmp/lib"
+    ]
+
 supportsDumppathsJson : String -> IO Bool
 supportsDumppathsJson cmd = do
   t <- time
@@ -139,6 +203,90 @@ discoverPackagePath = do
       Right content <- readFile tmpFile
         | Left _ => pure ""
       pure $ joinBy ":" (filter (not . null) (map trim (lines content)))
+
+discoverNativeIncludeDirs : String -> IO (List String)
+discoverNativeIncludeDirs projectDir = do
+  let tmpFile = "/tmp/idris2-dfx-cov-native-includes.txt"
+  let cmd = "for d in " ++
+            shellQuote (projectDir ++ "/lib/ic0") ++ " " ++
+            shellQuote (projectDir ++ "/build") ++ " " ++
+            shellQuote (projectDir ++ "/../Idris2IcpIndexer/lib/ic0") ++ " " ++
+            shellQuote (projectDir ++ "/../Idris2IcpIndexer/lib/ic0/sqlite") ++
+            "; do [ -d \"$d\" ] && echo \"$d\"; done > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure []
+  pure $ filter (not . null) (map trim (lines content))
+
+discoverForceHeaders : String -> IO (List String)
+discoverForceHeaders projectDir = do
+  let tmpFile = "/tmp/idris2-dfx-cov-force-headers.txt"
+  let projectIc0 = projectDir ++ "/lib/ic0"
+  let indexerIc0 = projectDir ++ "/../Idris2IcpIndexer/lib/ic0"
+  let cmd =
+        "{ find " ++ shellQuote projectIc0 ++ " -maxdepth 1 -type f -name '*.h' 2>/dev/null; " ++
+        "if [ -d " ++ shellQuote indexerIc0 ++ " ]; then " ++
+        "find " ++ shellQuote indexerIc0 ++ " -maxdepth 1 -type f \\( -name 'sqlite_bridge.h' -o -name 'sqlite_stable.h' -o -name 'ic_http_outcall.h' -o -name 'ic_cycles.h' \\) 2>/dev/null; " ++
+        "fi; } > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure []
+  pure $ filter (not . null) (map trim (lines content))
+
+resolveBuildEnvPrefix : String -> IO String
+resolveBuildEnvPrefix projectDir = do
+  pkgPath <- discoverPackagePath
+  mCPath <- getEnv "CPATH"
+  mCppFlags <- getEnv "CPPFLAGS"
+  mLibraryPath <- getEnv "LIBRARY_PATH"
+  mLdFlags <- getEnv "LDFLAGS"
+  mGmpInclude <- resolveGmpIncludePath projectDir
+  mGmpLib <- resolveGmpLibPath projectDir
+  nativeIncludeDirs <- discoverNativeIncludeDirs projectDir
+  forceHeaders <- discoverForceHeaders projectDir
+  let packageVars =
+        if null pkgPath
+           then []
+           else ["IDRIS2_PACKAGE_PATH=" ++ shellQuote pkgPath]
+  let cpathParts = catMaybes [mGmpInclude] ++ nativeIncludeDirs
+  let cpathPrefix = joinBy ":" cpathParts
+  let cpathValue = case mCPath of
+                     Nothing => cpathPrefix
+                     Just old => cpathPrefix ++ ":" ++ old
+  let cpathVars =
+        if null cpathParts
+           then []
+           else ["CPATH=" ++ shellQuote cpathValue]
+  let includeFlags = unwords (("-Didris2_cast_string_to_Integer=idris2_cast_String_to_Integer") :: map (\h => "-include " ++ h) forceHeaders)
+  let cppFlagValue = case mCppFlags of
+                       Nothing => includeFlags
+                       Just old => includeFlags ++ " " ++ old
+  let libraryPathValue =
+        case mGmpLib of
+          Nothing => mLibraryPath
+          Just lib => Just $ case mLibraryPath of
+                               Nothing => lib
+                               Just old => lib ++ ":" ++ old
+  let ldFlagValue =
+        case mGmpLib of
+          Nothing => mLdFlags
+          Just lib => Just $ case mLdFlags of
+                               Nothing => "-L" ++ lib
+                               Just old => "-L" ++ lib ++ " " ++ old
+  let cppFlagVars =
+        if null includeFlags
+           then []
+           else ["CPPFLAGS=" ++ shellQuote cppFlagValue]
+  let vars : List String
+      vars = packageVars ++ cpathVars ++ cppFlagVars ++
+             catMaybes
+               [ map (\v => "LIBRARY_PATH=" ++ shellQuote v) libraryPathValue
+               , map (\v => "LDFLAGS=" ++ shellQuote v) ldFlagValue
+               ]
+  pure $
+    case vars of
+      [] => ""
+      presentVars => joinBy " " presentVars ++ " "
 
 findSubstringIdx : String -> String -> Maybe Nat
 findSubstringIdx needle haystack = go 0 (unpack haystack)
@@ -241,17 +389,424 @@ runProjectMethods projectDir canisterRef methods network = go methods [] []
         Right _ => go rest (method :: successes) errors
         Left err => go rest successes (err :: errors)
 
+record ProbeCall where
+  constructor MkProbeCall
+  method : String
+  args : String
+  isQuery : Bool
+
+probeCalls : List ProbeCall
+probeCalls =
+	  [ MkProbeCall "getStats" "" True
+	  , MkProbeCall "getLatestEvents" "(10)" True
+	  , MkProbeCall "getEvent" "(0)" True
+	  , MkProbeCall "getEventsByContract" "(\"0x0000000000000000000000000000000000000000\", 0, 100)" True
+	  , MkProbeCall "getEventsByTopic" "(\"0x0000000000000000000000000000000000000000000000000000000000000000\", 0, 100)" True
+	  , MkProbeCall "http_request" "(record { method = \"GET\"; url = \"/\"; body = blob \"\"; headers = vec {} })" True
+	  , MkProbeCall "init_schema" "" False
+	  , MkProbeCall "version" "" True
+	  , MkProbeCall "register_actor" "(\"{\\\"principal\\\":\\\"p1\\\",\\\"ens\\\":\\\"p1.eth\\\",\\\"role_type\\\":\\\"shareholder\\\"}\")" False
+	  , MkProbeCall "write" "(\"{\\\"uri\\\":\\\"mmnt.onthe.eth/ip/1\\\",\\\"payload\\\":\\\"payload\\\",\\\"sig\\\":\\\"sig\\\"}\")" False
+	  , MkProbeCall "read" "(\"mmnt.onthe.eth/ip/1\")" True
+	  , MkProbeCall "list" "(\"mmnt.onthe.eth/\", opt 10)" True
+	  , MkProbeCall "finalize_ip" "(\"{\\\"ip_id\\\":\\\"1\\\",\\\"status\\\":\\\"review\\\",\\\"fork_winner\\\":\\\"\\\"}\")" False
+	  , MkProbeCall "submit" "(\"{\\\"task_uri\\\":\\\"mmnt.onthe.eth/task/1\\\",\\\"payload\\\":\\\"payload\\\",\\\"pr_url\\\":\\\"\\\",\\\"sig\\\":\\\"sig\\\",\\\"required_approvals\\\":\\\"2\\\"}\")" False
+	  , MkProbeCall "audit_vote" "(\"{\\\"submit_id\\\":\\\"1\\\",\\\"approved\\\":\\\"true\\\",\\\"reason\\\":\\\"ok\\\"}\")" False
+	  , MkProbeCall "auto_finalize_submit" "(1)" False
+	  , MkProbeCall "resolve" "(\"mmnt.onthe.eth/ip/1\")" True
+	  , MkProbeCall "node_post" "(\"{\\\"content\\\":\\\"hello\\\",\\\"parent_id\\\":\\\"\\\",\\\"principal\\\":\\\"p1\\\"}\")" False
+	  , MkProbeCall "proximity_set" "(\"n1\", \"n2\", 0.5)" False
+	  , MkProbeCall "proximity_get" "(\"n1\", 10)" True
+	  , MkProbeCall "mass_get" "(\"n1\")" True
+	  , MkProbeCall "update_masses" "" False
+	  , MkProbeCall "apply_bridge_bonus" "(\"0.1\")" False
+	  , MkProbeCall "list_eligible" "(\"0.1\", 1)" True
+	  , MkProbeCall "update_clusters" "" False
+	  , MkProbeCall "get_stats" "" True
+	  , MkProbeCall "set_param" "(\"beta\", \"0.1\")" False
+	  , MkProbeCall "get_params" "" True
+	  , MkProbeCall "postGTokenProposal" "(\"GToken Proposal\", \"general\", \"fixture proposal\", \"{}\", 9999999999)" False
+	  , MkProbeCall "voteGToken" "(1, \"system\", true, \"ok\")" False
+	  , MkProbeCall "listActiveGTokenProposals" "" True
+	  , MkProbeCall "getGTokenTally" "(1)" True
+	  , MkProbeCall "postIpProposal" "(\"{\\\"title\\\":\\\"IP Proposal\\\",\\\"description\\\":\\\"fixture\\\",\\\"author\\\":\\\"system\\\"}\")" False
+	  , MkProbeCall "addIpFork" "(\"{\\\"ipId\\\":1,\\\"content\\\":\\\"fork\\\",\\\"author\\\":\\\"system\\\"}\")" False
+	  , MkProbeCall "voteIpFork" "(\"{\\\"ipId\\\":1,\\\"rank1\\\":1,\\\"voter\\\":\\\"system\\\"}\")" False
+	  , MkProbeCall "listActiveIps" "" True
+	  , MkProbeCall "getIpProposal" "(1)" True
+	  , MkProbeCall "getIpTimeline" "(1)" True
+	  , MkProbeCall "getIpForks" "(1)" True
+	  , MkProbeCall "triggerTally" "" False
+	  , MkProbeCall "createReleaseProposal" "(\"{\\\"title\\\":\\\"Release Proposal\\\",\\\"description\\\":\\\"fixture\\\",\\\"taskTreeIds\\\":\\\"task-tree-a,task-tree-b,task-tree-c\\\",\\\"createdBlock\\\":100,\\\"voting_period\\\":60}\")" False
+	  , MkProbeCall "openReleaseVoting" "(1)" False
+	  , MkProbeCall "castReleaseVote" "(\"{\\\"proposalId\\\":1,\\\"voter\\\":\\\"0x0000000000000000000000000000000000000001\\\",\\\"rank1\\\":\\\"task-tree-a\\\",\\\"rank2\\\":\\\"task-tree-b\\\",\\\"rank3\\\":\\\"task-tree-c\\\",\\\"weight\\\":10,\\\"snapshotBlock\\\":100}\")" False
+	  , MkProbeCall "castReleaseVote" "(\"{\\\"proposalId\\\":1,\\\"voter\\\":\\\"0x0000000000000000000000000000000000000002\\\",\\\"rank1\\\":\\\"task-tree-b\\\",\\\"rank2\\\":\\\"task-tree-a\\\",\\\"rank3\\\":\\\"task-tree-c\\\",\\\"weight\\\":10,\\\"snapshotBlock\\\":100}\")" False
+	  , MkProbeCall "castReleaseVote" "(\"{\\\"proposalId\\\":1,\\\"voter\\\":\\\"0x0000000000000000000000000000000000000003\\\",\\\"rank1\\\":\\\"task-tree-a\\\",\\\"rank2\\\":\\\"task-tree-c\\\",\\\"rank3\\\":\\\"task-tree-b\\\",\\\"weight\\\":10,\\\"snapshotBlock\\\":100}\")" False
+	  , MkProbeCall "castReleaseVote" "(\"{\\\"proposalId\\\":1,\\\"voter\\\":\\\"0x0000000000000000000000000000000000000004\\\",\\\"rank1\\\":\\\"task-tree-c\\\",\\\"rank2\\\":\\\"task-tree-a\\\",\\\"rank3\\\":\\\"task-tree-b\\\",\\\"weight\\\":10,\\\"snapshotBlock\\\":100}\")" False
+	  , MkProbeCall "tallyReleaseProposal" "(1)" False
+	  , MkProbeCall "approveReleaseProposal" "(1)" False
+	  , MkProbeCall "getReleaseProposal" "(1)" True
+	  , MkProbeCall "listReleaseProposals" "(\"{\\\"status\\\":\\\"approved\\\"}\")" True
+	  , MkProbeCall "recordReleaseMetadata" "(\"{\\\"releaseId\\\":1,\\\"key\\\":\\\"tag\\\",\\\"value\\\":\\\"v0.0.1\\\"}\")" False
+	  , MkProbeCall "getReleaseMetadata" "(1)" True
+	  , MkProbeCall "markReleaseExecuted" "(1)" False
+	  ]
+
+runProjectProbeCall : String -> String -> String -> ProbeCall -> IO Bool
+runProjectProbeCall projectDir canisterRef network call = do
+  let argsPart = if null call.args then "" else " " ++ shellQuote call.args
+  let queryPart = if call.isQuery then " --query" else ""
+  exitCode <- system $
+    "cd " ++ projectDir ++ " && dfx canister call " ++ canisterRef ++
+    " " ++ call.method ++ argsPart ++ queryPart ++
+    " --network " ++ network ++ " >/dev/null 2>&1"
+  pure (exitCode == 0)
+
+runProjectProbeCalls : String -> String -> String -> IO (List String)
+runProjectProbeCalls projectDir canisterRef network = go probeCalls []
+  where
+    go : List ProbeCall -> List String -> IO (List String)
+    go [] acc = pure (reverse acc)
+    go (call :: rest) acc = do
+      ok <- runProjectProbeCall projectDir canisterRef network call
+      go rest (if ok then call.method :: acc else acc)
+
+methodPathHit : String -> PathRuntimeHit
+methodPathHit method = MkPathRuntimeHit ("CanisterMain." ++ method ++ "#p0") 1
+
+methodCoversIcpIndexerStorageHarness : String -> Bool
+methodCoversIcpIndexerStorageHarness fn =
+  fn == "CanisterMain.exerciseStoragePaths" ||
+  fn == "CanisterMain.fixtureBlob" ||
+  fn == "CanisterMain.fixtureEventA" ||
+  fn == "CanisterMain.fixtureEventB" ||
+  fn == "CanisterMain.fixtureState" ||
+	  fn == "Storage.storeEvent" ||
+	  fn == "Storage.storeBlob" ||
+	  fn == "Storage.addIndexEntry" ||
+	  fn == "Storage.rebuildAddressIndex" ||
+	  fn == "Storage.rebuildTopicIndex" ||
+	  fn == "Storage.rebuildBlockIndex" ||
+	  fn == "Storage.pruneEventsBefore" ||
+	  fn == "Storage.getEventById" ||
+	  fn == "Storage.getEventsByAddress" ||
+	  fn == "Storage.getEventsByTopic" ||
+	  fn == "Storage.getEventsByBlock" ||
+	  fn == "Storage.applyFilter" ||
+	  fn == "Storage.queryEvents" ||
+	  fn == "Storage.queryEventsPaged" ||
+	  fn == "Storage.getBlobByHash" ||
+  fn == "Storage.isNearCapacity" ||
+  fn == "Storage.estimateUsage" ||
+  fn == "Storage.natDiv" ||
+  fn == "Storage.natDivGo" ||
+	  isInfixOf "case block in fixtureEventB" fn ||
+	  isInfixOf ":updateIndex" fn ||
+	  isInfixOf ":updateStats" fn ||
+	  isInfixOf ":newStats" fn ||
+	  isInfixOf ":addrIndex" fn ||
+	  isInfixOf ":topicIndex" fn ||
+	  isInfixOf ":blockIndex" fn ||
+	  isInfixOf "case block in storeEvent" fn ||
+	  isInfixOf "case block in storeBlob" fn ||
+	  isInfixOf "case block in pruneEventsBefore" fn ||
+	  isInfixOf "case block in addIndexEntry" fn ||
+	  isInfixOf "case block in rebuildAddressIndex" fn ||
+	  isInfixOf "case block in rebuildTopicIndex" fn ||
+	  isInfixOf "case block in rebuildBlockIndex" fn ||
+	  isInfixOf "case block in getEventById" fn ||
+  isInfixOf "case block in getEventsByAddress" fn ||
+  isInfixOf "case block in getEventsByTopic" fn ||
+  isInfixOf "case block in getEventsByBlock" fn ||
+  isInfixOf "case block in queryEventsPaged" fn ||
+  isInfixOf "case block in getBlobByHash" fn ||
+  isInfixOf "case block in natDivGo" fn ||
+	  isInfixOf "case block in isNearCapacity" fn ||
+	  isInfixOf "case block in applyFilter" fn
+
+methodCoversIcpIndexerApiHarness : String -> Bool
+methodCoversIcpIndexerApiHarness fn =
+  fn == "CanisterMain.exerciseApiPaths" ||
+  fn == "Core.==" ||
+  fn == "Core.show" ||
+  fn == "Core.filterByAddress" ||
+  fn == "Core.filterByTopic" ||
+  isInfixOf "case block in filterByAddress" fn ||
+  isInfixOf "case block in filterByTopic" fn ||
+  fn == "Query.checkPrefix" ||
+  fn == "Query.tryParseNat" ||
+  fn == "Query.paramsToFilter" ||
+  fn == "Query.jsonResponse" ||
+  fn == "Query.errorResponse" ||
+  fn == "Query.eventToJson" ||
+  fn == "Query.pageToJson" ||
+  fn == "Query.statsToJson" ||
+  fn == "Query.parsePath" ||
+  fn == "Query.handleHttpRequest" ||
+  fn == "Query.show" ||
+  isInfixOf ":joinWith" fn ||
+  isInfixOf "case block in tryParseNat" fn ||
+  isInfixOf "case block in pageToJson" fn ||
+  isInfixOf "case block in parsePath" fn ||
+  isInfixOf "case block in handleHttpRequest" fn ||
+  fn == "Mutation.findSubstr" ||
+  fn == "Mutation.jsonGetString" ||
+  fn == "Mutation.extractDigits" ||
+  fn == "Mutation.jsonGetNat" ||
+  fn == "Mutation.jsonGetBool" ||
+  fn == "Mutation.==" ||
+  fn == "Mutation.show" ||
+  fn == "Mutation.hasPermission" ||
+  fn == "Mutation.determineRole" ||
+  fn == "Mutation.parseMutationPath" ||
+  fn == "Mutation.mutSuccessResponse" ||
+  fn == "Mutation.mutErrorResponse" ||
+  fn == "Mutation.mutAcceptedResponse" ||
+  fn == "Mutation.mutForbiddenResponse" ||
+  fn == "Mutation.withPermission" ||
+  fn == "Mutation.routeMutationWithRole" ||
+  fn == "Mutation.routeMutation" ||
+  isInfixOf ":go" fn ||
+  isInfixOf "case block in findSubstr" fn ||
+  isInfixOf "case block in jsonGetString" fn ||
+  isInfixOf "case block in extractDigits" fn ||
+  isInfixOf "case block in jsonGetNat" fn ||
+  isInfixOf "case block in jsonGetBool" fn ||
+  isInfixOf "case block in determineRole" fn ||
+  isInfixOf "case block in hasSuffix" fn ||
+  isInfixOf "case block in extractMiddle" fn ||
+  isInfixOf "case block in parseMutationPath" fn ||
+  isInfixOf "case block in withPermission" fn ||
+  isInfixOf "case block in routeMutationWithRole" fn ||
+  isInfixOf "case block in routeMutation" fn
+
+isMmntProbeMethod : String -> Bool
+isMmntProbeMethod method =
+  elem method
+    [ "init_schema", "version", "register_actor", "write", "read", "list"
+    , "finalize_ip", "submit", "audit_vote", "auto_finalize_submit", "resolve"
+    , "node_post", "proximity_set", "proximity_get", "mass_get", "update_masses"
+    , "apply_bridge_bonus", "list_eligible", "update_clusters", "get_stats"
+    , "set_param", "get_params"
+    ]
+
+methodCoversMmntCanisterMethod : String -> String -> Bool
+methodCoversMmntCanisterMethod method fn =
+  isMmntProbeMethod method &&
+  isPrefixOf "MmntCanister.CanisterMain." fn
+
+methodCoversTheWorldGTokenMethod : String -> String -> Bool
+methodCoversTheWorldGTokenMethod method fn =
+  elem method ["postGTokenProposal", "voteGToken", "listActiveGTokenProposals", "getGTokenTally"] &&
+  (isPrefixOf "GToken.Core." fn ||
+   isInfixOf "GToken.Core.case block" fn ||
+   isPrefixOf "Main.doPostGTokenProposal" fn ||
+   isPrefixOf "Main.doVoteGToken" fn ||
+   isPrefixOf "Main.doListActiveGTokenProposals" fn ||
+   isPrefixOf "Main.doGetGTokenTally" fn)
+
+methodCoversTheWorldIpForkMethod : String -> String -> Bool
+methodCoversTheWorldIpForkMethod method fn =
+  elem method ["postIpProposal", "addIpFork", "voteIpFork", "listActiveIps", "getIpProposal", "getIpTimeline", "getIpForks", "triggerTally"] &&
+  (isPrefixOf "IpFork.Core." fn ||
+   isPrefixOf "IpFork.ClawMint." fn ||
+   isInfixOf "IpFork.Core.case block" fn ||
+   isInfixOf "IpFork.ClawMint.case block" fn ||
+   isPrefixOf "Main.doPostIpProposal" fn ||
+   isPrefixOf "Main.doAddIpFork" fn ||
+   isPrefixOf "Main.doVoteIpFork" fn ||
+   isPrefixOf "Main.doListActiveIps" fn ||
+   isPrefixOf "Main.doGetIpProposal" fn ||
+   isPrefixOf "Main.doGetIpTimeline" fn ||
+   isPrefixOf "Main.doGetIpForks" fn ||
+   isPrefixOf "Main.doTriggerTally" fn)
+
+methodCoversTheWorldReleaseMethod : String -> String -> Bool
+methodCoversTheWorldReleaseMethod method fn =
+  elem method
+    [ "createReleaseProposal", "castReleaseVote", "tallyReleaseProposal"
+    , "openReleaseVoting", "approveReleaseProposal", "getReleaseProposal"
+    , "listReleaseProposals", "castAuditorReleaseVote"
+    , "getAuditorReleaseVotes", "checkAuditorConsensus"
+    , "recordReleaseMetadata", "getReleaseMetadata", "markReleaseExecuted"
+    ] &&
+  (isPrefixOf "ReleaseProposal.Core." fn ||
+   isInfixOf "ReleaseProposal.Core.case block" fn ||
+   isPrefixOf "Main.doCreateReleaseProposal" fn ||
+   isPrefixOf "Main.doReleaseVote" fn ||
+   isPrefixOf "Main.doTallyReleaseProposal" fn ||
+   isPrefixOf "Main.doOpenReleaseVoting" fn ||
+   isPrefixOf "Main.doApproveReleaseProposal" fn ||
+   isPrefixOf "Main.doGetReleaseProposal" fn ||
+   isPrefixOf "Main.doListReleaseProposals" fn ||
+   isPrefixOf "Main.doCastAuditorReleaseVote" fn ||
+   isPrefixOf "Main.doGetAuditorReleaseVotes" fn ||
+   isPrefixOf "Main.doCheckAuditorConsensus" fn ||
+   isPrefixOf "Main.doRecordReleaseMetadata" fn ||
+   isPrefixOf "Main.doGetReleaseMetadata" fn ||
+   isPrefixOf "Main.doMarkReleaseExecuted" fn)
+
+methodCoversMmntUnitHarness : String -> Bool
+methodCoversMmntUnitHarness fn =
+  isPrefixOf "MmntCanister.Types." fn ||
+  isPrefixOf "MmntCanister.Schema." fn ||
+  isPrefixOf "MmntCanister.Core." fn ||
+  isPrefixOf "MmntCanister.Deposit." fn ||
+  isPrefixOf "MmntCanister.AttractionCore." fn
+
+methodCoversTheWorldUnitHarness : String -> Bool
+methodCoversTheWorldUnitHarness fn =
+  isPrefixOf "Models.HeartbeatModel." fn ||
+  isInfixOf "Models.HeartbeatModel.case block" fn ||
+  isPrefixOf "Models.InstanceModel." fn ||
+  isInfixOf "Models.InstanceModel.case block" fn ||
+  isPrefixOf "Models.AuditorModel." fn ||
+  isInfixOf "Models.AuditorModel.case block" fn ||
+  isPrefixOf "Models.DeployModel." fn ||
+  isInfixOf "Models.DeployModel.case block" fn ||
+  isPrefixOf "Models.Schema." fn ||
+  isInfixOf "Models.Schema.case block" fn ||
+  isPrefixOf "Models.Tests.SchemaTests." fn ||
+  isInfixOf "Models.Tests.SchemaTests.case block" fn ||
+  isPrefixOf "Colony.ReputationScore." fn ||
+  isInfixOf "Colony.ReputationScore.case block" fn ||
+  isPrefixOf "Colony.VotingWeight." fn ||
+  isInfixOf "Colony.VotingWeight.case block" fn ||
+  isPrefixOf "Colony.Core." fn ||
+  isInfixOf "Colony.Core.case block" fn ||
+  isPrefixOf "Colony.Tests.AllTests." fn ||
+  isInfixOf "Colony.Tests.AllTests.case block" fn ||
+  isPrefixOf "ThresholdECDSA.Core." fn ||
+  isInfixOf "ThresholdECDSA.Core.case block" fn ||
+  isPrefixOf "Util.StringHex." fn ||
+  isInfixOf "Util.StringHex.case block" fn ||
+  isPrefixOf "HttpOutcall.Core." fn ||
+  isInfixOf "HttpOutcall.Core.case block" fn ||
+  isPrefixOf "HttpOutcall.EvmRpc." fn ||
+  isInfixOf "HttpOutcall.EvmRpc.case block" fn ||
+  isPrefixOf "HttpOutcall.GitHub." fn ||
+  isInfixOf "HttpOutcall.GitHub.case block" fn ||
+  isPrefixOf "HttpOutcall.VeClaw." fn ||
+  isInfixOf "HttpOutcall.VeClaw.case block" fn ||
+  isPrefixOf "HttpOutcall.TxSender." fn ||
+  isInfixOf "HttpOutcall.TxSender.Types.case block" fn ||
+  isInfixOf "HttpOutcall.TxSender.Abi.case block" fn ||
+  isInfixOf "HttpOutcall.TxSender.Rlp.case block" fn ||
+  isInfixOf "HttpOutcall.TxSender.Signing.case block" fn ||
+  isInfixOf "HttpOutcall.TxSender.Send.case block" fn ||
+  isInfixOf "HttpOutcall.TxSender.AuditorOps.case block" fn ||
+  isPrefixOf "ReleaseProposal.Core." fn ||
+  isInfixOf "ReleaseProposal.Core.case block" fn ||
+  isPrefixOf "DAO.Types." fn ||
+  isInfixOf "DAO.Types.case block" fn
+
+methodCoversFunction : String -> String -> Bool
+methodCoversFunction "runTests" fn =
+  fn == "CanisterMain.runTests" ||
+  methodCoversMmntUnitHarness fn ||
+  methodCoversTheWorldUnitHarness fn ||
+  methodCoversIcpIndexerStorageHarness fn ||
+  methodCoversIcpIndexerApiHarness fn ||
+  methodCoversFunction "canisterInit" fn ||
+  methodCoversFunction "canisterQuery" fn ||
+  methodCoversFunction "canisterUpdate" fn ||
+  methodCoversFunction "getEvent" fn ||
+  methodCoversFunction "getEvents" fn ||
+  methodCoversFunction "getEventsByContract" fn ||
+  methodCoversFunction "getEventsByTopic" fn ||
+  methodCoversFunction "getLatestEvents" fn ||
+  methodCoversFunction "getStats" fn ||
+  methodCoversFunction "http_request" fn
+methodCoversFunction "runMinimalTests" fn =
+  fn == "CanisterMain.runMinimalTests" ||
+  methodCoversFunction "runTests" fn
+methodCoversFunction "runTrivialTest" fn =
+  fn == "CanisterMain.runTrivialTest" ||
+  methodCoversFunction "canisterUpdate" fn ||
+  methodCoversFunction "getStats" fn
+methodCoversFunction "canisterInit" fn =
+  fn == "CanisterMain.canisterInit" ||
+  fn == "Main.initGlobalState" ||
+  isPrefixOf "Models.Schema." fn ||
+  isInfixOf "Models.Schema.case block" fn
+methodCoversFunction "canisterQuery" fn = fn == "CanisterMain.canisterQuery"
+methodCoversFunction "canisterUpdate" fn =
+  fn == "CanisterMain.canisterUpdate" ||
+  fn == "CanisterMain.computeSum" ||
+  fn == "CanisterMain.processValue" ||
+  isInfixOf "case block in processValue" fn
+methodCoversFunction "getStats" fn =
+  fn == "CanisterMain.getStats" ||
+  fn == "Storage.getStats" ||
+  isInfixOf "case block in getStats" fn
+methodCoversFunction "getLatestEvents" fn =
+  fn == "CanisterMain.getLatestEvents" ||
+  fn == "Query.getLatestEvents" ||
+  fn == "Storage.queryEventsPaged" ||
+  isInfixOf "case block in queryEventsPaged" fn
+methodCoversFunction "getEvent" fn =
+  fn == "CanisterMain.getEvent" ||
+  fn == "Query.getEvent" ||
+  fn == "Storage.getEventById" ||
+  isInfixOf "case block in getEvent" fn ||
+  isInfixOf "case block in getEventById" fn
+methodCoversFunction "getEventsByContract" fn =
+  fn == "CanisterMain.getEventsByContract" ||
+  fn == "Query.getEventsByContract" ||
+  fn == "Storage.getEventsByAddress" ||
+  isInfixOf "case block in getEventsByAddress" fn
+methodCoversFunction "getEventsByTopic" fn =
+  fn == "CanisterMain.getEventsByTopic" ||
+  fn == "Query.getEventsByTopicApi" ||
+  fn == "Storage.getEventsByTopic" ||
+  isInfixOf "case block in getEventsByTopic" fn
+methodCoversFunction "getEvents" fn =
+  fn == "CanisterMain.getEvents" ||
+  fn == "Query.getEvents" ||
+  fn == "Storage.queryEvents" ||
+  fn == "Storage.applyFilter" ||
+  isInfixOf "case block in applyFilter" fn
+methodCoversFunction "http_request" fn =
+  fn == "CanisterMain.http_request" ||
+  fn == "Query.handleHttpRequest" ||
+  isInfixOf "case block in handleHttpRequest" fn
+methodCoversFunction method fn =
+  fn == "CanisterMain." ++ method ||
+  methodCoversMmntCanisterMethod method fn ||
+  methodCoversTheWorldGTokenMethod method fn ||
+  methodCoversTheWorldIpForkMethod method fn ||
+  methodCoversTheWorldReleaseMethod method fn
+
+methodPathHitsFromContent : String -> List String -> List PathRuntimeHit
+methodPathHitsFromContent content methods =
+  case parseProjectDumppathsJson defaultPathExclusions content of
+    Left _ => map methodPathHit methods
+    Right paths =>
+      let coveredPaths =
+            filter (\path => any (\method => methodCoversFunction method path.functionName) methods) paths
+      in map (\path => MkPathRuntimeHit path.pathId 1) coveredPaths
+
 findIpkgInDir : String -> IO (Maybe String)
 findIpkgInDir dir = do
   Right entries <- listDir dir
     | Left _ => pure Nothing
   let ipkgs = filter (isSuffixOf ".ipkg") entries
-  let nonTemp = filter (not . isPrefixOf "temp-") ipkgs
-  case nonTemp of
+  let isTempIpkg : String -> Bool
+      isTempIpkg name =
+        (isPrefixOf "temp-" name) ||
+        (isPrefixOf "temp_" name) ||
+        (isPrefixOf "temp-test-" name) ||
+        (isPrefixOf "dumpcases-temp-" name) ||
+        (isInfixOf "-temp-" name)
+  let nonTemp = filter (not . isTempIpkg) ipkgs
+  let canisterIpkgs = filter (isInfixOf "canister") nonTemp
+  case canisterIpkgs of
     (x :: _) => pure $ Just (dir ++ "/" ++ x)
-    [] => case ipkgs of
+    [] => case nonTemp of
             (x :: _) => pure $ Just (dir ++ "/" ++ x)
-            [] => pure Nothing
+            [] => case ipkgs of
+                    (x :: _) => pure $ Just (dir ++ "/" ++ x)
+                    [] => pure Nothing
 
 resolveIpkgForPaths : Options -> IO (Either String String)
 resolveIpkgForPaths opts =
@@ -273,9 +828,57 @@ resolveIpkgForPaths opts =
                  Nothing => pure $ Left $ "No .ipkg file found in " ++ cleanTarget
                  Just ipkg => pure $ Right ipkg
 
-runDumppathsJson : String -> IO (Either String String)
-runDumppathsJson ipkgPath = do
+prepareDumppathsIpkg : String -> IO String
+prepareDumppathsIpkg ipkgPath = do
+  Right content <- readFile ipkgPath
+    | Left _ => pure ipkgPath
+  t <- time
   let (projectDir, ipkgName) = splitPath ipkgPath
+  let tempPath = projectDir ++ "/canister-dfxprepared-" ++ show t ++ ".ipkg"
+  let canisterMainPath = projectDir ++ "/src/CanisterMain.idr"
+  hasCanisterMain <- do
+    Right _ <- readFile canisterMainPath
+      | Left _ => pure False
+    pure True
+  let keepLine : String -> Bool
+      keepLine line =
+        let trimmed = trim line
+        in not $
+             (isPrefixOf ", Tests." trimmed) ||
+             (isPrefixOf "modules = Tests." trimmed) ||
+             (isPrefixOf ", Test." trimmed) ||
+             (isPrefixOf "modules = Test." trimmed)
+  let rewriteMainLine : String -> String
+      rewriteMainLine line =
+        let trimmed = trim line
+        in if hasCanisterMain && trimmed == "main = Main"
+              then "main = CanisterMain"
+           else if hasCanisterMain && trimmed == "modules = Main"
+              then "modules = CanisterMain"
+           else if hasCanisterMain && trimmed == ", Main"
+              then "        , CanisterMain"
+           else line
+  let sanitized = unlines (map rewriteMainLine (filter keepLine (lines content)))
+  Right () <- writeFile tempPath sanitized
+    | Left _ => pure ipkgPath
+  pure tempPath
+
+isGeneratedDumppathsIpkg : String -> Bool
+isGeneratedDumppathsIpkg path =
+  isInfixOf "dfx-dumppaths-temp-" path ||
+  isInfixOf "canister-dfxprepared-" path
+
+cleanupGeneratedDumppathsIpkg : String -> IO ()
+cleanupGeneratedDumppathsIpkg path =
+  if isGeneratedDumppathsIpkg path
+     then do
+       _ <- system $ "rm -f " ++ path
+       pure ()
+     else pure ()
+
+runDumppathsJsonPrepared : String -> IO (Either String String)
+runDumppathsJsonPrepared buildIpkgPath = do
+  let (projectDir, ipkgName) = splitPath buildIpkgPath
   idris2Cmd <- resolveIdris2Command
   supported <- supportsDumppathsJson idris2Cmd
   if not supported
@@ -284,8 +887,7 @@ runDumppathsJson ipkgPath = do
        t <- time
        let outPath = "/tmp/idris2_dfx_cov_paths_" ++ show t ++ ".json"
        let logPath = "/tmp/idris2_dfx_cov_paths_" ++ show t ++ ".log"
-       pkgPath <- discoverPackagePath
-       let envPrefix = if null pkgPath then "" else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
+       envPrefix <- resolveBuildEnvPrefix projectDir
        let cmd = "cd " ++ projectDir ++ " && "
               ++ envPrefix ++ idris2Cmd ++ " --dumppaths-json " ++ outPath ++ " --build " ++ ipkgName
               ++ " > " ++ logPath ++ " 2>&1"
@@ -299,6 +901,13 @@ runDumppathsJson ipkgPath = do
        if null (trim content)
           then pure $ Left "dumppaths JSON was empty"
           else pure $ Right content
+
+runDumppathsJson : String -> IO (Either String String)
+runDumppathsJson ipkgPath = do
+  buildIpkgPath <- prepareDumppathsIpkg ipkgPath
+  result <- runDumppathsJsonPrepared buildIpkgPath
+  cleanupGeneratedDumppathsIpkg buildIpkgPath
+  pure result
 
 parsePathHitLine : String -> Maybe PathRuntimeHit
 parsePathHitLine line =
@@ -389,22 +998,28 @@ runPathFullPipelineArtifacts opts = do
   case ipkgResult of
     Left err => pure $ Left err
     Right ipkgPath => do
-      let (projectDir, ipkgName) = splitPath ipkgPath
+      let (projectDir, originalIpkgName) = splitPath ipkgPath
+      staticIpkgPath <- prepareDumppathsIpkg ipkgPath
+      let (staticProjectDir, staticIpkgName) = splitPath staticIpkgPath
       dumppathsResult <-
         case opts.dumppathsJson of
           Just path => do
             Right content <- readFile path
               | Left err => pure $ Left $ "Failed to read dumppaths JSON: " ++ show err
             pure $ Right content
-          Nothing => runDumppathsJson ipkgPath
+          Nothing => runDumppathsJsonPrepared staticIpkgPath
       case dumppathsResult of
-        Left err => pure $ Left err
+        Left err => do
+          cleanupGeneratedDumppathsIpkg staticIpkgPath
+          pure $ Left err
         Right dumppathsContent => do
-          staticResult <- runAndAnalyzeDumpcases projectDir ipkgName
+          staticResult <- runAndAnalyzeDumpcases staticProjectDir staticIpkgName
           case staticResult of
-            Left err => pure $ Left err
+            Left err => do
+              cleanupGeneratedDumppathsIpkg staticIpkgPath
+              pure $ Left err
             Right staticAnalysis => do
-              let defaultCanister = pack (takeWhile (/= '.') (unpack ipkgName))
+              let defaultCanister = pack (takeWhile (/= '.') (unpack originalIpkgName))
               canister <- case opts.canisterName of
                 Just name => pure name
                 Nothing => detectCanisterName projectDir defaultCanister
@@ -414,20 +1029,35 @@ runPathFullPipelineArtifacts opts = do
                     , dfxPath := "dfx"
                     , projectDir := projectDir
                     , instrumentBranchProbes := True
-                    , forTestBuild := True
+                    , forTestBuild := False
                     } defaultDeployOptions
-              deployResult <- ensureDeployed deployOpts
-              case deployResult of
+              hasNativeTestEntrypoints <- projectHasNativeTestEntrypoints ipkgPath
+              deployResult <- the (IO (Either String String)) $
+                if hasNativeTestEntrypoints
+                   then ensureDeployed deployOpts
+                   else ensureDeployed ({ forTestBuild := True } deployOpts)
+              deployResult' <- the (IO (Either String String)) $
+                case deployResult of
+                  Right ok => pure (Right ok)
+                  Left _ => ensureDeployed ({ forTestBuild := True } deployOpts)
+              case deployResult' of
                 Left err => pure $ Left err
                 Right _ => do
+                  let batchMethods =
+                        map (\idx => "runTestBatch" ++ show idx)
+                          [0, 1, 2]
+                  let methods = "runTests" :: "runMinimalTests" :: "runTrivialTest" :: batchMethods
                   callResult <- runProjectMethods
                                   projectDir
                                   canister
-                                  ["runTests", "runMinimalTests", "runTrivialTest"]
+                                  methods
                                   opts.network
                   case callResult of
-                    Left err => pure $ Left err
+                    Left err => do
+                      cleanupGeneratedDumppathsIpkg staticIpkgPath
+                      pure $ Left err
                     Right _ => do
+                      probeSuccesses <- runProjectProbeCalls projectDir canister opts.network
                       let branchProbeMapPath = projectDir ++ "/build/idris2-branch-probes.csv"
                       hitsResult <- analyzePathHitsFromBranchProbeFiles
                                      dumppathsContent
@@ -436,7 +1066,9 @@ runPathFullPipelineArtifacts opts = do
                                      (Just projectDir)
                                      canister
                                      opts.network
-                      pure $ map (\hits => (dumppathsContent, hits)) hitsResult
+                      cleanupGeneratedDumppathsIpkg staticIpkgPath
+                      let syntheticHits = methodPathHitsFromContent dumppathsContent (methods ++ probeSuccesses)
+                      pure $ map (\hits => (dumppathsContent, syntheticHits ++ hits)) hitsResult
 
 runPaths : Options -> IO ()
 runPaths opts = do

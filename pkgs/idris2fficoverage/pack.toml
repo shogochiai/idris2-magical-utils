@@ -1,0 +1,9 @@
+[custom.all.idris2-ffi-integration]
+type = "local"
+path = "../idris2ffiintegration"
+ipkg = "idris2-ffi-integration.ipkg"
+
+[custom.all.idris2-ffi-coverage]
+type = "local"
+path = "."
+ipkg = "idris2-ffi-coverage.ipkg"

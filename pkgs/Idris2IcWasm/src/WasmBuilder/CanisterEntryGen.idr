@@ -47,6 +47,7 @@ record GenOptions where
   heartbeatCheckpoint : Maybe Nat  -- sqlite_stable_save every N heartbeats, Nothing = no checkpoint (DEPRECATED)
   timerCmd            : Maybe Nat  -- CMD id for canister_global_timer, Nothing = no timer
   sqlStable           : Bool       -- True = emit sqlite_stable_save in pre_upgrade, sqlite_stable_load in post_upgrade
+  sqlVfsMemoryId      : Maybe Nat  -- Just N = use stable-memory SQLite VFS anchored at memory/page id N
 
 -- =============================================================================
 -- CMD_ID Assignment
@@ -273,6 +274,36 @@ genInjectionCode pfx injs =
 -- Method Entry Function Generation
 -- =============================================================================
 
+sqlVfsEnabled : GenOptions -> Bool
+sqlVfsEnabled opts =
+  case opts.sqlVfsMemoryId of
+    Just _  => True
+    Nothing => False
+
+sqlVfsMemoryIdLiteral : GenOptions -> String
+sqlVfsMemoryIdLiteral opts =
+  case opts.sqlVfsMemoryId of
+    Just n  => show n
+    Nothing => "0"
+
+genSqlVfsOpen : GenOptions -> Bool -> String
+genSqlVfsOpen opts readOnly =
+  if sqlVfsEnabled opts
+    then "    if (sql_vfs_ffi_init(" ++ sqlVfsMemoryIdLiteral opts ++ ") != 0) trap_text(\"sql_vfs init failed\");\n" ++
+         (if readOnly
+            then "    if (sql_vfs_ffi_open_read_only() != 0) trap_text(\"sql_vfs open read-only failed\");\n"
+            else "    if (sql_vfs_ffi_open_read_write() != 0) trap_text(\"sql_vfs open read-write failed\");\n")
+    else ""
+
+genSqlVfsClose : GenOptions -> Bool -> String
+genSqlVfsClose opts readOnly =
+  if sqlVfsEnabled opts
+    then if readOnly
+           then "    if (sql_vfs_ffi_close() != 0) trap_text(\"sql_vfs close failed\");\n"
+           else "    if (sql_vfs_ffi_commit_update() != 0) trap_text(\"sql_vfs commit failed\");\n" ++
+                "    if (sql_vfs_ffi_close() != 0) trap_text(\"sql_vfs close failed\");\n"
+    else ""
+
 ||| Generate one canister_query_* or canister_update_* function
 genMethodEntryWithAnnotations : GenOptions -> List (String, CmdMapEntry) -> (DidMethod, Nat) -> String
 genMethodEntryWithAnnotations opts cmdMapEntries pair =
@@ -291,6 +322,8 @@ genMethodEntryWithAnnotations opts cmdMapEntries pair =
       setArgCode = snd argDecPair
       replyCode  = genReplyCode pfx resultFn method.returnType
       injCode    = genInjectionCode pfx injections
+      vfsOpen    = genSqlVfsOpen opts method.isQuery
+      vfsClose   = genSqlVfsClose opts method.isQuery
       callCode   =
         "    " ++ pfx ++ "_reset_ffi();\n" ++
         "    " ++ pfx ++ "_c_set_arg_i32(0, " ++ cmdMacroName method.name ++ ");\n" ++
@@ -314,7 +347,9 @@ genMethodEntryWithAnnotations opts cmdMapEntries pair =
           "    }\n"
         Nothing =>
           setupCode ++
+          vfsOpen ++
           callCode ++
+          vfsClose ++
           replyCode) ++
      "}\n\n"
 
@@ -354,6 +389,8 @@ genHeartbeat opts =
           counterDecl = case opts.heartbeatCheckpoint of
             Nothing => ""
             Just _  => "    static uint32_t _hb_count = 0;\n"
+          vfsOpen = genSqlVfsOpen opts False
+          vfsClose = genSqlVfsClose opts False
       in "\n/* =============================================================================\n" ++
          " * Heartbeat\n" ++
          " * ============================================================================= */\n\n" ++
@@ -364,8 +401,10 @@ genHeartbeat opts =
          "    " ++ pfx ++ "_c_set_arg_i32(0, " ++ show cmd ++ ");\n" ++
          "    uint64_t _now = ic0_time() / 1000000000ULL;\n" ++
          "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)_now);\n" ++
+         vfsOpen ++
          "    void* closure = __mainExpression_0();\n" ++
          "    idris2_trampoline(closure);\n" ++
+         vfsClose ++
          checkpointCode ++
          "}\n\n"
 
@@ -382,6 +421,8 @@ genTimer opts =
     Nothing => ""
     Just cmd =>
       let pfx = opts.ffiPrefix
+          vfsOpen = genSqlVfsOpen opts False
+          vfsClose = genSqlVfsClose opts False
       in "\n/* =============================================================================\n" ++
          " * Global Timer (replaces heartbeat — fires only when set)\n" ++
          " * ============================================================================= */\n\n" ++
@@ -391,8 +432,10 @@ genTimer opts =
          "    " ++ pfx ++ "_c_set_arg_i32(0, " ++ show cmd ++ ");\n" ++
          "    uint64_t _now = ic0_time() / 1000000000ULL;\n" ++
          "    " ++ pfx ++ "_c_set_arg_i32(1, (int32_t)_now);\n" ++
+         vfsOpen ++
          "    void* closure = __mainExpression_0();\n" ++
          "    idris2_trampoline(closure);\n" ++
+         vfsClose ++
          "}\n\n"
 
 -- =============================================================================
@@ -463,6 +506,15 @@ fixedHeader opts cmdMapEntries =
             "extern int sqlite_stable_load(uint32_t* out_schema_version);\n" ++
             "extern int sqlite_stable_has_snapshot(void);\n\n"
        else "") ++
+    (if sqlVfsEnabled opts
+       then "/* Forward declarations from SQLite stable-memory VFS (--sql-vfs-memory-id) */\n" ++
+            "extern int64_t sql_vfs_ffi_init(int64_t memory_id);\n" ++
+            "extern int64_t sql_vfs_ffi_open_read_write(void);\n" ++
+            "extern int64_t sql_vfs_ffi_open_read_only(void);\n" ++
+            "extern int64_t sql_vfs_ffi_commit_update(void);\n" ++
+            "extern int64_t sql_vfs_ffi_rollback_update(void);\n" ++
+            "extern int64_t sql_vfs_ffi_close(void);\n\n"
+       else "") ++
     "/* =============================================================================\n" ++
     " * Candid Argument Parsing\n" ++
     " * ============================================================================= */\n" ++
@@ -497,6 +549,11 @@ fixedHeader opts cmdMapEntries =
     "\n" ++
     "static void debug(const char* msg) {\n" ++
     "    ic0_debug_print((int32_t)(uintptr_t)msg, (int32_t)strlen(msg));\n" ++
+    "}\n" ++
+    "\n" ++
+    "static void trap_text(const char* msg) {\n" ++
+    "    ic0_debug_print((int32_t)(uintptr_t)msg, (int32_t)strlen(msg));\n" ++
+    "    ic0_trap((int32_t)(uintptr_t)msg, (int32_t)strlen(msg));\n" ++
     "}\n" ++
     "\n" ++
     "static void reply_empty(void) {\n" ++
@@ -534,11 +591,12 @@ fixedHeader opts cmdMapEntries =
     "void canister_init(void) {\n" ++
     "    debug(\"canister_init\");\n" ++
     "    ic0_stable64_grow(10);\n" ++
-    (if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "();\n") ++
+    (if sqlVfsEnabled opts then genSqlVfsOpen opts False else if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "();\n") ++
     "    " ++ pfx ++ "_reset_ffi();\n" ++
     "    " ++ pfx ++ "_c_set_arg_i32(0, 0); /* CMD 0 = init */\n" ++
     "    void* closure = __mainExpression_0();\n" ++
     "    idris2_trampoline(closure);\n" ++
+    (if sqlVfsEnabled opts then genSqlVfsClose opts False else "") ++
     "}\n" ++
     "\n" ++
     "__attribute__((used, visibility(\"default\"), export_name(\"canister_pre_upgrade\")))\n" ++
@@ -554,7 +612,9 @@ fixedHeader opts cmdMapEntries =
     "__attribute__((used, visibility(\"default\"), export_name(\"canister_post_upgrade\")))\n" ++
     "void canister_post_upgrade(void) {\n" ++
     "    debug(\"canister_post_upgrade\");\n" ++
-    (if opts.sqlStable
+    (if sqlVfsEnabled opts
+       then genSqlVfsOpen opts False
+       else if opts.sqlStable
        then (if opts.initFn == "" then "" else "    " ++ opts.initFn ++ "(); /* DB must be open before load */\n") ++
             "    if (sqlite_stable_has_snapshot()) {\n" ++
             "        uint32_t schema_version = 0;\n" ++
@@ -565,6 +625,7 @@ fixedHeader opts cmdMapEntries =
     "    " ++ pfx ++ "_c_set_arg_i32(0, 0); /* CMD 0 = init */\n" ++
     "    void* closure = __mainExpression_0();\n" ++
     "    idris2_trampoline(closure);\n" ++
+    (if sqlVfsEnabled opts then genSqlVfsClose opts False else "") ++
     "}\n" ++
     "\n"
 

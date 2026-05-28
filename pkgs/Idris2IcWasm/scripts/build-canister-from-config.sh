@@ -249,6 +249,7 @@ load_config() {
     heartbeat_checkpoint="$(toml_get_string "gen_entry" "heartbeat_checkpoint")"
     heartbeat_cmd="$(toml_get_string "gen_entry" "heartbeat_cmd")"
     sql_stable="$(toml_get_bool "gen_entry" "sql_stable")"
+    sql_vfs_memory_id="$(toml_get_string "gen_entry" "sql_vfs_memory_id")"
     out_raw="$(toml_get_string "gen_entry" "out")"
 
     DEFAULT_CANISTER_ENTRY="$(resolve_path "${out_raw:-$IC0_SUPPORT/canister_entry.c}")"
@@ -264,6 +265,7 @@ load_config() {
         [[ -n "$heartbeat_checkpoint" ]] && GEN_ENTRY_ARGS+=("--heartbeat-checkpoint=$heartbeat_checkpoint")
         [[ -n "$heartbeat_cmd" ]] && GEN_ENTRY_ARGS+=("--heartbeat-cmd=$heartbeat_cmd")
         [[ "$sql_stable" == "1" ]] && GEN_ENTRY_ARGS+=("--sql-stable")
+        [[ -n "$sql_vfs_memory_id" ]] && GEN_ENTRY_ARGS+=("--sql-vfs-memory-id=$sql_vfs_memory_id")
         GEN_ENTRY_ARGS+=("--out=$DEFAULT_CANISTER_ENTRY")
     fi
 

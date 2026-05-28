@@ -118,50 +118,111 @@ pathToModuleName path =
   in pack $ map (\c => if c == '/' then '.' else c) (unpack noExt)
 
 public export
-data TestHarnessStyle = ExistingHarness | TupleHarness | RecordHarness
+data TestHarnessStyle = ExistingHarness | TupleHarness | TupleHarnessWithRunner | RecordHarness | PureRunAllHarness | PureRunAllHarnessWithRunner
 
 detectTestHarnessStyle : String -> TestHarnessStyle
 detectTestHarnessStyle content =
   let hasRunTests = isInfixOf "runTests : IO (Int, Int)" content
+      hasIoUnitRunTests = isInfixOf "runTests : IO ()" content
       hasRecordTestDef = isInfixOf "record TestDef where" content && isInfixOf "testFn : IO Bool" content
       hasTupleTests = isInfixOf "allTests : List (String, IO Bool)" content
+      hasPureRunAll = isInfixOf "runAllTests : (Nat, Nat)" content
   in if hasRunTests
         then ExistingHarness
      else if hasRecordTestDef
         then RecordHarness
+     else if hasTupleTests && hasIoUnitRunTests
+        then TupleHarnessWithRunner
      else if hasTupleTests
         then TupleHarness
-     else ExistingHarness
+     else if hasPureRunAll && hasIoUnitRunTests
+        then PureRunAllHarnessWithRunner
+     else if hasPureRunAll
+        then PureRunAllHarness
+	    else ExistingHarness
 
-generateTestHarnessShimContent : TestHarnessStyle -> String -> String
-generateTestHarnessShimContent ExistingHarness testModuleName =
+takeFirst : Nat -> List a -> List a
+takeFirst Z _ = []
+takeFirst (S k) [] = []
+takeFirst (S k) (x :: xs) = x :: takeFirst k xs
+
+parseIoBoolTestNames : String -> List String
+parseIoBoolTestNames content =
+  takeFirst 24 $
+    nub $
+      mapMaybe parseLine (map trim (lines content))
+  where
+    parseLine : String -> Maybe String
+    parseLine line =
+      if isSuffixOf ": IO Bool" line
+         then let name = trim $ pack $ takeWhile (/= ':') (unpack line)
+              in if isPrefixOf "test_" name then Just name else Nothing
+         else Nothing
+
+generateDirectTestEntries : String -> List String -> List String
+generateDirectTestEntries testModuleName names =
+  case names of
+    [] => []
+    _ =>
+      [ "directTests : List (String, IO Bool)"
+      , "directTests ="
+      ] ++ directRows names
+  where
+    directRows : List String -> List String
+    directRows [] = ["  []"]
+    directRows (name :: rest) =
+      ("  [ (\"" ++ name ++ "\", " ++ testModuleName ++ "." ++ name ++ ")")
+        :: map (\n => "  , (\"" ++ n ++ "\", " ++ testModuleName ++ "." ++ n ++ ")") rest
+        ++ ["  ]"]
+
+generateTestHarnessShimContent : TestHarnessStyle -> String -> List String -> String
+generateTestHarnessShimContent ExistingHarness testModuleName directTestNames =
+  let directEntries = generateDirectTestEntries testModuleName directTestNames
+      allTestsLine =
+        if null directTestNames
+           then "allTestsGeneric = TestModule.allTests"
+           else "allTestsGeneric = directTests"
+  in
   unlines
-    [ "module TestHarness"
-    , "import " ++ testModuleName ++ " as TestModule"
-    , "%hide TestModule.main"
-    , ""
-    , "export"
-    , "allTestsGeneric : List (String, IO Bool)"
-    , "allTestsGeneric = TestModule.allTests"
-    , ""
-    , "export"
-    , "runTests : IO (Int, Int)"
-    , "runTests = TestModule.runTests"
-    , ""
-    , "export"
-    , "runMinimalTests : IO (Int, Int)"
-    , "runMinimalTests = TestModule.runMinimalTests"
-    , ""
-    , "export"
-    , "runTrivialTest : IO (Int, Int)"
-    , "runTrivialTest = TestModule.runTrivialTest"
-    ]
-generateTestHarnessShimContent TupleHarness testModuleName =
+    ([ "module TestHarness"
+     , "import " ++ testModuleName ++ " as TestModule"
+     , "import Data.List"
+     , ""
+     ]
+     ++ directEntries
+     ++
+     [ ""
+     , "export"
+     , "allTestsGeneric : List (String, IO Bool)"
+     , allTestsLine
+     , ""
+     , "export"
+     , "runBatch : Nat -> Nat -> IO (Int, Int)"
+     , "runBatch start count = do"
+     , "  let batch = take count (drop start allTestsGeneric)"
+     , "  if null batch then pure (0, 0) else do"
+     , "    rs <- traverse (\\(_, t) => t) batch"
+     , "    let passed = length (filter id rs)"
+     , "        failed = length (filter not rs)"
+     , "    pure (cast passed, cast failed)"
+     , ""
+     , "export"
+     , "runTests : IO (Int, Int)"
+     , "runTests = runBatch 0 (length allTestsGeneric)"
+     , ""
+     , "export"
+     , "runMinimalTests : IO (Int, Int)"
+     , "runMinimalTests = runBatch 0 5"
+     , ""
+     , "export"
+     , "runTrivialTest : IO (Int, Int)"
+     , "runTrivialTest = runBatch 0 1"
+     ])
+generateTestHarnessShimContent TupleHarness testModuleName _ =
   unlines
     [ "module TestHarness"
     , "import " ++ testModuleName ++ " as TestModule"
     , "import Data.List"
-    , "%hide TestModule.main"
     , ""
     , "%default covering"
     , ""
@@ -169,6 +230,7 @@ generateTestHarnessShimContent TupleHarness testModuleName =
     , "allTestsGeneric : List (String, IO Bool)"
     , "allTestsGeneric = TestModule.allTests"
     , ""
+    , "export"
     , "runBatch : Nat -> Nat -> IO (Int, Int)"
     , "runBatch start count = do"
     , "  let batch = take count (drop start allTestsGeneric)"
@@ -190,12 +252,47 @@ generateTestHarnessShimContent TupleHarness testModuleName =
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
     ]
-generateTestHarnessShimContent RecordHarness testModuleName =
+generateTestHarnessShimContent TupleHarnessWithRunner testModuleName _ =
   unlines
     [ "module TestHarness"
     , "import " ++ testModuleName ++ " as TestModule"
     , "import Data.List"
-    , "%hide TestModule.main"
+    , ""
+    , "%default covering"
+    , ""
+    , "export"
+    , "allTestsGeneric : List (String, IO Bool)"
+    , "allTestsGeneric = TestModule.allTests"
+    , ""
+    , "export"
+    , "runBatch : Nat -> Nat -> IO (Int, Int)"
+    , "runBatch start count = do"
+    , "  let batch = take count (drop start allTestsGeneric)"
+    , "  if null batch then pure (0, 0) else do"
+    , "    rs <- traverse (\\(_, t) => t) batch"
+    , "    let passed = length (filter id rs)"
+    , "        failed = length (filter not rs)"
+    , "    pure (cast passed, cast failed)"
+    , ""
+    , "export"
+    , "runTests : IO (Int, Int)"
+    , "runTests = do"
+    , "  TestModule.runTests"
+    , "  runBatch 0 (length allTestsGeneric)"
+    , ""
+    , "export"
+    , "runMinimalTests : IO (Int, Int)"
+    , "runMinimalTests = runBatch 0 8"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = runBatch 0 1"
+    ]
+generateTestHarnessShimContent RecordHarness testModuleName _ =
+  unlines
+    [ "module TestHarness"
+    , "import " ++ testModuleName ++ " as TestModule"
+    , "import Data.List"
     , ""
     , "%default covering"
     , ""
@@ -203,6 +300,7 @@ generateTestHarnessShimContent RecordHarness testModuleName =
     , "allTestsGeneric : List (String, IO Bool)"
     , "allTestsGeneric = map (\\t => (t.testId, t.testFn)) TestModule.allTests"
     , ""
+    , "export"
     , "runBatch : Nat -> Nat -> IO (Int, Int)"
     , "runBatch start count = do"
     , "  let batch = take count (drop start allTestsGeneric)"
@@ -224,17 +322,94 @@ generateTestHarnessShimContent RecordHarness testModuleName =
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
     ]
+generateTestHarnessShimContent PureRunAllHarness testModuleName _ =
+  unlines
+    [ "module TestHarness"
+    , "import " ++ testModuleName ++ " as TestModule"
+    , ""
+    , "%default covering"
+    , ""
+    , "export"
+    , "allTestsGeneric : List (String, IO Bool)"
+    , "allTestsGeneric = []"
+    , ""
+    , "export"
+    , "runTests : IO (Int, Int)"
+     , "runTests ="
+     , "  let (passed, failed) = TestModule.runAllTests"
+     , "  in pure (cast passed, cast failed)"
+     , ""
+     , "export"
+     , "runBatch : Nat -> Nat -> IO (Int, Int)"
+     , "runBatch _ _ = runTests"
+     , ""
+     , "export"
+     , "runMinimalTests : IO (Int, Int)"
+     , "runMinimalTests = runTests"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = runTests"
+    ]
+generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
+  unlines
+    [ "module TestHarness"
+    , "import " ++ testModuleName ++ " as TestModule"
+    , ""
+    , "%default covering"
+    , ""
+    , "export"
+    , "allTestsGeneric : List (String, IO Bool)"
+    , "allTestsGeneric = []"
+    , ""
+    , "export"
+    , "runTests : IO (Int, Int)"
+    , "runTests = do"
+    , "  TestModule.runTests"
+    , "  let (passed, failed) = TestModule.runAllTests"
+    , "  pure (cast passed, cast failed)"
+    , ""
+    , "export"
+    , "runBatch : Nat -> Nat -> IO (Int, Int)"
+    , "runBatch _ _ = runTests"
+    , ""
+    , "export"
+    , "runMinimalTests : IO (Int, Int)"
+    , "runMinimalTests = runTests"
+    , ""
+    , "export"
+    , "runTrivialTest : IO (Int, Int)"
+    , "runTrivialTest = runTests"
+    ]
 
 ||| Generate test Main.idr content that imports the standardized shim module
 ||| This is written to /tmp, never touches the original Main.idr
+testBatchIndexes : List Int
+testBatchIndexes =
+  [0, 1, 2]
+
+generateTestBatchExport : Int -> List String
+generateTestBatchExport idx =
+  let name = "runTestBatch" ++ show idx
+      start = idx * 8
+  in [ ""
+     , "export"
+     , name ++ " : IO (Int, Int)"
+     , name ++ " = TestHarness.runBatch " ++ show start ++ " 8"
+     ]
+
+generateTestBatchExports : List String
+generateTestBatchExports = concat (map generateTestBatchExport testBatchIndexes)
+
 generateTestMainContent : String
 generateTestMainContent =
   unlines
-    [ "||| Auto-generated test entry point for coverage analysis"
+    ([ "||| Auto-generated test entry point for coverage analysis"
     , "module Main"
     , ""
     , "import TestHarness"
     , "import Data.List"
+    , "import Data.IORef"
     , ""
     , "%default covering"
     , ""
@@ -251,18 +426,29 @@ generateTestMainContent =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = TestHarness.runTrivialTest"
-    , ""
+    ]
+    ++ generateTestBatchExports
+    ++
+    [ ""
     , "||| Force code retention to prevent DCE"
     , "forceRetain : IO ()"
-    , "forceRetain ="
-    , "  let retained = [Main.runTests, Main.runMinimalTests, Main.runTrivialTest] in"
-    , "    case retained of"
-    , "      [] => pure ()"
-    , "      _ => pure ()"
+    , "forceRetain = do"
+    , "  retain <- newIORef False"
+    , "  shouldRun <- readIORef retain"
+    , "  if shouldRun"
+    , "    then do"
+    , "      _ <- Main.runTests"
+    , "      _ <- Main.runMinimalTests"
+    , "      _ <- Main.runTrivialTest"
+    , "      _ <- Main.runTestBatch0"
+    , "      _ <- Main.runTestBatch1"
+    , "      _ <- Main.runTestBatch2"
+    , "      pure ()"
+    , "    else pure ()"
     , ""
     , "main : IO ()"
     , "main = forceRetain"
-    ]
+    ])
 
 -- =============================================================================
 -- Export Function Parsing (for canister_entry.c generation)
@@ -391,16 +577,16 @@ generateFuncEntry modulePrefix cArities ef didMethods typeDefs =
         Just RefCUnary =>
           unlines
             [ "    // RefC unary symbol: accepts world directly and returns final value"
-            , "    void* _world = idris2_newReference((void*)0);"
-            , "    void* _result = idris2_trampoline(" ++ funcName ++ "(_world));"
+            , "    Value* _world = idris2_newReference((Value*)0);"
+            , "    Value* _result = idris2_trampoline(" ++ funcName ++ "(_world));"
             , "    (void)_result;"
             ]
         Just RefCNullary =>
           unlines
             [ "    // RefC nullary symbol: returns an IO closure, then apply world"
-            , "    void* _world = idris2_newReference((void*)0);"
-            , "    void* _action = idris2_trampoline(" ++ funcName ++ "());"
-            , "    void* _result = idris2_apply_closure(_action, _world);"
+            , "    Value* _world = idris2_newReference((Value*)0);"
+            , "    Value* _action = idris2_trampoline(" ++ funcName ++ "());"
+            , "    Value* _result = idris2_apply_closure(_action, _world);"
             , "    (void)_result;"
             ]
         Nothing =>
@@ -463,8 +649,8 @@ generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrum
     mkExtern ef =
       let funcName = modulePrefix ++ "_" ++ ef.name
       in case lookup funcName cArities of
-           Just RefCUnary => "extern void* " ++ funcName ++ "(void*);"
-           Just RefCNullary => "extern void* " ++ funcName ++ "(void);"
+           Just RefCUnary => "extern Value* " ++ funcName ++ "(Value*);"
+           Just RefCNullary => "extern Value* " ++ funcName ++ "(void);"
            Nothing => "/* missing RefC arity: " ++ funcName ++ " */"
 
     canisterEntryHeader : String
@@ -485,31 +671,33 @@ generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrum
       , "extern void ic0_debug_print(int32_t src, int32_t size);"
       , "extern void ic0_trap(int32_t src, int32_t size);"
       , "extern int64_t ic0_stable64_grow(int64_t new_pages);"
-      , ""
-      , "/* IC FFI Bridge (ic_ffi_bridge.c) */"
-      , "extern void ic_arg_load(void);  /* Load IC message args into buffer for CandidDecoder */"
-      , ""
-      , "/* Idris2 RefC Runtime - Value types */"
-      , "#define CONSTRUCTOR_TAG 17"
-      , "#define idris2_vp_is_unboxed(p) ((uintptr_t)(p)&3)"
-      , "#define idris2_vp_int_shift 32"
-      , "#define idris2_vp_to_Int32(p) ((int32_t)((uintptr_t)(p) >> idris2_vp_int_shift))"
-      , ""
-      , "typedef struct { uint16_t refCounter; uint8_t tag; uint8_t reserved; } Value_header;"
-      , "typedef struct { Value_header header; int32_t total; int32_t tag; char const *name; void* args[]; } Value_Constructor;"
-      , "typedef void* Value;"
-      , "extern void* __mainExpression_0(void);"
-      , "extern void* idris2_trampoline(void*);"
-      , "extern void* idris2_apply_closure(void*, void*);"
-      , "extern void* idris2_newReference(void*);"
-      , "extern int idris2_extractInt(void*);"
-      , ""
-      , "static int idris2_initialized = 0;"
-      , ""
-      , "static void ensure_idris2_init(void) {"
-      , "    if (!idris2_initialized) {"
-      , "        void* closure = __mainExpression_0();"
-      , "        idris2_trampoline(closure);"
+        , ""
+        , "/* IC FFI Bridge (ic_ffi_bridge.c) */"
+        , "__attribute__((weak)) void ic_arg_load(void) {}  /* Optional bridge hook for CandidDecoder */"
+        , ""
+        , "/* Idris2 RefC Runtime - Value types */"
+        , "#ifndef IDRIS2_ICWASM_HAS_REFC_HEADERS"
+        , "#define CONSTRUCTOR_TAG 17"
+        , "#define idris2_vp_is_unboxed(p) ((uintptr_t)(p)&3)"
+        , "#define idris2_vp_int_shift 32"
+        , "#define idris2_vp_to_Int32(p) ((int32_t)((uintptr_t)(p) >> idris2_vp_int_shift))"
+        , ""
+        , "typedef struct { uint16_t refCounter; uint8_t tag; uint8_t reserved; } Value_header;"
+        , "typedef struct { Value_header header; int32_t total; int32_t tag; char const *name; void* args[]; } Value_Constructor;"
+        , "typedef void Value;"
+        , "#endif"
+        , "extern Value* __mainExpression_0(void);"
+        , "extern Value* idris2_trampoline(Value*);"
+        , "extern Value* idris2_apply_closure(Value*, Value*);"
+        , "extern Value* idris2_newReference(Value*);"
+        , "extern int idris2_extractInt(Value*);"
+        , ""
+        , "static int idris2_initialized = 0;"
+        , ""
+        , "static void ensure_idris2_init(void) {"
+        , "    if (!idris2_initialized) {"
+        , "        Value* closure = __mainExpression_0();"
+        , "        idris2_trampoline(closure);"
       , "        idris2_initialized = 1;"
       , "    }"
       , "}"
@@ -625,6 +813,7 @@ setupTestBuild projectDir originalIpkg customTestPath = do
     | Left _ => pure (Left $ "Test module not found: " ++ testModuleRelPath)
   let testModuleName = pathToModuleName testModuleRelPath
   let harnessStyle = detectTestHarnessStyle testModuleContent
+  let directTestNames = parseIoBoolTestNames testModuleContent
 
   -- Create temp directory structure
   let tempDir = "/tmp/idris2-icwasm-test-" ++ show !time
@@ -641,7 +830,7 @@ setupTestBuild projectDir originalIpkg customTestPath = do
   -- Write generated Main.idr to temp (not a symlink, actual generated file)
   let tempHarnessPath = tempSrcDir ++ "/TestHarness.idr"
   let tempMainPath = tempSrcDir ++ "/Main.idr"
-  Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName)
+  Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName directTestNames)
     | Left err => pure (Left $ "Failed to write temp TestHarness: " ++ show err)
   Right () <- writeFile tempMainPath generateTestMainContent
     | Left err => pure (Left $ "Failed to write temp Main: " ++ show err)
@@ -655,14 +844,15 @@ setupTestBuild projectDir originalIpkg customTestPath = do
 ||| Find ipkg file in project directory
 findIpkg : String -> IO (Maybe String)
 findIpkg projectDir = do
-  canister <- findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*canister*.ipkg' -type f | sort | head -1"
+  let stableIpkgFilter = " ! -name 'temp*.ipkg' ! -name 'dumpcases-temp-*.ipkg' ! -name 'dfx-dumppaths-temp-*.ipkg' ! -name '*-temp-*.ipkg'"
+  canister <- findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*canister*.ipkg' -type f" ++ stableIpkgFilter ++ " | sort | head -1"
   case canister of
     Just path => pure (Just path)
     Nothing => do
-      nonMinimal <- findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f ! -name '*minimal*.ipkg' | sort | head -1"
+      nonMinimal <- findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f ! -name '*minimal*.ipkg'" ++ stableIpkgFilter ++ " | sort | head -1"
       case nonMinimal of
         Just path => pure (Just path)
-        Nothing => findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f | sort | head -1"
+        Nothing => findPreferred $ "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f" ++ stableIpkgFilter ++ " | sort | head -1"
   where
     findPreferred : String -> IO (Maybe String)
     findPreferred cmd = do
@@ -671,16 +861,68 @@ findIpkg projectDir = do
 
 resolvePackagesFromIpkg : String -> IO (List String)
 resolvePackagesFromIpkg ipkg = do
-  idris2Bin <- resolveIdris2Bin
-  let tmpJson = "/tmp/ipkg_dump_" ++ show !time ++ ".json"
-  let dumpCmd = idris2Bin ++ " --dump-ipkg-json " ++ ipkg ++ " > " ++ tmpJson
-  _ <- system dumpCmd
-  let parseCmd =
-        "python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [print(next(iter(dep))) for dep in d.get(\"depends\", [])]' "
-        ++ tmpJson
-  (_, output, _) <- executeCommand parseCmd
-  _ <- system $ "rm -f " ++ tmpJson
-  pure $ filter (\s => not (null s)) (lines (trim output))
+  Right content <- readFile ipkg
+    | Left _ => pure []
+  pure $ parseDepends content
+  where
+    stripComment : String -> String
+    stripComment line = pack (takeUntilComment (unpack line))
+      where
+        takeUntilComment : List Char -> List Char
+        takeUntilComment [] = []
+        takeUntilComment ('-' :: '-' :: _) = []
+        takeUntilComment (c :: cs) = c :: takeUntilComment cs
+
+    tokenChars : String -> List String
+    tokenChars s =
+      forget $ split (\c => c == ',' || c == ' ' || c == '\t') s
+
+    cleanToken : String -> String
+    cleanToken tok =
+      let chars0 = unpack (trim tok)
+          chars1 = case chars0 of
+                     '"' :: rest => rest
+                     _ => chars0
+          chars2 = case reverse chars1 of
+                     '"' :: rest => reverse rest
+                     _ => chars1
+      in pack chars2
+
+    parseDependsLine : String -> List String
+    parseDependsLine raw =
+      let line = trim (stripComment raw)
+          afterEquals =
+            case break (== '=') line of
+              (_, "") => line
+              (_, rest) => case unpack rest of
+                              [] => ""
+                              (_ :: chars) => pack chars
+      in filter (\tok => not (null tok) && tok /= "depends" && tok /= "=")
+                (map cleanToken (tokenChars afterEquals))
+
+    collectDepends : Bool -> List String -> List String
+    collectDepends _ [] = []
+    collectDepends active (line :: rest) =
+      let trimmed = trim (stripComment line)
+      in if isPrefixOf "depends" trimmed
+            then parseDependsLine trimmed ++ collectDepends True rest
+         else if active && isPrefixOf "," trimmed
+            then parseDependsLine trimmed ++ collectDepends True rest
+         else if active && null trimmed
+            then collectDepends active rest
+         else if active
+            then []
+         else collectDepends False rest
+
+    parseDepends : String -> List String
+    parseDepends content = collectDepends False (lines content)
+
+resolvePackagesFromProject : String -> IO (List String)
+resolvePackagesFromProject projectDir = do
+  (_, output, _) <- executeCommand $
+    "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f | sort"
+  deps <- traverse resolvePackagesFromIpkg (filter (not . null) (lines (trim output)))
+  pure (concat deps)
 
 public export
 compileToRefC : BuildOptions -> String -> IO (Either String String)
@@ -699,10 +941,12 @@ compileToRefC opts buildDir = do
       let testPath = fromMaybe "src/Tests/AllTests.idr" opts.testModulePath
       putStrLn $ "        Test build mode: generating temp Main from " ++ testPath
       resolvedPackages <- resolvePackagesFromIpkg ipkgFile
-      when (not (null resolvedPackages)) $
-        putStrLn $ "        Resolved packages: " ++ show resolvedPackages
+      projectPackages <- resolvePackagesFromProject opts.projectDir
+      let testPackages = opts.packages ++ resolvedPackages ++ projectPackages
+      when (not (null testPackages)) $
+        putStrLn $ "        Resolved packages: " ++ show testPackages
       let directOpts =
-            if null resolvedPackages then opts else { packages := resolvedPackages } opts
+            if null testPackages then opts else { packages := testPackages } opts
       compileTestDirectly directOpts buildDir testPath
     else compileWithIpkg opts ipkgFile
   where
@@ -775,7 +1019,7 @@ compileToRefC opts buildDir = do
       _ <- traverse_ (\item => system $ "ln -sf " ++ absProjectDir ++ "/src/" ++ item ++ " " ++ tempSrcDir ++ "/" ++ item) srcItems
       putStrLn $ "        Direct RefC test compile via temp sources: " ++ tempDir
       putStrLn $ "        Direct RefC packages: " ++ show opts'.packages
-      Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName)
+      Right () <- writeFile tempHarnessPath (generateTestHarnessShimContent harnessStyle testModuleName (parseIoBoolTestNames testModuleContent))
         | Left err => pure $ Left $ "Failed to write temp TestHarness: " ++ show err
       Right () <- writeFile tempMainPath generateTestMainContent
         | Left err => pure $ Left $ "Failed to write temp Main: " ++ show err
@@ -855,8 +1099,25 @@ prepareRefCRuntime = do
   let refcSrc = "/tmp/refc-src"
   let miniGmp = "/tmp/mini-gmp"
 
-  -- Check if already downloaded
+  mLocalRefc <- findLocalRefcRuntime
+  case mLocalRefc of
+    Nothing => pure ()
+    Just localRefc => do
+      _ <- system $
+        "mkdir -p " ++ refcSrc ++ " && " ++
+        "rm -f " ++ refcSrc ++ "/datatypes.h && " ++
+        "cp " ++ localRefc ++ "/*.c " ++ localRefc ++ "/*.h " ++ refcSrc ++ "/ 2>/dev/null || true"
+      pure ()
+
+  -- Check if already available. Prefer the local installed Idris2 support
+  -- files, because GitHub master can drift away from the compiler in use.
   Right _ <- readFile (refcSrc ++ "/runtime.c")
+    | Left _ => downloadRuntime refcSrc miniGmp
+
+  Right _ <- readFile (refcSrc ++ "/cBackend.h")
+    | Left _ => downloadRuntime refcSrc miniGmp
+
+  Right _ <- readFile (refcSrc ++ "/_datatypes.h")
     | Left _ => downloadRuntime refcSrc miniGmp
 
   Right _ <- readFile (miniGmp ++ "/mini-gmp.c")
@@ -865,6 +1126,18 @@ prepareRefCRuntime = do
   putStrLn "        Runtime ready"
   pure $ Right (refcSrc, miniGmp)
   where
+    findLocalRefcRuntime : IO (Maybe String)
+    findLocalRefcRuntime = do
+      (_, output, _) <- executeCommand $
+        "for d in " ++
+        "/Users/bob/code/idrislang-idris2/support/refc " ++
+        "\"$HOME/.idris2/idris2-0.8.0/support/refc\" " ++
+        "$(ls -td \"$HOME\"/.local/state/pack/install/*/idris2/idris2-0.8.0/support/refc 2>/dev/null); do " ++
+        "if [ -f \"$d/runtime.c\" ] && [ -f \"$d/cBackend.h\" ] && [ -f \"$d/_datatypes.h\" ]; then echo \"$d\"; break; fi; " ++
+        "done"
+      let path = trim output
+      if null path then pure Nothing else pure (Just path)
+
     gmpWrapper : String
     gmpWrapper = "#ifndef GMP_WRAPPER_H\n#define GMP_WRAPPER_H\n#include \"mini-gmp.h\"\n#include <stdarg.h>\nstatic inline void mpz_inits(mpz_t x, ...) {\n    va_list ap; va_start(ap, x); mpz_init(x);\n    while ((x = va_arg(ap, mpz_ptr)) != NULL) mpz_init(x);\n    va_end(ap);\n}\nstatic inline void mpz_clears(mpz_t x, ...) {\n    va_list ap; va_start(ap, x); mpz_clear(x);\n    while ((x = va_arg(ap, mpz_ptr)) != NULL) mpz_clear(x);\n    va_end(ap);\n}\n#endif\n"
 
@@ -876,7 +1149,7 @@ prepareRefCRuntime = do
       let refcFiles : List String = ["memoryManagement.c", "runtime.c", "stringOps.c",
                        "mathFunctions.c", "casts.c", "clock.c", "buffer.c",
                        "prim.c", "refc_util.c"]
-      let refcHeaders : List String = ["runtime.h", "cBackend.h", "datatypes.h", "_datatypes.h",
+      let refcHeaders : List String = ["runtime.h", "cBackend.h", "_datatypes.h",
                          "refc_util.h", "mathFunctions.h", "memoryManagement.h",
                          "stringOps.h", "casts.h", "clock.h", "buffer.h",
                          "prim.h", "threads.h"]
@@ -888,13 +1161,13 @@ prepareRefCRuntime = do
       -- Download refc files
       _ <- traverse_ (\f => system $
         "curl -sLo " ++ refcSrc ++ "/" ++ f ++
-        " https://raw.githubusercontent.com/idris-lang/Idris2/main/support/refc/" ++ f)
+        " https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/" ++ f)
         (refcFiles ++ refcHeaders)
 
       -- Download c support files
       _ <- traverse_ (\f => system $
         "curl -sLo " ++ refcSrc ++ "/" ++ f ++
-        " https://raw.githubusercontent.com/idris-lang/Idris2/main/support/c/" ++ f)
+        " https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/" ++ f)
         (cFiles ++ cHeaders)
 
       -- Download mini-gmp
@@ -914,11 +1187,57 @@ prepareRefCRuntime = do
 ||| @miniGmp Path to mini-gmp
 ||| @ic0Support Path to IC0 support files (canister_entry.c, etc.)
 ||| @outputWasm Output WASM path
-||| Find FFI header files in a directory (*.h files starting with ic0_ or ic_)
+||| Find FFI header files in a directory.
 findFfiHeaders : String -> IO (List String)
 findFfiHeaders dir = do
-  -- Look for project-specific FFI headers using find (more portable than glob)
-  (_, output, _) <- executeCommand $ "find " ++ dir ++ " -maxdepth 1 -name 'ic0_*.h' -o -name 'ic_*.h' 2>/dev/null"
+  -- Project canisters often expose package-specific FFI names such as
+  -- mmnt_ffi.h, so collect all direct support headers instead of only ic_*.
+  (_, output, _) <- executeCommand $
+    "{ project_dir=$(cd " ++ dir ++ "/../.. 2>/dev/null && pwd); " ++
+    "indexer_ic0=\"$project_dir/../Idris2IcpIndexer/lib/ic0\"; " ++
+    "find " ++ dir ++ " -maxdepth 1 -type f -name '*.h' 2>/dev/null; " ++
+    "if [ -d \"$indexer_ic0\" ]; then " ++
+    "find \"$indexer_ic0\" -maxdepth 1 -type f \\( -name 'sqlite_bridge.h' -o -name 'sqlite_stable.h' -o -name 'ic_http_outcall.h' -o -name 'ic_cycles.h' \\) 2>/dev/null; " ++
+    "fi; }"
+  pure $ if null (trim output)
+         then []
+         else nub (lines (trim output))
+
+directSupportHeaderFlags : String -> String
+directSupportHeaderFlags ic0Support =
+  "$(find " ++ ic0Support ++ " -maxdepth 1 -type f -name '*.h' 2>/dev/null | sed 's/^/-include /') "
+
+findExtraIncludeDirs : String -> IO (List String)
+findExtraIncludeDirs ic0Support = do
+  (_, output, _) <- executeCommand $
+    "{ project_dir=$(cd " ++ ic0Support ++ "/../.. 2>/dev/null && pwd); " ++
+    "for d in " ++ ic0Support ++ " \"$project_dir/build\" \"$project_dir/../Idris2IcpIndexer/lib/ic0\" \"$project_dir/../Idris2IcpIndexer/lib/ic0/sqlite\"; do " ++
+    "[ -d \"$d\" ] && echo \"$d\"; " ++
+    "done; }"
+  pure $ if null (trim output)
+         then []
+         else lines (trim output)
+
+findExtraCSources : String -> IO (List String)
+findExtraCSources ic0Support = do
+  (_, output, _) <- executeCommand $
+    "{ project_dir=$(cd " ++ ic0Support ++ "/../.. 2>/dev/null && pwd); " ++
+    "indexer_ic0=\"$project_dir/../Idris2IcpIndexer/lib/ic0\"; " ++
+    "support_real=$(cd " ++ ic0Support ++ " 2>/dev/null && pwd); " ++
+    "indexer_real=$(cd \"$indexer_ic0\" 2>/dev/null && pwd); " ++
+    "same_indexer_ic0=0; [ -n \"$indexer_real\" ] && [ \"$indexer_real\" = \"$support_real\" ] && same_indexer_ic0=1; " ++
+    "for f in " ++ ic0Support ++ "/*.c; do " ++
+    "[ -f \"$f\" ] || continue; " ++
+    "b=$(basename \"$f\"); " ++
+    "case \"$b\" in canister_entry.c|canister_entry_legacy.c|ic0_stubs.c|wasi_stubs.c|ic_ffi_bridge.c|ic_call.c) continue ;; esac; " ++
+    "case \"$b\" in sqlite_bridge.c|sqlite_stable.c) [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ] && continue ;; esac; " ++
+    "echo \"$f\"; " ++
+    "done; " ++
+    "if [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ]; then " ++
+    "for rel in sqlite_bridge.c sqlite_stable.c wasi_polyfill.c ic_http_outcall.c sqlite/libsqlite3.a; do " ++
+    "[ -f \"$indexer_ic0/$rel\" ] && echo \"$indexer_ic0/$rel\"; " ++
+    "done; " ++
+    "fi; }"
   pure $ if null (trim output)
          then []
          else lines (trim output)
@@ -940,6 +1259,15 @@ compileToWasm cFile refcSrc miniGmp ic0Support outputWasm = do
   -- Find project-specific FFI headers to include
   ffiHeaders <- findFfiHeaders ic0Support
   let includeFlags = unwords $ map (\h => "-include " ++ h) ffiHeaders
+  let directHeaderFlags = directSupportHeaderFlags ic0Support
+  let refcForceIncludeFlags = "-DIDRIS2_ICWASM_HAS_REFC_HEADERS=1 " ++
+                              "-Didris2_cast_string_to_Integer=idris2_cast_String_to_Integer " ++
+                              "-include " ++ refcSrc ++ "/cBackend.h " ++
+                              "-include " ++ miniGmp ++ "/gmp.h "
+  extraIncludeDirs <- findExtraIncludeDirs ic0Support
+  let extraIncludeFlags = unwords $ map (\d => "-I" ++ d) extraIncludeDirs
+  autoExtraCSources <- findExtraCSources ic0Support
+  let autoExtraFiles = if null autoExtraCSources then "" else unwords autoExtraCSources ++ " "
 
   let cmd = "CPATH= CPLUS_INCLUDE_PATH= emcc " ++ cFile ++ " " ++
             refcCFiles ++ " " ++
@@ -949,10 +1277,14 @@ compileToWasm cFile refcSrc miniGmp ic0Support outputWasm = do
             ic0Support ++ "/wasi_stubs.c " ++
             ic0Support ++ "/ic_ffi_bridge.c " ++
             ic0Support ++ "/ic_call.c " ++
-            includeFlags ++ " " ++
+              autoExtraFiles ++
+              refcForceIncludeFlags ++
+              directHeaderFlags ++
+              includeFlags ++ " " ++
             "-I" ++ miniGmp ++ " " ++
             "-I" ++ refcSrc ++ " " ++
             "-I" ++ ic0Support ++ " " ++
+            extraIncludeFlags ++ " " ++
             "-o " ++ outputWasm ++ " " ++
             "-s STANDALONE_WASM=1 " ++
             "-s FILESYSTEM=0 " ++
@@ -976,6 +1308,15 @@ compileToWasm cFile refcSrc miniGmp ic0Support outputWasm = do
       -- Find project-specific FFI headers
       ffiHeaders <- findFfiHeaders ic0Support'
       let includeFlags = unwords $ map (\h => "-include " ++ h) ffiHeaders
+      let directHeaderFlags = directSupportHeaderFlags ic0Support'
+      let refcForceIncludeFlags = "-DIDRIS2_ICWASM_HAS_REFC_HEADERS=1 " ++
+                                  "-Didris2_cast_string_to_Integer=idris2_cast_String_to_Integer " ++
+                                  "-include " ++ refcSrc ++ "/cBackend.h " ++
+                                  "-include " ++ miniGmp' ++ "/gmp.h "
+      extraIncludeDirs <- findExtraIncludeDirs ic0Support'
+      let extraIncludeFlags = unwords $ map (\d => "-I" ++ d) extraIncludeDirs
+      autoExtraCSources <- findExtraCSources ic0Support'
+      let autoExtraFiles = if null autoExtraCSources then "" else unwords autoExtraCSources ++ " "
 
       let cmd = "CPATH= CPLUS_INCLUDE_PATH= emcc " ++ cFile' ++ " " ++
                 refcCFiles' ++ " " ++
@@ -984,10 +1325,14 @@ compileToWasm cFile refcSrc miniGmp ic0Support outputWasm = do
                 ic0Support' ++ "/canister_entry.c " ++
                 ic0Support' ++ "/wasi_stubs.c " ++
                 ic0Support' ++ "/ic_call.c " ++
-                includeFlags ++ " " ++
+                  autoExtraFiles ++
+                  refcForceIncludeFlags ++
+                  directHeaderFlags ++
+                  includeFlags ++ " " ++
                 "-I" ++ miniGmp' ++ " " ++
                 "-I" ++ refcSrc ++ " " ++
                 "-I" ++ ic0Support' ++ " " ++
+                extraIncludeFlags ++ " " ++
                 "-o " ++ outputWasm' ++ " " ++
                 "-s STANDALONE_WASM=1 " ++
                 "-s FILESYSTEM=0 " ++
@@ -1019,6 +1364,15 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
   -- Find project-specific FFI headers
   ffiHeaders <- findFfiHeaders ic0Support
   let includeFlags = unwords $ map (\h => "-include " ++ h) ffiHeaders
+  let directHeaderFlags = directSupportHeaderFlags ic0Support
+  let refcForceIncludeFlags = "-DIDRIS2_ICWASM_HAS_REFC_HEADERS=1 " ++
+                              "-Didris2_cast_string_to_Integer=idris2_cast_String_to_Integer " ++
+                              "-include " ++ refcSrc ++ "/cBackend.h " ++
+                              "-include " ++ miniGmp ++ "/gmp.h "
+  extraIncludeDirs <- findExtraIncludeDirs ic0Support
+  let extraIncludeFlags = unwords $ map (\d => "-I" ++ d) extraIncludeDirs
+  autoExtraCSources <- findExtraCSources ic0Support
+  let autoExtraFiles = if null autoExtraCSources then "" else unwords autoExtraCSources ++ " "
 
   -- Check for ic_ffi_bridge.c
   hasBridge <- do
@@ -1034,7 +1388,7 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
 
   let bridgeFile = if hasBridge then ic0Support ++ "/ic_ffi_bridge.c " else ""
   let callFile = if hasCall then ic0Support ++ "/ic_call.c " else ""
-  let extraFiles = if null extraCSources then "" else unwords extraCSources ++ " "
+  let extraFiles = if null extraCSources then autoExtraFiles else unwords extraCSources ++ " " ++ autoExtraFiles
 
   let cmd = "CPATH= CPLUS_INCLUDE_PATH= emcc " ++ cFile ++ " " ++
             refcCFiles ++ " " ++
@@ -1044,11 +1398,14 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
             ic0Support ++ "/wasi_stubs.c " ++
             bridgeFile ++
             callFile ++
-            extraFiles ++
-            includeFlags ++ " " ++
+              extraFiles ++
+              refcForceIncludeFlags ++
+              directHeaderFlags ++
+              includeFlags ++ " " ++
             "-I" ++ miniGmp ++ " " ++
             "-I" ++ refcSrc ++ " " ++
             "-I" ++ ic0Support ++ " " ++
+            extraIncludeFlags ++ " " ++
             "-o " ++ outputWasm ++ " " ++
             "-s STANDALONE_WASM=1 " ++
             "-s FILESYSTEM=0 " ++
@@ -1271,10 +1628,13 @@ generateCanisterEntry opts cFile ic0Support = do
            then "Main"
            else modulePathToPrefix opts.mainModule
 
-  Right cContent <- readFile cFile
-    | Left err => pure $ Left $ "Failed to read generated RefC C file: " ++ show err
-
-  let cArities = parseRefCExportArities modulePrefix cContent normalizedExports
+  cArities <- do
+    Right cContent <- readFile cFile
+      | Left err => do
+          let emptyArities : List (String, RefCArity)
+              emptyArities = []
+          pure emptyArities
+    pure $ parseRefCExportArities modulePrefix cContent normalizedExports
 
   if null normalizedExports
     then do

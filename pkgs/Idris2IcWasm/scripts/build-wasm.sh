@@ -68,10 +68,10 @@ fi
 if [ ! -f "$REFC_SRC/runtime.c" ]; then
     mkdir -p "$REFC_SRC"
     for f in memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clock.c buffer.c prim.c refc_util.c; do
-        curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/main/support/refc/$f"
+        curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f"
     done
     for f in idris_support.c idris_file.c idris_directory.c idris_util.c; do
-        curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/main/support/c/$f"
+        curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f"
     done
 fi
 

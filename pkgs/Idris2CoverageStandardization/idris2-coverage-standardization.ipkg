@@ -1,5 +1,5 @@
 package idris2-coverage-standardization
-version = 0.1.1
+version = 0.1.2
 authors = "lazy-idris team"
 brief = "Typed vocabulary and draft standard for semantic test obligation coverage"
 
@@ -10,3 +10,4 @@ depends = base
 modules = Coverage.Standardization.Types
         , Coverage.Standardization.Model
         , Coverage.Standardization.Idris2Interface
+        , Coverage.Standardization.Step4Contract

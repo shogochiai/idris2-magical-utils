@@ -1,0 +1,81 @@
+[definitions]
+prefix = "REQ_FFICOV"
+
+[[spec_area]]
+name = "Reference Extraction"
+
+[[spec]]
+id = "${prefix}_REFS_001"
+title = "Integration path references are extracted"
+invariant = "Coverage SHALL extract integration/* path references from SPEC and TaskTree text."
+
+[[spec]]
+id = "${prefix}_REFS_002"
+title = "Step4 coverage is scoped by declared Integration paths"
+invariant = "Trace coverage SHALL use Integration paths declared in SPEC and TaskTree files, falling back to the full registry only when no paths are declared."
+
+[[spec_area]]
+name = "Coverage Report"
+
+[[spec]]
+id = "${prefix}_REPORT_001"
+title = "Proof-grade trace closes report gap"
+invariant = "A proof-grade trace covering all required evidence SHALL produce an admissible zero-gap report."
+
+[[spec]]
+id = "${prefix}_REPORT_002"
+title = "Unknown path is missing declaration"
+invariant = "An integration path absent from the typed registry SHALL be reported as a missing declaration."
+
+[[spec]]
+id = "${prefix}_REPORT_003"
+title = "No input trace blocks admissible claim"
+invariant = "Incomplete trace input SHALL prevent an admissible coverage claim."
+
+[[spec]]
+id = "${prefix}_REPORT_004"
+title = "Unsafe trust trace does not close report gap"
+invariant = "An unsafe-diagnostic trace SHALL leave the corresponding path in missing trace gaps."
+
+[[spec]]
+id = "${prefix}_REPORT_005"
+title = "Missing evidence trace does not close report gap"
+invariant = "A trace missing required evidence ids SHALL leave the corresponding path in missing trace gaps."
+
+[[spec]]
+id = "${prefix}_REPORT_006"
+title = "Destructive default op has mutation contract"
+invariant = "Destructive default operations SHALL have evidence, idempotency, and recovery contract metadata."
+
+[[spec]]
+id = "${prefix}_REPORT_007"
+title = "Empty and undeclared reports handle denominator edge cases"
+invariant = "Coverage percentage SHALL be 100 for an empty clean report and 0 for reports with missing declarations but no declared paths."
+
+[[spec]]
+id = "${prefix}_REPORT_008"
+title = "Read-only paths are mutation-classified without mutation contracts"
+invariant = "Read-only and local-only paths SHALL satisfy mutation classification without idempotency or recovery metadata."
+
+[[spec_area]]
+name = "Status and Rendering"
+
+[[spec]]
+id = "${prefix}_STATUS_001"
+title = "Step status equality and display are total"
+invariant = "StepStatus equality and display SHALL be deterministic for every constructor pair."
+
+[[spec]]
+id = "${prefix}_RENDER_001"
+title = "JSON string helpers cover arrays and escaped tokens"
+invariant = "Coverage JSON string helpers SHALL render empty, singleton, multiple, and escaped string values deterministically."
+
+[[spec]]
+id = "${prefix}_RENDER_002"
+title = "Report renderers expose path, status, gap, and admissibility fields"
+invariant = "Report JSON and text renderers SHALL expose declared paths, incomplete statuses, gap counts, coverage percent, and admissibility."
+
+[[spec]]
+id = "${prefix}_RENDER_003"
+title = "Path renderers expose mutation metadata and empty path arrays"
+invariant = "Path renderers SHALL expose risk, idempotency, recovery, and evidence metadata and SHALL render empty path arrays deterministically."

@@ -289,7 +289,7 @@ runDumppathsJsonInIsolatedCopy : String -> IO (Either String String)
 runDumppathsJsonInIsolatedCopy ipkgPath = do
   let (projectDir, ipkgName) = splitPath ipkgPath
   t <- time
-  let tempDir = "/tmp/idris2-evm-pathdump-" ++ show t
+  let tempDir = "/tmp/idris2-evm-pathdump-" ++ ipkgName ++ "-" ++ show t
   let copyCmd =
         "rm -rf " ++ tempDir
         ++ " && mkdir -p " ++ tempDir
@@ -359,6 +359,82 @@ pathsToJsonArray [] = "[]"
 pathsToJsonArray paths =
   "[\n" ++ fastConcat (intersperse ",\n" (map pathToJson paths)) ++ "\n  ]"
 
+maybeNatJson : Maybe Nat -> String
+maybeNatJson Nothing = "null"
+maybeNatJson (Just n) = show n
+
+maybeStringJson : Maybe String -> String
+maybeStringJson Nothing = "null"
+maybeStringJson (Just s) = "\"" ++ escapeJson s ++ "\""
+
+pathStepToFullJson : PathStep -> String
+pathStepToFullJson step =
+  "{"
+    ++ "\"node_id\":\"" ++ escapeJson step.nodeId ++ "\","
+    ++ "\"branch_index\":" ++ show step.branchIndex ++ ","
+    ++ "\"origin\":\"" ++ escapeJson step.origin ++ "\","
+    ++ "\"case_index\":" ++ maybeNatJson step.caseIndex ++ ","
+    ++ "\"branch_label\":" ++ maybeStringJson step.branchLabel ++ ","
+    ++ "\"source_span\":" ++ maybeStringJson step.sourceSpan
+    ++ "}"
+
+obligationClassName : ObligationClass -> String
+obligationClassName ReachableObligation = "ReachableObligation"
+obligationClassName LogicallyUnreachable = "LogicallyUnreachable"
+obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
+obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
+obligationClassName UnknownClassification = "UnknownClassification"
+
+pathToFullJson : PathObligation -> String
+pathToFullJson path =
+  "{"
+    ++ "\"path_id\":\"" ++ escapeJson path.pathId ++ "\","
+    ++ "\"classification\":\"" ++ obligationClassName path.classification ++ "\","
+    ++ "\"terminal_kind\":\"" ++ escapeJson path.terminalKind ++ "\","
+    ++ "\"terminal_clause_id\":" ++ maybeNatJson path.terminalClauseId ++ ","
+    ++ "\"steps\":[" ++ fastConcat (intersperse "," (map pathStepToFullJson path.steps)) ++ "],"
+    ++ "\"source_span_union\":" ++ maybeStringJson path.sourceSpanUnion ++ ","
+    ++ "\"path_length\":" ++ show path.pathLength
+    ++ "}"
+
+pathObligationFunctionToFullJson : PathObligation -> String
+pathObligationFunctionToFullJson path =
+  "{"
+    ++ "\"function_name\":\"" ++ escapeJson path.functionName ++ "\","
+    ++ "\"paths\":[" ++ pathToFullJson path ++ "]"
+    ++ "}"
+
+pathObligationsToDumppathsJson : List PathObligation -> String
+pathObligationsToDumppathsJson paths =
+  "{"
+    ++ "\"compiler_version\":\"evm-observable-path-filter\","
+    ++ "\"export_kind\":\"canonical_intrafunction_paths\","
+    ++ "\"path_schema_version\":1,"
+    ++ "\"functions\":["
+    ++ fastConcat (intersperse "," (map pathObligationFunctionToFullJson paths))
+    ++ "]}"
+
+observableBranchIdsFromLabels : List Runtime.LabelEntry -> List String
+observableBranchIdsFromLabels labels =
+  mapMaybe toBranchId labels
+  where
+    toBranchId : Runtime.LabelEntry -> Maybe String
+    toBranchId label =
+      case label.labelKind of
+        Runtime.LKBranch => label.branchId
+        _ => Nothing
+
+filterDumppathsToObservableBranches : String -> String -> IO (Either String String)
+filterDumppathsToObservableBranches dumppathsContent labelPath = do
+  Right labels <- Runtime.loadLabels labelPath
+    | Left err => pure $ Left err
+  case parseProjectDumppathsJson defaultPathExclusions dumppathsContent of
+    Left err => pure $ Left err
+    Right paths =>
+      let observableIds = observableBranchIdsFromLabels labels
+          observablePaths = filter (pathCoveredByBranchIds observableIds) paths
+      in pure $ Right $ pathObligationsToDumppathsJson observablePaths
+
 coverageMeasurementToJson : CoverageMeasurement -> String
 coverageMeasurementToJson m = unlines
   [ "{"
@@ -402,7 +478,9 @@ runPathFullPipelineArtifacts opts = do
       case dres of
         Left err => pure $ Left err
         Right branches => do
-          Right dumppathsContent <- runDumppathsJsonInIsolatedCopy ipkgPath
+          let wrapperIpkgResult = !(findLatestTempIpkgForPaths targetDir)
+          let pathIpkg = fromMaybe ipkgPath wrapperIpkgResult
+          Right dumppathsContent <- runDumppathsJsonInIsolatedCopy pathIpkg
             | Left err => pure $ Left err
           let canonicalBranches = filter (\b => isCanonical b.branchClass) branches
           Right (instrPath, labelPath) <- YulInstr.generateAndInstrumentYul ipkgPath outputDir canonicalBranches
@@ -413,8 +491,10 @@ runPathFullPipelineArtifacts opts = do
           let traceOutput = outputDir ++ "/coverage-trace.csv"
           Right tracePath <- YulInstr.runIdrisEvmTest binPath traceOutput
             | Left err => pure $ Left $ "Execution failed: " ++ err
-          hitsResult <- analyzePathHitsFromTraceAndLabelsContent dumppathsContent tracePath labelPath
-          pure $ map (\hits => (dumppathsContent, hits)) hitsResult
+          Right observableContent <- filterDumppathsToObservableBranches dumppathsContent labelPath
+            | Left err => pure $ Left $ "Observable path filtering failed: " ++ err
+          hitsResult <- analyzePathHitsFromTraceAndLabelsContent observableContent tracePath labelPath
+          pure $ map (\hits => (observableContent, hits)) hitsResult
 
 runPaths : Options -> IO ()
 runPaths opts = do

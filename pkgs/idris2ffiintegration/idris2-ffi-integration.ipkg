@@ -1,0 +1,17 @@
+package idris2-ffi-integration
+version = 0.1.0
+authors = "lazy-idris team"
+brief = "Typed Integration FFI operation and trace model"
+
+sourcedir = "src"
+
+depends = base, contrib
+
+modules = Integration.Model
+        , Integration.Registry
+        , Integration.Trace
+        , Tests.AllTests
+        , Main
+
+main = Main
+executable = idris2-ffi-integration

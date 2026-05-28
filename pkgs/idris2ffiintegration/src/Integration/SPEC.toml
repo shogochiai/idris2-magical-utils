@@ -1,0 +1,107 @@
+[definitions]
+prefix = "REQ_FFIINT"
+
+[[spec_area]]
+name = "Trust Boundary"
+
+[[spec]]
+id = "${prefix}_TRUST_001"
+title = "ProofGrade pass with complete evidence is admissible"
+invariant = "A ProofGrade trace with pass outcome and all required evidence ids SHALL be coverage-admissible."
+
+[[spec]]
+id = "${prefix}_TRUST_002"
+title = "Failed ProofGrade event is rejected"
+invariant = "A ProofGrade trace with a non-pass outcome SHALL NOT be coverage-admissible."
+
+[[spec]]
+id = "${prefix}_TRUST_003"
+title = "Missing evidence is rejected"
+invariant = "A trace missing required evidence ids SHALL NOT be coverage-admissible."
+
+[[spec]]
+id = "${prefix}_TRUST_004"
+title = "UnsafeDiagnostic is not coverage proof"
+invariant = "An UnsafeDiagnostic observation SHALL NOT be coverage-admissible."
+
+[[spec]]
+id = "${prefix}_TRUST_005"
+title = "Candidate is not coverage proof"
+invariant = "A Candidate observation SHALL NOT be coverage-admissible."
+
+[[spec_area]]
+name = "Registry"
+
+[[spec]]
+id = "${prefix}_REGISTRY_001"
+title = "Default registry size is stable"
+invariant = "The default Integration FFI registry SHALL contain the expected ten core operations."
+
+[[spec]]
+id = "${prefix}_REGISTRY_002"
+title = "Default registry is proof-grade"
+invariant = "Default Integration FFI operations SHALL be ProofGrade operations."
+
+[[spec]]
+id = "${prefix}_REGISTRY_003"
+title = "Destructive operation has mutation contract"
+invariant = "The GlobalRegistry upgrade apply operation SHALL have destructive risk, idempotency, recovery policy, and evidence contract."
+
+[[spec_area]]
+name = "Trace Parser"
+
+[[spec]]
+id = "${prefix}_TRACE_001"
+title = "Trace parser extracts typed fields"
+invariant = "The trace parser SHALL parse schema, operation id, trust, outcome, and evidence ids from compact JSONL trace events."
+
+[[spec]]
+id = "${prefix}_TRACE_002"
+title = "Unsafe trust trace does not cover proof operation"
+invariant = "A trace event carrying unsafe-diagnostic trust SHALL NOT cover a ProofGrade operation."
+
+[[spec]]
+id = "${prefix}_TRACE_003"
+title = "Missing evidence trace does not cover proof operation"
+invariant = "A trace event with missing evidence ids SHALL NOT cover a ProofGrade operation."
+
+[[spec_area]]
+name = "Model Semantics"
+
+[[spec]]
+id = "${prefix}_MODEL_001"
+title = "Risk and boundary enumerations have stable semantics"
+invariant = "Integration risk side-effect semantics and boundary display names SHALL remain stable across releases."
+
+[[spec]]
+id = "${prefix}_MODEL_002"
+title = "Mutation contracts are required only for side-effecting operations"
+invariant = "Mutating and destructive operations SHALL require evidence, idempotency, and recovery contracts while read-only operations SHALL NOT."
+
+[[spec_area]]
+name = "Rendering"
+
+[[spec]]
+id = "${prefix}_RENDER_001"
+title = "JSON render helpers cover arrays and escapes"
+invariant = "Integration JSON render helpers SHALL render empty, singleton, multiple, and escaped string values deterministically."
+
+[[spec]]
+id = "${prefix}_RENDER_002"
+title = "Operation and trace JSON rendering preserves metadata"
+invariant = "Operation and trace JSON renderers SHALL preserve public path, trust, boundary, risk, adapter, evidence, idempotency, and admissibility metadata."
+
+[[spec]]
+id = "${prefix}_TRACE_004"
+title = "Trace parser covers candidate and malformed trust edge cases"
+invariant = "The trace parser SHALL parse candidate trust and degrade unknown trust values to no trust instead of accepting them as proof."
+
+[[spec]]
+id = "${prefix}_TRACE_005"
+title = "Trace field parsers handle missing and escaped tokens"
+invariant = "Trace field parsers SHALL return typed missing values for absent fields and preserve escaped JSON string content."
+
+[[spec]]
+id = "${prefix}_TRACE_006"
+title = "Trace parser primitives cover terminal parser states"
+invariant = "Trace parser primitive helpers SHALL expose deterministic terminal behavior for empty input, missing needles, raw tokens, and unknown trust values."

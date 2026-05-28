@@ -60,6 +60,197 @@ buildDumpcasesCommand backend projectDir ipkgName outputPath =
   "cd " ++ projectDir ++ " && idris2 --dumpcases " ++ outputPath ++ " " ++
   codegenFlag backend ++ "--build " ++ ipkgName ++ " 2>&1"
 
+resolveIdris2Command : IO String
+resolveIdris2Command = do
+  mcmd <- getEnv "IDRIS2_BIN"
+  pure $ fromMaybe "idris2" mcmd
+
+shellQuote : String -> String
+shellQuote s = "\"" ++ s ++ "\""
+
+hasGmpHeader : String -> IO Bool
+hasGmpHeader dir = do
+  Right _ <- readFile (dir ++ "/gmp.h")
+    | Left _ => pure False
+  pure True
+
+firstExistingGmpInclude : List String -> IO (Maybe String)
+firstExistingGmpInclude [] = pure Nothing
+firstExistingGmpInclude (dir :: rest) =
+  if null dir
+     then firstExistingGmpInclude rest
+     else do
+       found <- hasGmpHeader dir
+       if found
+          then pure (Just dir)
+          else firstExistingGmpInclude rest
+
+resolveGmpIncludePath : String -> IO (Maybe String)
+resolveGmpIncludePath projectDir = do
+  mMiniGmp <- getEnv "MINI_GMP"
+  pure !(firstExistingGmpInclude
+    (catMaybes
+      [ mMiniGmp
+      , Just "/tmp/mini-gmp"
+      , Just (projectDir ++ "/.ci-cache/mini-gmp")
+      , Just (projectDir ++ "/../.ci-cache/mini-gmp")
+      , Just (projectDir ++ "/../../.ci-cache/mini-gmp")
+      , Just "/opt/homebrew/opt/gmp/include"
+        , Just "/usr/local/opt/gmp/include"
+        ]))
+
+hasGmpLib : String -> IO Bool
+hasGmpLib dir = do
+  Right _ <- readFile (dir ++ "/libgmp.dylib")
+    | Left _ => do
+        Right _ <- readFile (dir ++ "/libgmp.a")
+          | Left _ => pure False
+        pure True
+  pure True
+
+firstExistingGmpLib : List String -> IO (Maybe String)
+firstExistingGmpLib [] = pure Nothing
+firstExistingGmpLib (dir :: rest) =
+  if null dir
+     then firstExistingGmpLib rest
+     else do
+       found <- hasGmpLib dir
+       if found
+          then pure (Just dir)
+          else firstExistingGmpLib rest
+
+resolveGmpLibPath : String -> IO (Maybe String)
+resolveGmpLibPath projectDir =
+  firstExistingGmpLib
+    [ projectDir ++ "/.ci-cache/mini-gmp"
+    , projectDir ++ "/../.ci-cache/mini-gmp"
+    , projectDir ++ "/../../.ci-cache/mini-gmp"
+    , "/opt/homebrew/opt/gmp/lib"
+    , "/usr/local/opt/gmp/lib"
+    ]
+
+discoverNativeIncludeDirs : String -> IO (List String)
+discoverNativeIncludeDirs projectDir = do
+  let tmpFile = "/tmp/idris2-dumpcases-native-includes.txt"
+  let cmd = "for d in " ++
+            shellQuote (projectDir ++ "/lib/ic0") ++ " " ++
+            shellQuote (projectDir ++ "/build") ++ " " ++
+            shellQuote (projectDir ++ "/../Idris2IcpIndexer/lib/ic0") ++ " " ++
+            shellQuote (projectDir ++ "/../Idris2IcpIndexer/lib/ic0/sqlite") ++
+            "; do [ -d \"$d\" ] && echo \"$d\"; done > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure []
+  pure $ filter (not . null) (map trim (lines content))
+
+discoverForceHeaders : String -> IO (List String)
+discoverForceHeaders projectDir = do
+  let tmpFile = "/tmp/idris2-dumpcases-force-headers.txt"
+  let projectIc0 = projectDir ++ "/lib/ic0"
+  let indexerIc0 = projectDir ++ "/../Idris2IcpIndexer/lib/ic0"
+  let cmd =
+        "{ find " ++ shellQuote projectIc0 ++ " -maxdepth 1 -type f -name '*.h' 2>/dev/null; " ++
+        "if [ -d " ++ shellQuote indexerIc0 ++ " ]; then " ++
+        "find " ++ shellQuote indexerIc0 ++ " -maxdepth 1 -type f \\( -name 'sqlite_bridge.h' -o -name 'sqlite_stable.h' -o -name 'ic_http_outcall.h' -o -name 'ic_cycles.h' \\) 2>/dev/null; " ++
+        "fi; } > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure []
+  pure $ filter (not . null) (map trim (lines content))
+
+findPackInstallBase : IO (Maybe String)
+findPackInstallBase = do
+  let tmpFile = "/tmp/pack-install-base-dumpcases.txt"
+  _ <- system $ "ls -td ~/.local/state/pack/install/*/ 2>/dev/null | head -1 > " ++ tmpFile
+  Right content <- readFile tmpFile
+    | Left _ => pure Nothing
+  let path = trim content
+  if null path then pure Nothing else pure (Just path)
+
+discoverPackagePath : IO String
+discoverPackagePath = do
+  mBase <- findPackInstallBase
+  case mBase of
+    Nothing => pure ""
+    Just basePath => do
+      let tmpFile = "/tmp/idris2-dumpcases-package-paths.txt"
+      let cmd = "find " ++ basePath ++ " -type d -name 'idris2-*' 2>/dev/null > " ++ tmpFile
+      _ <- system cmd
+      Right content <- readFile tmpFile
+        | Left _ => pure ""
+      pure $ joinBy ":" (filter (not . null) (map trim (lines content)))
+
+resolveDumpcasesEnvPrefix : String -> IO String
+resolveDumpcasesEnvPrefix projectDir = do
+  mPackagePath <- getEnv "IDRIS2_PACKAGE_PATH"
+  discoveredPackagePath <- discoverPackagePath
+  mCPath <- getEnv "CPATH"
+  mCppFlags <- getEnv "CPPFLAGS"
+  mLibraryPath <- getEnv "LIBRARY_PATH"
+  mLdFlags <- getEnv "LDFLAGS"
+  mGmpInclude <- resolveGmpIncludePath projectDir
+  mGmpLib <- resolveGmpLibPath projectDir
+  nativeIncludeDirs <- discoverNativeIncludeDirs projectDir
+  forceHeaders <- discoverForceHeaders projectDir
+  let packagePathValue =
+        case mPackagePath of
+          Just old => Just old
+          Nothing =>
+            if null discoveredPackagePath
+               then Nothing
+               else Just discoveredPackagePath
+  let cpathParts = catMaybes [mGmpInclude] ++ nativeIncludeDirs
+  let cpathPrefix = joinBy ":" cpathParts
+  let cpathValue =
+        case mGmpInclude of
+          Nothing => if null nativeIncludeDirs
+                        then mCPath
+                        else Just $ case mCPath of
+                                      Nothing => cpathPrefix
+                                      Just old => cpathPrefix ++ ":" ++ old
+          Just _ => Just $ case mCPath of
+                             Nothing => cpathPrefix
+                             Just old => cpathPrefix ++ ":" ++ old
+  let includeFlags = unwords (("-Didris2_cast_string_to_Integer=idris2_cast_String_to_Integer") :: map (\h => "-include " ++ h) forceHeaders)
+  let cppFlagValue = case mCppFlags of
+                       Nothing => includeFlags
+                       Just old => includeFlags ++ " " ++ old
+  let libraryPathValue =
+        case mGmpLib of
+          Nothing => mLibraryPath
+          Just lib => Just $ case mLibraryPath of
+                               Nothing => lib
+                               Just old => lib ++ ":" ++ old
+  let ldFlagValue =
+        case mGmpLib of
+          Nothing => mLdFlags
+          Just lib => Just $ case mLdFlags of
+                               Nothing => "-L" ++ lib
+                               Just old => "-L" ++ lib ++ " " ++ old
+  let vars : List String
+      vars =
+        catMaybes
+          [ map (\v => "IDRIS2_PACKAGE_PATH=" ++ shellQuote v) packagePathValue
+          , map (\v => "CPATH=" ++ shellQuote v) cpathValue
+          , if null includeFlags then Nothing else Just ("CPPFLAGS=" ++ shellQuote cppFlagValue)
+          , map (\v => "LIBRARY_PATH=" ++ shellQuote v) libraryPathValue
+          , map (\v => "LDFLAGS=" ++ shellQuote v) ldFlagValue
+          ]
+  pure $
+    case vars of
+      [] => ""
+      presentVars => joinBy " " presentVars ++ " "
+
+buildDumpcasesCommandWithEnv : Backend -> String -> String -> String -> IO String
+buildDumpcasesCommandWithEnv backend projectDir ipkgName outputPath = do
+  idris2Cmd <- resolveIdris2Command
+  envPrefix <- resolveDumpcasesEnvPrefix projectDir
+  let logPath = outputPath ++ ".build.log"
+  pure $
+    "cd " ++ projectDir ++ " && " ++ envPrefix ++
+    idris2Cmd ++ " --dumpcases " ++ outputPath ++ " " ++
+    codegenFlag backend ++ "--build " ++ ipkgName ++ " > " ++ logPath ++ " 2>&1"
+
 ||| Default output path for temporary dumpcases file
 public export
 defaultOutputPath : String
@@ -92,7 +283,7 @@ runDumpcases : (backend : Backend)
             -> (outputPath : String)
             -> IO (Either String String)
 runDumpcases backend projectDir ipkgName outputPath = do
-  let cmd = buildDumpcasesCommand backend projectDir ipkgName outputPath
+  cmd <- buildDumpcasesCommandWithEnv backend projectDir ipkgName outputPath
   _ <- system cmd
   -- Note: We ignore exit code because dumpcases output is written BEFORE
   -- C compilation. On macOS with Homebrew, RefC backend often fails to find

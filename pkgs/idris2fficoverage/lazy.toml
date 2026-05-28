@@ -1,0 +1,6 @@
+[lazyos]
+version = "0.1"
+
+[coverage.exclusions]
+module_prefixes = ["Main.", "FfiCoverage.Model.FfiCoverageReport."]
+functions = ["FfiCoverage.Model.FfiPath"]
