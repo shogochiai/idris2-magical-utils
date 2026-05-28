@@ -1,4 +1,10 @@
 build/
+**/build/
 **/*.ttc
 **/*.ss
 **/*.so
+.lazy/
+**/.lazy/
+__pycache__/
+**/__pycache__/
+*.py[cod]
