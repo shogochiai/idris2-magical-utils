@@ -57,24 +57,25 @@ publish must happen only from `sql_vfs_ffi_commit_update`, after SQLite has
 accepted the transaction commit.
 
 Local RefC tests link `support/ic0/sql_vfs_ffi_stub.c`. The real canister
-backend currently lives in EtherClaw at
-`pkgs/Idris2IcpIndexer/lib/ic0/sqlite_vfs_bridge.c`. It implements the direct
-VFS, heap overlay, dirty-page append, page table, and final-superblock publish
-contract. It does not yet use the upstream Rust crate's MemoryManager-compatible
-byte layout.
+backend lives in `pkgs/Idris2IcWasmSQLite/support/ic0/sqlite_vfs_bridge.c`.
+It implements the direct VFS, heap overlay, dirty-page append, page table, and
+final-superblock publish contract. It does not yet use the upstream Rust crate's
+MemoryManager-compatible byte layout.
+
+The backend uses `SQLITE_OS_OTHER=1`, `SQLITE_THREADSAFE=0`, no WAL, and no
+loadable extensions. `sqlite_vfs_bridge.c` provides `sqlite3_os_init` and
+registers only the `icstable` VFS, so the SQLite support path does not link a
+WASI fd/read/write/seek polyfill.
 
 The backend should continue toward the upstream pieces in this order:
 
-1. SQLite build flags: `SQLITE_OS_OTHER=1`, `SQLITE_THREADSAFE=0`, no WAL, no
-   loadable extensions.
-2. `sqlite3_os_init` registration for the `icstable` VFS.
-3. `sqlite3_vfs` and `sqlite3_io_methods` callbacks for `/main.db` and heap temp
+1. `sqlite3_vfs` and `sqlite3_io_methods` callbacks for `/main.db` and heap temp
    files.
-4. Stable superblock encoding at virtual offset `0..64KiB`.
-5. Segmented page table: root table plus 256-page segment tables.
-6. Heap write overlay and atomic commit: write dirty pages/page tables first,
+2. Stable superblock encoding at virtual offset `0..64KiB`.
+3. Segmented page table: root table plus 256-page segment tables.
+4. Heap write overlay and atomic commit: write dirty pages/page tables first,
    then publish with the final superblock write.
-7. Import/export and checksum refresh utilities for migration and operations.
+5. Import/export and checksum refresh utilities for migration and operations.
 
 ## TheWorld Integration Shape
 

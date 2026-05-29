@@ -13,6 +13,11 @@ type = "local"
 path = "pkgs/Idris2IcWasm"
 ipkg = "idris2-icwasm.ipkg"
 
+[custom.all.idris2-icwasm-sqlite]
+type = "local"
+path = "pkgs/Idris2IcWasmSQLite"
+ipkg = "idris2-icwasm-sqlite.ipkg"
+
 [custom.all.idris2-coverage]
 type = "local"
 path = "pkgs/Idris2Coverage"

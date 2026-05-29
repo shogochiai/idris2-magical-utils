@@ -198,7 +198,7 @@ load_config() {
     CONFIG_PATH="$(cd "$(dirname "$CONFIG_PATH")" && pwd)/$(basename "$CONFIG_PATH")"
     CONFIG_DIR="$(abs_dirname "$CONFIG_PATH")"
 
-    local project_dir_raw ic0_support_raw icwasm_support_raw local_icwasm_raw
+    local project_dir_raw ic0_support_raw icwasm_support_raw icwasm_sqlite_support_raw local_icwasm_raw
     local workdir_raw build_dir_raw build_label output_name build_command
     local c_file_expected_raw c_file_pattern gen_enabled did_raw prefix lib init cmd_map_raw
     local timer_cmd heartbeat_checkpoint heartbeat_cmd sql_stable out_raw stub_wasi stub_script_raw
@@ -206,11 +206,13 @@ load_config() {
     project_dir_raw="$(toml_get_string "paths" "project_dir")"
     ic0_support_raw="$(toml_get_string "paths" "ic0_support")"
     icwasm_support_raw="$(toml_get_string "paths" "icwasm_support")"
+    icwasm_sqlite_support_raw="$(toml_get_string "paths" "icwasm_sqlite_support")"
     local_icwasm_raw="$(toml_get_string "paths" "local_idris2_icwasm")"
 
     PROJECT_DIR="$(resolve_path "${project_dir_raw:-.}")"
     IC0_SUPPORT="$(resolve_path "${ic0_support_raw:-$PROJECT_DIR/support/ic0}")"
     ICWASM_SUPPORT="$(resolve_path "${icwasm_support_raw:-$IC0_SUPPORT}")"
+    ICWASM_SQLITE_SUPPORT="$(resolve_path "${icwasm_sqlite_support_raw:-}")"
     LOCAL_IDRIS2_ICWASM="$(resolve_path "${local_icwasm_raw:-${IDRIS2_ICWASM_BINARY:-}}")"
 
     build_label="$(toml_get_string "build" "label")"
@@ -288,6 +290,46 @@ load_config() {
         EXTRA_INCLUDE_DIRS[$i]="$(resolve_path "${EXTRA_INCLUDE_DIRS[$i]}")"
     done
 
+    append_unique() {
+        local var_name="$1"
+        local value="$2"
+        local existing
+        local found=0
+        local restore_nounset=0
+        case "$-" in
+            *u*)
+                restore_nounset=1
+                set +u
+                ;;
+        esac
+        eval 'for existing in "${'"$var_name"'[@]}"; do if [[ "$existing" == "$value" ]]; then found=1; break; fi; done'
+        [[ "$restore_nounset" == "1" ]] && set -u
+        [[ "$found" == "1" ]] && return 0
+        eval "$var_name+=(\"\$value\")"
+    }
+
+    if [[ -n "$sql_vfs_memory_id" ]]; then
+        if [[ -z "$ICWASM_SQLITE_SUPPORT" ]]; then
+            echo "Error: gen_entry.sql_vfs_memory_id requires paths.icwasm_sqlite_support" >&2
+            exit 1
+        fi
+        for required in \
+            "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.h" \
+            "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.h" \
+            "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.c" \
+            "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.c" \
+            "$ICWASM_SQLITE_SUPPORT/sqlite/libsqlite3.a"; do
+            [[ -f "$required" ]] || { echo "Error: SQLite VFS support file not found: $required" >&2; exit 1; }
+        done
+        append_unique EXTRA_FORCE_INCLUDES "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.h"
+        append_unique EXTRA_FORCE_INCLUDES "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.h"
+        append_unique EXTRA_C_FILES "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.c"
+        append_unique EXTRA_C_FILES "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.c"
+        append_unique EXTRA_C_FILES "$ICWASM_SQLITE_SUPPORT/sqlite/libsqlite3.a"
+        append_unique EXTRA_INCLUDE_DIRS "$ICWASM_SQLITE_SUPPORT"
+        append_unique EXTRA_INCLUDE_DIRS "$ICWASM_SQLITE_SUPPORT/sqlite"
+    fi
+
     stub_wasi="$(toml_get_bool "wasi" "stub")"
     stub_script_raw="$(toml_get_string "wasi" "stub_script")"
     ENABLE_WASI_STUB="$stub_wasi"
@@ -298,7 +340,7 @@ run_shell_command_in_workdir() {
     local cmd="$1"
     (
         cd "$WORKDIR"
-        export PROJECT_DIR WORKDIR BUILD_DIR MINI_GMP IC0_SUPPORT ICWASM_SUPPORT LOCAL_IDRIS2_ICWASM DEFAULT_OUTPUT_NAME
+        export PROJECT_DIR WORKDIR BUILD_DIR MINI_GMP IC0_SUPPORT ICWASM_SUPPORT ICWASM_SQLITE_SUPPORT LOCAL_IDRIS2_ICWASM DEFAULT_OUTPUT_NAME
         bash -lc "$cmd"
     )
 }

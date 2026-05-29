@@ -139,7 +139,7 @@ detectTestHarnessStyle content =
         then PureRunAllHarnessWithRunner
      else if hasPureRunAll
         then PureRunAllHarness
-	    else ExistingHarness
+     else ExistingHarness
 
 takeFirst : Nat -> List a -> List a
 takeFirst Z _ = []
@@ -1194,10 +1194,17 @@ findFfiHeaders dir = do
   -- mmnt_ffi.h, so collect all direct support headers instead of only ic_*.
   (_, output, _) <- executeCommand $
     "{ project_dir=$(cd " ++ dir ++ "/../.. 2>/dev/null && pwd); " ++
+    "sqlite_ic0=''; " ++
+    "for candidate in \"$project_dir/../Idris2IcWasmSQLite/support/ic0\" \"$project_dir/../../../idris2-magical-utils/pkgs/Idris2IcWasmSQLite/support/ic0\"; do " ++
+    "[ -d \"$candidate\" ] && sqlite_ic0=\"$candidate\" && break; " ++
+    "done; " ++
     "indexer_ic0=\"$project_dir/../Idris2IcpIndexer/lib/ic0\"; " ++
     "find " ++ dir ++ " -maxdepth 1 -type f -name '*.h' 2>/dev/null; " ++
-    "if [ -d \"$indexer_ic0\" ]; then " ++
-    "find \"$indexer_ic0\" -maxdepth 1 -type f \\( -name 'sqlite_bridge.h' -o -name 'sqlite_stable.h' -o -name 'ic_http_outcall.h' -o -name 'ic_cycles.h' \\) 2>/dev/null; " ++
+    "if [ -d \"$sqlite_ic0\" ]; then " ++
+    "find \"$sqlite_ic0\" -maxdepth 1 -type f \\( -name 'sqlite_bridge.h' -o -name 'sqlite_vfs_bridge.h' \\) 2>/dev/null; " ++
+    "find \"$sqlite_ic0/legacy\" -maxdepth 1 -type f -name 'sqlite_stable.h' 2>/dev/null; " ++
+    "elif [ -d \"$indexer_ic0\" ]; then " ++
+    "find \"$indexer_ic0\" -maxdepth 1 -type f \\( -name 'sqlite_bridge.h' -o -name 'sqlite_vfs_bridge.h' -o -name 'sqlite_stable.h' -o -name 'ic_http_outcall.h' -o -name 'ic_cycles.h' \\) 2>/dev/null; " ++
     "fi; }"
   pure $ if null (trim output)
          then []
@@ -1211,9 +1218,17 @@ findExtraIncludeDirs : String -> IO (List String)
 findExtraIncludeDirs ic0Support = do
   (_, output, _) <- executeCommand $
     "{ project_dir=$(cd " ++ ic0Support ++ "/../.. 2>/dev/null && pwd); " ++
-    "for d in " ++ ic0Support ++ " \"$project_dir/build\" \"$project_dir/../Idris2IcpIndexer/lib/ic0\" \"$project_dir/../Idris2IcpIndexer/lib/ic0/sqlite\"; do " ++
+    "sqlite_ic0=''; " ++
+    "for candidate in \"$project_dir/../Idris2IcWasmSQLite/support/ic0\" \"$project_dir/../../../idris2-magical-utils/pkgs/Idris2IcWasmSQLite/support/ic0\"; do " ++
+    "[ -d \"$candidate\" ] && sqlite_ic0=\"$candidate\" && break; " ++
+    "done; " ++
+    "indexer_ic0=\"$project_dir/../Idris2IcpIndexer/lib/ic0\"; " ++
+    "for d in " ++ ic0Support ++ " \"$project_dir/build\" \"$sqlite_ic0\" \"$sqlite_ic0/sqlite\" \"$sqlite_ic0/legacy\"; do " ++
     "[ -d \"$d\" ] && echo \"$d\"; " ++
-    "done; }"
+    "done; " ++
+    "if [ ! -d \"$sqlite_ic0\" ]; then " ++
+    "for d in \"$indexer_ic0\" \"$indexer_ic0/sqlite\"; do [ -d \"$d\" ] && echo \"$d\"; done; " ++
+    "fi; }"
   pure $ if null (trim output)
          then []
          else lines (trim output)
@@ -1222,19 +1237,30 @@ findExtraCSources : String -> IO (List String)
 findExtraCSources ic0Support = do
   (_, output, _) <- executeCommand $
     "{ project_dir=$(cd " ++ ic0Support ++ "/../.. 2>/dev/null && pwd); " ++
+    "sqlite_ic0=''; " ++
+    "for candidate in \"$project_dir/../Idris2IcWasmSQLite/support/ic0\" \"$project_dir/../../../idris2-magical-utils/pkgs/Idris2IcWasmSQLite/support/ic0\"; do " ++
+    "[ -d \"$candidate\" ] && sqlite_ic0=\"$candidate\" && break; " ++
+    "done; " ++
     "indexer_ic0=\"$project_dir/../Idris2IcpIndexer/lib/ic0\"; " ++
     "support_real=$(cd " ++ ic0Support ++ " 2>/dev/null && pwd); " ++
     "indexer_real=$(cd \"$indexer_ic0\" 2>/dev/null && pwd); " ++
+    "sqlite_real=$(cd \"$sqlite_ic0\" 2>/dev/null && pwd); " ++
     "same_indexer_ic0=0; [ -n \"$indexer_real\" ] && [ \"$indexer_real\" = \"$support_real\" ] && same_indexer_ic0=1; " ++
+    "same_sqlite_ic0=0; [ -n \"$sqlite_real\" ] && [ \"$sqlite_real\" = \"$support_real\" ] && same_sqlite_ic0=1; " ++
     "for f in " ++ ic0Support ++ "/*.c; do " ++
     "[ -f \"$f\" ] || continue; " ++
     "b=$(basename \"$f\"); " ++
     "case \"$b\" in canister_entry.c|canister_entry_legacy.c|ic0_stubs.c|wasi_stubs.c|ic_ffi_bridge.c|ic_call.c) continue ;; esac; " ++
-    "case \"$b\" in sqlite_bridge.c|sqlite_stable.c) [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ] && continue ;; esac; " ++
+    "case \"$b\" in sqlite_bridge.c|sqlite_vfs_bridge.c|sqlite_stable.c) [ -d \"$sqlite_ic0\" ] && [ \"$same_sqlite_ic0\" -eq 0 ] && continue ;; esac; " ++
+    "case \"$b\" in sqlite_bridge.c|sqlite_vfs_bridge.c|sqlite_stable.c|wasi_polyfill.c) [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ] && continue ;; esac; " ++
     "echo \"$f\"; " ++
     "done; " ++
-    "if [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ]; then " ++
-    "for rel in sqlite_bridge.c sqlite_stable.c wasi_polyfill.c ic_http_outcall.c sqlite/libsqlite3.a; do " ++
+    "if [ -d \"$sqlite_ic0\" ] && [ \"$same_sqlite_ic0\" -eq 0 ]; then " ++
+    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c legacy/sqlite_stable.c sqlite/libsqlite3.a; do " ++
+    "[ -f \"$sqlite_ic0/$rel\" ] && echo \"$sqlite_ic0/$rel\"; " ++
+    "done; " ++
+    "elif [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ]; then " ++
+    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c sqlite_stable.c wasi_polyfill.c ic_http_outcall.c sqlite/libsqlite3.a; do " ++
     "[ -f \"$indexer_ic0/$rel\" ] && echo \"$indexer_ic0/$rel\"; " ++
     "done; " ++
     "fi; }"
