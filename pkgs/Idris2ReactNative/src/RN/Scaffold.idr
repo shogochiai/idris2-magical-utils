@@ -389,12 +389,27 @@ middlepageHtml iiUrl = """
       go.addEventListener('click', async () => {
         go.disabled = true; s.textContent = 'opening Internet Identity…';
         try {
-          await new Promise((resolve, reject) => client.login({
+          // Race login against a timeout: if II dead-ends (e.g. its own "Unable
+          // to connect" page, which does NOT redirect back), the app's deep-link
+          // callback would never fire and its Sign-in button would stay stuck on
+          // "Login in Progress". The timeout always redirects back with an error
+          // so the app resets. The user can retry.
+          const TIMEOUT_MS = 90000;
+          let timer;
+          // No windowOpenerFeatures: a feature-string makes Chrome open a
+          // detached popup whose window.opener link to this page can break, so
+          // II's postMessage handshake back to us fails → II shows "Unable to
+          // connect". Letting auth-client open II as a normal tab preserves the
+          // opener channel the authorize flow needs.
+          const loginP = new Promise((resolve, reject) => client.login({
             identityProvider: "\{iiUrl}/#authorize",
-            // open II in a maximized window the popup-blocker accepts post-gesture
-            windowOpenerFeatures: 'toolbar=0,location=1,menubar=0,width='+screen.width+',height='+screen.height,
             onSuccess: resolve, onError: reject,
           }));
+          const timeoutP = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('timeout — Internet Identity did not return')), TIMEOUT_MS);
+          });
+          await Promise.race([loginP, timeoutP]);
+          clearTimeout(timer);
           const id = client.getIdentity();
           const chain = (typeof id.getDelegation === 'function') ? id.getDelegation()
                       : (id._delegation || id.delegation);
