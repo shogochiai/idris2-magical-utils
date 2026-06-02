@@ -352,46 +352,46 @@ middlepageHtml iiUrl = """
 <h3>Internet Identity</h3>
 <p id="status">starting…</p>
 </div>
-<script src="https://unpkg.com/@dfinity/agent/lib/index.umd.js"></script>
-<script src="https://unpkg.com/@dfinity/identity/lib/index.umd.js"></script>
-<script src="https://unpkg.com/@dfinity/auth-client/lib/index.umd.js"></script>
 <script>
-(function(){
-  var s = document.getElementById('status');
-  function fail(m){ s.textContent = 'error: ' + m; redirect({error:m}); }
-  function qs(k){ var m = new RegExp('[?&]'+k+'=([^&]+)').exec(location.search); return m?decodeURIComponent(m[1]):''; }
-  function b64url(str){ return btoa(str).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,''); }
-  function redirect(obj){
-    var ru = qs('redirect_uri'); if(!ru){ s.textContent='no redirect_uri'; return; }
-    var u = ru + (ru.indexOf('?')>=0?'&':'?');
-    if(obj.error){ location.href = u + 'error=' + encodeURIComponent(obj.error); }
-    else { location.href = u + 'delegation=' + obj.delegation; }
-  }
-  var pubkeyHex = qs('pubkey'); if(!pubkeyHex){ fail('no pubkey'); return; }
-  // Hex DER pubkey -> the SignIdentity-less public key the delegation targets.
-  function hexToBytes(h){ var a=new Uint8Array(h.length/2); for(var i=0;i<a.length;i++) a[i]=parseInt(h.substr(i*2,2),16); return a; }
-  var AuthClient = (window.dfinityAuthClient||window.AuthClient||{}).AuthClient || (window['@dfinity/auth-client']||{}).AuthClient;
-  var Ed = (window.dfinityIdentity||{}).Ed25519PublicKey;
-  var DelegationChain = (window.dfinityIdentity||{}).DelegationChain;
-  if(!AuthClient){ fail('auth-client not loaded'); return; }
-  s.textContent='opening Internet Identity…';
-  AuthClient.create().then(function(client){
-    // Use the app's session pubkey as the delegation target. auth-client's
-    // login opens II; on success we read the identity's delegation chain.
-    client.login({
-      identityProvider: "\{iiUrl}/#authorize",
-      onSuccess: function(){
-        try {
-          var id = client.getIdentity();
-          var chain = id.getDelegation ? id.getDelegation() : (id._delegation || id.delegation);
-          var json = JSON.stringify(chain.toJSON ? chain.toJSON() : chain);
-          redirect({delegation: b64url(json)});
-        } catch(e){ fail('delegation read: ' + e.message); }
-      },
-      onError: function(e){ fail(String(e)); }
-    });
-  }).catch(function(e){ fail('create: ' + e.message); });
-})();
+  // Surface any module/runtime error on-screen (no console on mobile).
+  window.addEventListener('error', function(e){ var s=document.getElementById('status'); if(s) s.textContent='err: '+(e.message||e.type); });
+  window.addEventListener('unhandledrejection', function(e){ var s=document.getElementById('status'); if(s) s.textContent='reject: '+((e.reason&&e.reason.message)||e.reason); });
+</script>
+<script type="module">
+  // All logic inside an async IIFE — no top-level await (avoids "Unexpected
+  // reserved word" in stricter module parsers) and dynamic import() so a CDN
+  // failure surfaces as a catchable error rather than a hard module load fail.
+  (async () => {
+    const s = document.getElementById('status');
+    const qs = (k) => { const m = new RegExp('[?&]'+k+'=([^&]+)').exec(location.search); return m?decodeURIComponent(m[1]):''; };
+    const b64url = (str) => btoa(str).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+    const redirect = (obj) => {
+      const ru = qs('redirect_uri'); if(!ru){ s.textContent='no redirect_uri'; return; }
+      const u = ru + (ru.indexOf('?')>=0?'&':'?');
+      location.href = obj.error ? (u + 'error=' + encodeURIComponent(obj.error))
+                                : (u + 'delegation=' + obj.delegation);
+    };
+    const fail = (m) => { s.textContent = 'error: ' + m; redirect({error:m}); };
+    try {
+      if(!qs('redirect_uri')){ s.textContent='no redirect_uri'; return; }
+      s.textContent = 'loading modules…';
+      // target=es2017 so the bundle parses on older in-app/system browsers
+      // (e.g. Chrome 74 lacks ?./??/top-level-await → "Unexpected token ?").
+      const { AuthClient } = await import("https://esm.sh/@dfinity/auth-client@3.4.3?target=es2017");
+      s.textContent = 'opening Internet Identity…';
+      const client = await AuthClient.create();
+      await new Promise((resolve, reject) => client.login({
+        identityProvider: "\{iiUrl}/#authorize",
+        onSuccess: resolve, onError: reject,
+      }));
+      // The authenticated identity is a DelegationIdentity; serialise its chain
+      // so the app can rebuild it against the session key it generated.
+      const id = client.getIdentity();
+      const chain = (typeof id.getDelegation === 'function') ? id.getDelegation()
+                  : (id._delegation || id.delegation);
+      redirect({ delegation: b64url(JSON.stringify(chain.toJSON ? chain.toJSON() : chain)) });
+    } catch(e){ fail(e && e.message ? e.message : String(e)); }
+  })();
 </script></body></html>
 """
 
