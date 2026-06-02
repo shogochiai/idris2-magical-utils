@@ -351,6 +351,7 @@ middlepageHtml iiUrl = """
 <div style="text-align:center;padding:24px">
 <h3>Internet Identity</h3>
 <p id="status">starting…</p>
+<button id="go" style="display:none;font-size:18px;padding:14px 28px;margin-top:12px;border:0;border-radius:10px;background:#5b8def;color:#fff">Continue with Internet Identity</button>
 </div>
 <script>
   // Surface any module/runtime error on-screen (no console on mobile).
@@ -358,11 +359,15 @@ middlepageHtml iiUrl = """
   window.addEventListener('unhandledrejection', function(e){ var s=document.getElementById('status'); if(s) s.textContent='reject: '+((e.reason&&e.reason.message)||e.reason); });
 </script>
 <script type="module">
-  // All logic inside an async IIFE — no top-level await (avoids "Unexpected
-  // reserved word" in stricter module parsers) and dynamic import() so a CDN
-  // failure surfaces as a catchable error rather than a hard module load fail.
+  // Modules + AuthClient are prepared on load, but client.login() is invoked
+  // ONLY from a real user gesture (the Continue button). AuthClient.login()
+  // opens the II provider via window.open(); mobile Chrome blocks popups that
+  // are NOT triggered by a user gesture, which left the auto-login flow stuck on
+  // "opening Internet Identity…". Gating login behind a click makes the popup a
+  // user-activated one (allowed). Same-tab onError fallback keeps it robust.
   (async () => {
     const s = document.getElementById('status');
+    const go = document.getElementById('go');
     const qs = (k) => { const m = new RegExp('[?&]'+k+'=([^&]+)').exec(location.search); return m?decodeURIComponent(m[1]):''; };
     const b64url = (str) => btoa(str).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
     const redirect = (obj) => {
@@ -375,21 +380,27 @@ middlepageHtml iiUrl = """
     try {
       if(!qs('redirect_uri')){ s.textContent='no redirect_uri'; return; }
       s.textContent = 'loading modules…';
-      // target=es2017 so the bundle parses on older in-app/system browsers
-      // (e.g. Chrome 74 lacks ?./??/top-level-await → "Unexpected token ?").
+      // target=es2017 so the bundle parses on older in-app/system browsers.
       const { AuthClient } = await import("https://esm.sh/@dfinity/auth-client@3.4.3?target=es2017");
-      s.textContent = 'opening Internet Identity…';
       const client = await AuthClient.create();
-      await new Promise((resolve, reject) => client.login({
-        identityProvider: "\{iiUrl}/#authorize",
-        onSuccess: resolve, onError: reject,
-      }));
-      // The authenticated identity is a DelegationIdentity; serialise its chain
-      // so the app can rebuild it against the session key it generated.
-      const id = client.getIdentity();
-      const chain = (typeof id.getDelegation === 'function') ? id.getDelegation()
-                  : (id._delegation || id.delegation);
-      redirect({ delegation: b64url(JSON.stringify(chain.toJSON ? chain.toJSON() : chain)) });
+      // Ready — surface the Continue button so login() runs inside a user gesture.
+      s.textContent = 'tap to continue';
+      go.style.display = 'inline-block';
+      go.addEventListener('click', async () => {
+        go.disabled = true; s.textContent = 'opening Internet Identity…';
+        try {
+          await new Promise((resolve, reject) => client.login({
+            identityProvider: "\{iiUrl}/#authorize",
+            // open II in a maximized window the popup-blocker accepts post-gesture
+            windowOpenerFeatures: 'toolbar=0,location=1,menubar=0,width='+screen.width+',height='+screen.height,
+            onSuccess: resolve, onError: reject,
+          }));
+          const id = client.getIdentity();
+          const chain = (typeof id.getDelegation === 'function') ? id.getDelegation()
+                      : (id._delegation || id.delegation);
+          redirect({ delegation: b64url(JSON.stringify(chain.toJSON ? chain.toJSON() : chain)) });
+        } catch(e){ fail(e && e.message ? e.message : String(e)); }
+      });
     } catch(e){ fail(e && e.message ? e.message : String(e)); }
   })();
 </script></body></html>
