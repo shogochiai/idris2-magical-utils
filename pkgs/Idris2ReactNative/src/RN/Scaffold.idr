@@ -389,12 +389,15 @@ middlepageHtml iiUrl = """
       go.addEventListener('click', async () => {
         go.disabled = true; s.textContent = 'opening Internet Identity…';
         try {
-          // Race login against a timeout: if II dead-ends (e.g. its own "Unable
-          // to connect" page, which does NOT redirect back), the app's deep-link
-          // callback would never fire and its Sign-in button would stay stuck on
-          // "Login in Progress". The timeout always redirects back with an error
-          // so the app resets. The user can retry.
-          const TIMEOUT_MS = 90000;
+          // Last-resort safety timeout: if II truly dead-ends, redirect back with
+          // an error so the app's Sign-in button doesn't stick on "Login in
+          // Progress". Generous (10 min) because REAL human auth — first-time
+          // passkey registration, Google account picker/consent — easily exceeds
+          // 90s, and a Custom Tab now reliably returns the delegation, so a short
+          // timeout would FALSELY fail a slow-but-successful login (observed: II
+          // "Authentication successful" but the 90s timeout had already fired and
+          // redirected error=timeout, discarding the real delegation).
+          const TIMEOUT_MS = 600000;
           let timer;
           // No windowOpenerFeatures: a feature-string makes Chrome open a
           // detached popup whose window.opener link to this page can break, so
@@ -403,6 +406,12 @@ middlepageHtml iiUrl = """
           // opener channel the authorize flow needs.
           const loginP = new Promise((resolve, reject) => client.login({
             identityProvider: "\{iiUrl}/#authorize",
+            // allowPinAuthentication: in an Android WebView, WebAuthn/passkey
+            // (PublicKeyCredential) is restricted, so II shows "Unable to connect".
+            // The PIN/temporary-key path needs no WebAuthn and works in a WebView,
+            // giving a usable mobile login (the delegation still returns via the
+            // same-context postMessage the in-app WebView preserves).
+            allowPinAuthentication: true,
             onSuccess: resolve, onError: reject,
           }));
           const timeoutP = new Promise((_, reject) => {
