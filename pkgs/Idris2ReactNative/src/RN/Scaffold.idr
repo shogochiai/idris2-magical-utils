@@ -380,8 +380,18 @@ middlepageHtml iiUrl = """
     try {
       if(!qs('redirect_uri')){ s.textContent='no redirect_uri'; return; }
       s.textContent = 'loading modules…';
-      // target=es2017 so the bundle parses on older in-app/system browsers.
-      const { AuthClient } = await import("https://esm.sh/@dfinity/auth-client@3.4.3?target=es2017");
+      // SAME-ORIGIN self-hosted bundle (es2017, all deps inlined by esbuild),
+      // NOT a third-party CDN. A runtime `import()` from esm.sh fails on mobile
+      // networks that block/throttle the CDN — observed on-device as
+      // "Failed to fetch dynamically imported module: https://esm.sh/@dfinity/
+      // auth-client@…", which dead-ended login before II ever opened. Hosting the
+      // bundle on the SAME asset canister as this page (relative ./auth-client.
+      // bundle.js) removes the cross-origin dependency: if this page loaded, the
+      // bundle loads. Regenerate with:
+      //   esbuild 'export{AuthClient}from"@dfinity/auth-client"' --bundle
+      //     --format=esm --target=es2017 --platform=browser
+      //     --outfile=auth-client.bundle.js
+      const { AuthClient } = await import("./auth-client.bundle.js");
       const client = await AuthClient.create();
       // Ready — surface the Continue button so login() runs inside a user gesture.
       s.textContent = 'tap to continue';
