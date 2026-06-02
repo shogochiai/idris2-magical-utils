@@ -209,6 +209,15 @@ let _webview = null;          // the <WebView> ref the app attaches
 let _sessionKey = null;       // Ed25519KeyIdentity (this device's session key)
 let _identity = null;         // DelegationIdentity once logged in
 let _pendingCb = null;        // login() callback awaiting the handshake
+let _loginActive = false;     // true while the II WebView handshake is showing
+
+// End the handshake: clear the active flag, hide the WebView (rerender), and
+// invoke + clear the pending callback with the given reply string.
+function _finishLogin(reply) {
+  _loginActive = false;
+  if (typeof __idrisAuth !== 'undefined' && __idrisAuth._requestRerender) __idrisAuth._requestRerender();
+  if (_pendingCb) { const cb = _pendingCb; _pendingCb = null; cb(reply); }
+}
 
 async function loadOrCreateSessionKey() {
   if (_sessionKey) return _sessionKey;
@@ -288,12 +297,12 @@ async function onWebViewMessage(raw) {
       _identity = buildIdentity(sk, chain);
       try { await AsyncStorage.setItem(DELEGATION_KEY, JSON.stringify(chain.toJSON())); } catch (e) {}
       const p = _identity.getPrincipal().toText();
-      if (_pendingCb) { const cb = _pendingCb; _pendingCb = null; cb(p); }
+      _finishLogin(p);
     } catch (e) {
-      if (_pendingCb) { const cb = _pendingCb; _pendingCb = null; cb('ERR:' + (e && e.message ? e.message : e)); }
+      _finishLogin('ERR:' + (e && e.message ? e.message : e));
     }
   } else if (data.kind === 'authorize-client-failure') {
-    if (_pendingCb) { const cb = _pendingCb; _pendingCb = null; cb('ERR:' + (data.text || 'authorize failed')); }
+    _finishLogin('ERR:' + (data.text || 'authorize failed'));
   }
 }
 
@@ -305,20 +314,23 @@ function postToWebView(payload) {
 }
 
 global.__idrisAuth = {
-  // The app's WebView host calls these to wire itself in.
+  // The RN render host (idris-rn-shim) calls these to mount/drive the WebView.
+  _loginActive() { return _loginActive; },
   _attachWebView(ref) { _webview = ref; },
   _onMessage(raw) { onWebViewMessage(raw); },
   _injectedJS() { return injectedRelay(); },
   _iiUrl() { return II_URL + '/#authorize'; },
+  // _requestRerender is installed by the render host so we can show/hide the WebView.
 
   // RN.Identity surface:
   login(cb) {
+    if (_loginActive) { cb('ERR:login already in progress'); return; }
     _pendingCb = cb;
-    // The app opens the WebView (navigates to _iiUrl()); the handshake proceeds
-    // via _onMessage. If no WebView is attached, fail fast.
-    if (!_webview) { _pendingCb = null; cb('ERR:no webview attached'); return; }
-    try { _webview.injectJavaScript('window.location.href="' + II_URL + '/#authorize"; true;'); }
-    catch (e) { _pendingCb = null; cb('ERR:' + (e && e.message ? e.message : e)); }
+    _loginActive = true;
+    // Mount the II WebView (the render host renders it when _loginActive()).
+    // The host loads source={_iiUrl()} and the handshake proceeds via _onMessage.
+    if (this._requestRerender) this._requestRerender();
+    else { _loginActive = false; _pendingCb = null; cb('ERR:no render host attached'); }
   },
   async logout(cb) {
     _identity = null;
