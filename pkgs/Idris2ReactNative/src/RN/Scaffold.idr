@@ -373,8 +373,28 @@ middlepageHtml iiUrl = """
     const redirect = (obj) => {
       const ru = qs('redirect_uri'); if(!ru){ s.textContent='no redirect_uri'; return; }
       const u = ru + (ru.indexOf('?')>=0?'&':'?');
-      location.href = obj.error ? (u + 'error=' + encodeURIComponent(obj.error))
-                                : (u + 'delegation=' + obj.delegation);
+      const target = obj.error ? (u + 'error=' + encodeURIComponent(obj.error))
+                               : (u + 'delegation=' + obj.delegation);
+      // Deliver the deep link via a USER GESTURE. A Chrome Custom Tab silently
+      // BLOCKS an automatic `location.href = "<scheme>://…"` external-scheme
+      // navigation that is not tied to a user activation (observed on-device: II
+      // authenticated, the page redirected, but no etherclaw:// intent ever fired —
+      // logcat showed nothing, and the app's openAuth() saw only a dismissal →
+      // "cancelled"). A click IS a user activation, which Chrome allows to launch
+      // the registered return scheme, so openAuth() resolves with the delegation.
+      // The error case can still auto-navigate (best-effort), but success is gated
+      // behind the button so the delegation reliably reaches the app.
+      try {
+        go.style.display = 'inline-block';
+        go.disabled = false;
+        go.textContent = 'Return to app';
+        s.textContent = obj.error ? ('error: ' + obj.error) : 'signed in — tap to return to the app';
+        go.onclick = () => { location.href = target; };
+      } catch (_) {}
+      // Best-effort auto-navigation too (works for the error path and for browsers
+      // that don't block it); the button guarantees the gesture-gated path exists
+      // for Custom Tabs that block non-gesture external-scheme navigations.
+      try { location.href = target; } catch (_) {}
     };
     const fail = (m) => { s.textContent = 'error: ' + m; redirect({error:m}); };
     try {
