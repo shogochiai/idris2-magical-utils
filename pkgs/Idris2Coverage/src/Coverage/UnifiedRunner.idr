@@ -587,7 +587,13 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
   let projectModules = parseIpkgModules ipkgContent
   if null projectModules
      then pure $ Left $ wholeErr ++ "\nChunked fallback found no modules in ipkg."
-     else if length projectModules > 80
+     -- Chunks run SEQUENTIALLY in fixed groups of 8 (chunkList 8 below), so peak
+     -- memory is bounded by one chunk's transitive build, NOT the module total —
+     -- a large package is exactly the case chunking is FOR. The ceiling only
+     -- bounds wall-clock (chunk count = ceil(n/8)); 400 modules = ~50 chunks.
+     -- (Was 80, which wrongly skipped chunking for big packages like EtherClaw
+     -- (158 mods) and left only the OOM-prone whole-package attempt.)
+     else if length projectModules > 400
              then pure $ Left $
                wholeErr ++ "\nChunked fallback skipped: package has "
                ++ show (length projectModules)
@@ -620,13 +626,36 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
 ||| path-obligation JSON. This is a conservative fallback for projects whose
 ||| runtime-instrumented test runner is too large to link or execute locally:
 ||| the denominator remains real, while runtime hits are intentionally empty.
+||| Module-count above which we skip the whole-package dumppaths attempt and go
+||| straight to chunked obligations. The whole-package `--dumppaths-json` builds
+||| every module into ONE process and is the memory hog that the OS OOM-kills on
+||| large packages (e.g. EtherClaw at ~140 modules); attempting it first just
+||| wastes minutes and risks the kill before the (light, sequential) chunked path
+||| ever runs. Below this, the whole attempt is cheap and yields a single clean JSON.
+staticWholeModuleCeiling : Nat
+staticWholeModuleCeiling = 40
+
 export
 runStaticDumppathsJson : String -> IO (Either String String)
 runStaticDumppathsJson ipkgPath = do
-  whole <- runStaticDumppathsJsonWhole ipkgPath
-  case whole of
-    Right content => pure $ Right content
-    Left err => runStaticDumppathsJsonChunks ipkgPath err
+  -- Peek the module count: large packages skip the OOM-prone whole-package build
+  -- and chunk directly (chunks run sequentially in groups of 8 — bounded memory).
+  modCount <- do
+    Right c <- readFile ipkgPath
+      | Left _ => pure 0
+    pure (length (parseIpkgModules c))
+  if modCount > staticWholeModuleCeiling
+    then do
+      putStrLn $ "    Large package (" ++ show modCount
+              ++ " modules > " ++ show staticWholeModuleCeiling
+              ++ "); skipping whole-package dumppaths and chunking directly..."
+      runStaticDumppathsJsonChunks ipkgPath
+        ("Whole-package dumppaths skipped for large package (" ++ show modCount ++ " modules).")
+    else do
+      whole <- runStaticDumppathsJsonWhole ipkgPath
+      case whole of
+        Right content => pure $ Right content
+        Left err => runStaticDumppathsJsonChunks ipkgPath err
 
 ||| Split "path/to/project.ipkg" into ("path/to", "project.ipkg")
 splitIpkgPathLocal : String -> (String, String)
