@@ -1,0 +1,9 @@
+package idris2-react-native-lib
+version = "0.1.0"
+sourcedir = "src"
+depends = base, contrib
+modules = RN.Node
+        , RN.Style
+        , RN.Runtime
+        , RN.Scaffold
+        , RN.Identity
