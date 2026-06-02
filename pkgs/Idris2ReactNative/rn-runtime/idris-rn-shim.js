@@ -56,15 +56,30 @@ function authWebViewElement() {
   if (!__WebView || !auth || typeof auth._loginActive !== 'function' || !auth._loginActive()) {
     return null;
   }
+  // A top bar with a Cancel button (so the WebView is never a dead end) + the
+  // II WebView itself with the settings Internet Identity needs (DOM storage,
+  // third-party cookies, modern UA so the page doesn't serve a blank fallback).
+  const cancel = () => { try { if (auth.cancelLogin) auth.cancelLogin(); } catch (e) {} };
   return React.createElement(View,
-    { key: 'ii-webview', style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' } },
+    { key: 'ii-webview', style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#1a1a1a' } },
+    React.createElement(View,
+      { style: { flexDirection: 'row', alignItems: 'center', paddingTop: 36, paddingBottom: 10, paddingHorizontal: 14, backgroundColor: '#141414' } },
+      React.createElement(Text, { style: { color: '#ececec', fontSize: 14, fontWeight: '600', flex: 1 } }, 'Internet Identity'),
+      React.createElement(Text, { onPress: cancel, style: { color: '#d97757', fontSize: 14, fontWeight: '700' } }, 'Cancel')),
     React.createElement(__WebView, {
       ref: (r) => { try { auth._attachWebView(r); } catch (e) {} },
       source: { uri: auth._iiUrl() },
       injectedJavaScript: auth._injectedJS(),
       onMessage: (ev) => { try { auth._onMessage(ev.nativeEvent.data); } catch (e) {} },
+      onError: (ev) => { try { auth._onMessage(JSON.stringify({ data: { kind: 'authorize-client-failure', text: 'webview error: ' + (ev.nativeEvent && ev.nativeEvent.description) } })); } catch (e) {} },
       javaScriptEnabled: true,
       domStorageEnabled: true,
+      thirdPartyCookiesEnabled: true,
+      sharedCookiesEnabled: true,
+      originWhitelist: ['https://*'],
+      userAgent: 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      style: { flex: 1 },
+      startInLoadingState: true,
     }));
 }
 

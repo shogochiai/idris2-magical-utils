@@ -332,6 +332,8 @@ global.__idrisAuth = {
     if (this._requestRerender) this._requestRerender();
     else { _loginActive = false; _pendingCb = null; cb('ERR:no render host attached'); }
   },
+  // Dismiss the II WebView and fail the pending login (user tapped Cancel).
+  cancelLogin() { _finishLogin('ERR:cancelled'); },
   async logout(cb) {
     _identity = null;
     try { await AsyncStorage.removeItem(DELEGATION_KEY); } catch (e) {}
