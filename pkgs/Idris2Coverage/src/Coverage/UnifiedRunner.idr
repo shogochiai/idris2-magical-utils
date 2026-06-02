@@ -540,7 +540,17 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
   Right () <- writeFile tempIdrPath runnerSource
     | Left err => pure $ Left $ "Failed to write static chunk wrapper: " ++ show err
   let allModules = tempModName :: modules
-  let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just ("--dumppaths-json " ++ dumppathsPath)) (Just tempBuildDir)
+  -- Reuse the PROJECT's existing build/ttc as the build dir so the chunk does NOT
+  -- recompile the transitive dependency closure of its modules from scratch (the
+  -- closure can be ~the whole package on densely-interconnected projects, which
+  -- OOM-kills one chunk's single compiler process — chunking gives no memory
+  -- benefit if every chunk rebuilds everything). With the project's build/ as
+  -- builddir, Idris hash-checks and reuses the already-compiled module TTCs
+  -- (from a prior `pack build`), compiling only the tiny temp wrapper. Falls back
+  -- to a fresh tempBuildDir transparently if the project hasn't been built yet.
+  hasPrebuilt <- exists (projectDir ++ "/build/ttc")
+  let buildDirForChunk = if hasPrebuilt then "build" else tempBuildDir
+  let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just ("--dumppaths-json " ++ dumppathsPath)) (Just buildDirForChunk)
   Right () <- writeFile tempIpkgPath ipkgContent
     | Left err => do
         removeFileIfExists tempIdrPath
@@ -618,6 +628,11 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
     runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
     runChunks projectDir sourcedir tempBuildDir deps packTomlContent (mods :: rest) idx acc = do
       result <- runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir deps packTomlContent mods idx
+      -- Clean ONLY the per-chunk temp build dir between chunks (bounds disk on
+      -- large packages). NEVER touch the project's real build/ — when chunks reuse
+      -- it (buildDirForChunk="build") deleting it would force a full recompile and
+      -- defeat the dependency-reuse that keeps each chunk's memory bounded.
+      _ <- system $ "rm -rf " ++ projectDir ++ "/" ++ tempBuildDir
       case result of
         Left err => pure $ Left err
         Right paths => runChunks projectDir sourcedir tempBuildDir deps packTomlContent rest (idx + 1) (paths ++ acc)
