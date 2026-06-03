@@ -544,6 +544,7 @@ const idl = ({ IDL }) => IDL.Service({
   signedEvmTx:         IDL.Func([IDL.Text], [IDL.Text], []),
   signedEvmTxResume:   IDL.Func([IDL.Text], [IDL.Text], []),
   assembleSignedTx:    IDL.Func([IDL.Text], [IDL.Text], []),
+  initAccountCalldata: IDL.Func([IDL.Text], [IDL.Text], []),
 });
 
 let _actor = null;
@@ -601,6 +602,41 @@ async function rpc(method, params) {
   return j.result;
 }
 
+// Shared: t-ECDSA-sign an EIP-1559 tx (to, data) via the in-canister message-split
+// recovery pipeline and broadcast it. Returns the broadcast tx hash. The bundler
+// EOA (canister t-ECDSA addr 0x57d979…) is msg.sender; nonce/fees from the RPC.
+async function signAndBroadcast(to, data, gas) {
+  const a = await actor();
+  const EOA = global.__dao3Config && global.__dao3Config.bundlerEoa;
+  if (!EOA) throw new Error('no bundlerEoa in __dao3Config');
+  const nonceHex = await rpc('eth_getTransactionCount', [EOA, 'latest']);
+  const gasPrice = await rpc('eth_gasPrice', []);
+  const tx = { chainId: CHAIN_ID, nonce: parseInt(nonceHex,16),
+    maxPriorityFee: 1000000, maxFee: Math.max(parseInt(gasPrice,16)*2, 20000000),
+    gas: gas || 800000, to: to, value: 0, data: data };
+  const msgHash = unsignedTxHash(tx);
+  const sig = await a.signEvmTxHash(msgHash);
+  const m = /r=([0-9a-f]+),s=([0-9a-f]+)/.exec(sig);
+  if (!m) throw new Error('sign ' + sig);
+  const base = { chainId:String(CHAIN_ID), nonce:String(tx.nonce),
+    maxPriorityFee:String(tx.maxPriorityFee), maxFeePerGas:String(tx.maxFee),
+    gasLimit:String(tx.gas), value:'0', to:to, data:data, r:m[1], s:m[2], msgHash };
+  let out = await a.signedEvmTx(JSON.stringify(base));
+  let v = null;
+  for (let i=0;i<130 && v===null;i++) {
+    if (out.startsWith('v:')) { v = out.slice(2); break; }
+    if (out.startsWith('error')) throw new Error('recover ' + out);
+    if (out.startsWith('step:')) {
+      const rest = out.slice(5); const ci = rest.indexOf(':');
+      out = await a.signedEvmTxResume(JSON.stringify({ ...base, recId: rest.slice(0,ci), state: rest.slice(ci+1) }));
+    } else throw new Error('recover-unexpected ' + out.slice(0,40));
+  }
+  if (v === null) throw new Error('recover-timeout');
+  const signed = await a.assembleSignedTx(JSON.stringify({ ...base, v }));
+  if (!signed.startsWith('0x')) throw new Error('assemble ' + signed);
+  return await rpc('eth_sendRawTransaction', [signed]);
+}
+
 global.__dao3Bundler = {
   // op: JSON the app (Dao3WalletApp.Send) built — {sender,nonce,initCode,callData,
   // accountGasLimits,preVerificationGas,gasFees,paymasterAndData,signature}.
@@ -608,48 +644,26 @@ global.__dao3Bundler = {
     try {
       const a = await actor();
       const op = JSON.parse(opJson);
-      op.beneficiary = strip0x(op.beneficiary || ENTRY_POINT); // bundler EOA gets the refund
-      // 1) canister builds the handleOps calldata (byte-exact v0.7 ABI)
+      op.beneficiary = strip0x(op.beneficiary || ENTRY_POINT);
       const handleOps = await a.submitUserOp(JSON.stringify(op));
       if (handleOps.startsWith('error')) return cb('err:' + handleOps);
-      // 2) build the EIP-1559 tx to the EntryPoint with that calldata.
-      // The bundler EOA is the canister's t-ECDSA address (0x57d979…); its nonce
-      // and the chain fees come from the EVM RPC.
-      const EOA = global.__dao3Config && global.__dao3Config.bundlerEoa;
-      if (!EOA) return cb('err:no bundlerEoa in __dao3Config');
-      const nonceHex = await rpc('eth_getTransactionCount', [EOA, 'latest']);
-      const gasPrice = await rpc('eth_gasPrice', []);
-      const tx = { chainId: CHAIN_ID, nonce: parseInt(nonceHex,16),
-        maxPriorityFee: 1000000, maxFee: Math.max(parseInt(gasPrice,16)*2, 20000000),
-        gas: 800000, to: ENTRY_POINT, value: 0, data: handleOps };
-      const msgHash = unsignedTxHash(tx);
-      // 3) t-ECDSA sign the hash
-      const sig = await a.signEvmTxHash(msgHash);
-      const m = /r=([0-9a-f]+),s=([0-9a-f]+)/.exec(sig);
-      if (!m) return cb('err:sign ' + sig);
-      const r = m[1], s = m[2];
-      // 4) recover v via the in-canister message-split loop
-      const base = { chainId:String(CHAIN_ID), nonce:String(tx.nonce),
-        maxPriorityFee:String(tx.maxPriorityFee), maxFeePerGas:String(tx.maxFee),
-        gasLimit:String(tx.gas), value:'0', to:ENTRY_POINT, data:handleOps,
-        r, s, msgHash };
-      let out = await a.signedEvmTx(JSON.stringify(base));
-      let v = null;
-      for (let i=0;i<130 && v===null;i++) {
-        if (out.startsWith('v:')) { v = out.slice(2); break; }
-        if (out.startsWith('error')) return cb('err:recover ' + out);
-        if (out.startsWith('step:')) {
-          const rest = out.slice(5); const ci = rest.indexOf(':');
-          const recId = rest.slice(0,ci), state = rest.slice(ci+1);
-          out = await a.signedEvmTxResume(JSON.stringify({ ...base, recId, state }));
-        } else return cb('err:recover-unexpected ' + out.slice(0,40));
-      }
-      if (v === null) return cb('err:recover-timeout');
-      // 5) canister assembles the final signed tx
-      const signed = await a.assembleSignedTx(JSON.stringify({ ...base, v }));
-      if (!signed.startsWith('0x')) return cb('err:assemble ' + signed);
-      // 6) broadcast
-      const txHash = await rpc('eth_sendRawTransaction', [signed]);
+      const txHash = await signAndBroadcast(ENTRY_POINT, handleOps, 800000);
+      cb('ok:' + txHash);
+    } catch (e) { cb('err:' + (e && e.message ? e.message : String(e))); }
+  },
+
+  // bindAccount(pubX, pubY, cb): bind the device passkey to the AA account on-chain
+  // (initAccount(EntryPoint, pubX, pubY)) so validateUserOp's RIP-7212 check accepts
+  // it. Account address from __dao3Config.account. cb('ok:<txhash>') | 'err:..'.
+  async bindAccount(pubX, pubY, cb) {
+    try {
+      const a = await actor();
+      const cfg = global.__dao3Config || {};
+      if (!cfg.account) return cb('err:no account in __dao3Config');
+      const req = { entryPoint: strip0x(cfg.entryPoint), pubX: strip0x(pubX), pubY: strip0x(pubY) };
+      const calldata = await a.initAccountCalldata(JSON.stringify(req));
+      if (!calldata.startsWith('0x')) return cb('err:initAccountCalldata ' + calldata);
+      const txHash = await signAndBroadcast(cfg.account, calldata, 200000);
       cb('ok:' + txHash);
     } catch (e) { cb('err:' + (e && e.message ? e.message : String(e))); }
   },
