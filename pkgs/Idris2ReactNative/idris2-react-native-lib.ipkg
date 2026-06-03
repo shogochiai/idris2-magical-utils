@@ -7,3 +7,4 @@ modules = RN.Node
         , RN.Runtime
         , RN.Scaffold
         , RN.Identity
+        , RN.Bundler
