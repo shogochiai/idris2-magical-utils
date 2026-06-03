@@ -48,7 +48,8 @@ packageJson appName = """
     "react-native-webview": "^13.8.6",
     "react-native-url-polyfill": "^3.0.0",
     "text-encoding": "^0.7.0",
-    "js-sha3": "^0.9.3"
+    "js-sha3": "^0.9.3",
+    "buffer": "^6.0.3"
   },
   "devDependencies": {
     "@react-native/metro-config": "0.73.5"
@@ -527,6 +528,15 @@ bundlerBridgeJs canisterId icHost entryPoint rpcUrl chainId = """
 // global.__dao3Bundler — backs RN.Bundler.sendToken. Calls the GlobalRegistry
 // ERC-4337 bundler-as-canister, then broadcasts the bundled handleOps tx.
 require('react-native-url-polyfill/auto');
+// Hermes lacks TextEncoder/TextDecoder/Buffer; @dfinity/agent needs all three
+// (cbor + actor reply decode). Polyfill before requiring it.
+if (typeof global.TextEncoder === 'undefined') {
+  const te = require('text-encoding');
+  global.TextEncoder = te.TextEncoder; global.TextDecoder = te.TextDecoder;
+}
+if (typeof global.Buffer === 'undefined') {
+  global.Buffer = require('buffer').Buffer;
+}
 const { Actor, HttpAgent } = require('@dfinity/agent');
 const { Principal } = require('@dfinity/principal');
 const { keccak256 } = require('js-sha3');
