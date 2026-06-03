@@ -555,6 +555,8 @@ const idl = ({ IDL }) => IDL.Service({
   signedEvmTxResume:   IDL.Func([IDL.Text], [IDL.Text], []),
   assembleSignedTx:    IDL.Func([IDL.Text], [IDL.Text], []),
   initAccountCalldata: IDL.Func([IDL.Text], [IDL.Text], []),
+  getEvmAddress:       IDL.Func([IDL.Nat], [IDL.Text], []),
+  refreshSignerPubkey: IDL.Func([IDL.Text], [IDL.Text], []),
 });
 
 let _actor = null;
@@ -615,8 +617,21 @@ async function rpc(method, params) {
 // Shared: t-ECDSA-sign an EIP-1559 tx (to, data) via the in-canister message-split
 // recovery pipeline and broadcast it. Returns the broadcast tx hash. The bundler
 // EOA (canister t-ECDSA addr 0x57d979…) is msg.sender; nonce/fees from the RPC.
+// Ensure the canister's t-ECDSA pubkey is cached (it's lost on canister upgrade,
+// and signedEvmTx's recover needs it → 'pubkey_not_cached'). Re-request under
+// key_type 1 (the signer key) and poll getEvmAddress(1) until it resolves. Idempotent.
+async function ensureSignerPubkey(a) {
+  for (let i = 0; i < 8; i++) {
+    const addr = await a.getEvmAddress(1n);
+    if (typeof addr === 'string' && addr.startsWith('0x') && addr.length >= 42) return;
+    await a.refreshSignerPubkey('');
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+
 async function signAndBroadcast(to, data, gas) {
   const a = await actor();
+  await ensureSignerPubkey(a);
   const EOA = global.__dao3Config && global.__dao3Config.bundlerEoa;
   if (!EOA) throw new Error('no bundlerEoa in __dao3Config');
   const nonceHex = await rpc('eth_getTransactionCount', [EOA, 'latest']);
