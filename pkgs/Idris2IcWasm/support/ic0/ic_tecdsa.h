@@ -15,6 +15,7 @@ int64_t ic_tecdsa_get_signature_byte(int64_t index);
 int64_t ic_tecdsa_get_pubkey_len(void);
 int64_t ic_tecdsa_get_pubkey_byte(int64_t index);
 int64_t ic_tecdsa_request_pubkey(void);
+void ic_tecdsa_reset_pubkey(void);
 void ic_tecdsa_derive_evm_address(void);
 int64_t ic_tecdsa_get_evm_address_len(void);
 int64_t ic_tecdsa_get_evm_address_byte(int64_t index);

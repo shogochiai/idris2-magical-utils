@@ -737,6 +737,14 @@ int64_t ic_tecdsa_request_pubkey(void) {
                                       (int32_t)(uintptr_t)g_ic_pubkey_reject);
 }
 
+/* Clear the cached pubkey + derived address so the next get_evm_address re-fetches
+ * (e.g. to switch key_type). Without this the first fetched key sticks forever. */
+void ic_tecdsa_reset_pubkey(void) {
+    g_public_key_len = 0;
+    g_evm_address_ready = 0;
+    clear_last_error();
+}
+
 int64_t ic_tecdsa_get_evm_address_len(void) {
     if (!g_evm_address_ready) ic_tecdsa_derive_evm_address();
     return g_evm_address_ready ? (int64_t)strlen(g_evm_address_hex) : 0;
