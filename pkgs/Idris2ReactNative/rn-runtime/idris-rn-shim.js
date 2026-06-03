@@ -38,11 +38,35 @@ const COMPONENTS = {
   Image,
 };
 
-// Internet Identity uses the OFFICIAL native pattern (external browser +
-// ii_integration middlepage + deep-link), NOT an embedded WebView — the auth
-// bridge (global.__idrisAuth) drives it via Linking.openURL + a deep-link
-// handler, so the render host needs no WebView. (Earlier embedded-WebView attempt
-// was removed: II's SPA does not initialise inside an Android System WebView.)
+// Internet Identity WebView host: when global.__idrisAuth (the generated auth
+// bridge) reports a login is in progress, the root renders a full-screen WebView
+// at the II authorize URL and relays its postMessages back to the bridge. Loaded
+// lazily so an app without II / without react-native-webview installed still
+// runs (the host simply never renders). The bridge contract:
+//   __idrisAuth._loginActive() : Bool       — is a login handshake in progress
+//   __idrisAuth._iiUrl()       : String     — initial WebView source URL
+//   __idrisAuth._injectedJS()  : String     — relay JS injected into the page
+//   __idrisAuth._attachWebView(ref)          — register the WebView ref
+//   __idrisAuth._onMessage(rawString)        — feed onMessage events
+let __WebView = null;
+try { __WebView = require('react-native-webview').WebView; } catch (e) { __WebView = null; }
+
+function authWebViewElement() {
+  const auth = (typeof global !== 'undefined' ? global : globalThis).__idrisAuth;
+  if (!__WebView || !auth || typeof auth._loginActive !== 'function' || !auth._loginActive()) {
+    return null;
+  }
+  return React.createElement(View,
+    { key: 'ii-webview', style: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000' } },
+    React.createElement(__WebView, {
+      ref: (r) => { try { auth._attachWebView(r); } catch (e) {} },
+      source: { uri: auth._iiUrl() },
+      injectedJavaScript: auth._injectedJS(),
+      onMessage: (ev) => { try { auth._onMessage(ev.nativeEvent.data); } catch (e) {} },
+      javaScriptEnabled: true,
+      domStorageEnabled: true,
+    }));
+}
 
 // A single force-update hook handle, set when the root component mounts.
 let __forceRerender = null;
@@ -143,7 +167,18 @@ const __idrisRN = {
       // avoided by giving every list-rendered element a stable `key` in the
       // Idris view layer (RN.Node.key): keyed reconciliation matches elements by
       // type+key, so the native registry stays consistent without remounting.
-      return React.createElement(React.Fragment, { key: 'idris-root' }, __renderThunk()());
+      // Render the Idris MVU tree, with the II WebView host overlaid on top when
+      // a login handshake is active (null otherwise — zero cost when not logging in).
+      return React.createElement(React.Fragment, { key: 'idris-root' },
+        __renderThunk()(),
+        authWebViewElement());
+    }
+
+    // Let the generated auth bridge force a root rerender (to show/hide the II
+    // WebView when login starts/finishes) via the same hook the MVU loop uses.
+    {
+      const g = (typeof global !== 'undefined') ? global : globalThis;
+      if (g.__idrisAuth) g.__idrisAuth._requestRerender = () => { if (__forceRerender) __forceRerender(); };
     }
 
     AppRegistry.registerComponent('IdrisApp', () => IdrisRoot);
