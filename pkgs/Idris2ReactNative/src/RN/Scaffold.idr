@@ -629,9 +629,72 @@ async function ensureSignerPubkey(a) {
   }
 }
 
+// ===========================================================================
+// EVM recovery-id (v) strategy — SWITCHABLE via __dao3Config.recoverStrategy.
+// v∈{0,1} is the only thing that needs deriving from (r,s); the t-ECDSA SIGNING
+// stays in-canister in every strategy (this only picks how v is found).
+//
+//   'client' (default): JS recovers v locally with @noble/curves by matching the
+//             recovered pubkey to the canister's signer EOA — milliseconds, a few
+//             canister calls total.
+//   'split' : the in-canister message-split group-law loop (signedEvmTx/Resume) —
+//             fully on-chain but ~95 calls/sign (slow); kept for when on-chain
+//             determinism is required over speed.
+//   'native': PLACEHOLDER predicting a future ICP-native primitive (t-ECDSA that
+//             returns the recovery id, or a secp256k1 recover/ecrecover system
+//             API). When ICP ships it, implement here and flip the config — no
+//             other code changes. This is the "future ICP solution" seam.
+// ===========================================================================
+const { secp256k1 } = require('@noble/curves/secp256k1');
+
+function _recoverVClient(rHex, sHex, msgHashHex, signerEoa) {
+  const h = Uint8Array.from(strip0x(msgHashHex).match(/../g).map(b => parseInt(b,16)));
+  const r = BigInt('0x' + strip0x(rHex)), s = BigInt('0x' + strip0x(sHex));
+  const want = ('0x' + strip0x(signerEoa)).toLowerCase();
+  for (let rec = 0; rec <= 1; rec++) {
+    try {
+      const sig = new secp256k1.Signature(r, s).addRecoveryBit(rec);
+      const pub = sig.recoverPublicKey(h);          // recovered Point
+      const xy = pub.toRawBytes(false).slice(1);    // 64-byte uncompressed pubkey (drop 0x04)
+      const addr = ('0x' + keccak256(xy).slice(-40)).toLowerCase();  // keccak(pub)[-20:]
+      if (addr === want) return String(rec);
+    } catch (e) { /* wrong bit → try the other */ }
+  }
+  throw new Error('client recoverV: neither recovery bit matches the signer EOA');
+}
+
+async function _recoverVSplit(a, base) {
+  let out = await a.signedEvmTx(JSON.stringify(base));
+  for (let i = 0; i < 130; i++) {
+    if (out.startsWith('v:')) return out.slice(2);
+    if (out.startsWith('error')) throw new Error('recover ' + out);
+    if (out.startsWith('step:')) {
+      const rest = out.slice(5); const ci = rest.indexOf(':');
+      out = await a.signedEvmTxResume(JSON.stringify({ ...base, recId: rest.slice(0,ci), state: rest.slice(ci+1) }));
+    } else throw new Error('recover-unexpected ' + out.slice(0,40));
+  }
+  throw new Error('recover-timeout');
+}
+
+async function recoverV(a, base, rHex, sHex, msgHashHex) {
+  const strat = (global.__dao3Config && global.__dao3Config.recoverStrategy) || 'client';
+  if (strat === 'split')  return await _recoverVSplit(a, base);
+  if (strat === 'native') {
+    // FUTURE: ICP-native recovery. e.g. a canister method that returns v directly
+    // from t-ECDSA, or a secp256k1 ecrecover system API. Not yet available.
+    throw new Error("recoverStrategy 'native' not yet provided by ICP");
+  }
+  // default 'client'
+  const eoa = (global.__dao3Config && global.__dao3Config.bundlerEoa) || '';
+  return _recoverVClient(rHex, sHex, msgHashHex, eoa);
+}
+
 async function signAndBroadcast(to, data, gas) {
   const a = await actor();
-  await ensureSignerPubkey(a);
+  // the in-canister 'split' recover reads the cached signer pubkey; ensure it.
+  // 'client'/'native' don't need it (v is derived off the canister's pubkey cache).
+  if (((global.__dao3Config && global.__dao3Config.recoverStrategy) || 'client') === 'split')
+    await ensureSignerPubkey(a);
   const EOA = global.__dao3Config && global.__dao3Config.bundlerEoa;
   if (!EOA) throw new Error('no bundlerEoa in __dao3Config');
   const nonceHex = await rpc('eth_getTransactionCount', [EOA, 'latest']);
@@ -646,17 +709,7 @@ async function signAndBroadcast(to, data, gas) {
   const base = { chainId:String(CHAIN_ID), nonce:String(tx.nonce),
     maxPriorityFee:String(tx.maxPriorityFee), maxFeePerGas:String(tx.maxFee),
     gasLimit:String(tx.gas), value:'0', to:to, data:data, r:m[1], s:m[2], msgHash };
-  let out = await a.signedEvmTx(JSON.stringify(base));
-  let v = null;
-  for (let i=0;i<130 && v===null;i++) {
-    if (out.startsWith('v:')) { v = out.slice(2); break; }
-    if (out.startsWith('error')) throw new Error('recover ' + out);
-    if (out.startsWith('step:')) {
-      const rest = out.slice(5); const ci = rest.indexOf(':');
-      out = await a.signedEvmTxResume(JSON.stringify({ ...base, recId: rest.slice(0,ci), state: rest.slice(ci+1) }));
-    } else throw new Error('recover-unexpected ' + out.slice(0,40));
-  }
-  if (v === null) throw new Error('recover-timeout');
+  const v = await recoverV(a, base, m[1], m[2], msgHash);
   const signed = await a.assembleSignedTx(JSON.stringify({ ...base, v }));
   if (!signed.startsWith('0x')) throw new Error('assemble ' + signed);
   return await rpc('eth_sendRawTransaction', [signed]);
