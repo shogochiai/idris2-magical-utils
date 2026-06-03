@@ -704,13 +704,31 @@ passkeyBridgeJs rpId = """
 // public key (pubX,pubY) for on-chain binding (GlobalRegistry initAccount).
 const RP_ID = "\{rpId}";
 
+// Pure-JS base64 (Hermes has no atob/btoa and no Node Buffer).
+const _B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 function _b64urlToBytes(s) {
-  s = s.replace(/-/g, '+').replace(/_/g, '/');
-  while (s.length % 4) s += '=';
-  const bin = (typeof atob === 'function') ? atob(s) : Buffer.from(s, 'base64').toString('binary');
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  s = s.replace(/-/g, '+').replace(/_/g, '/').replace(/[^A-Za-z0-9+/]/g, '');
+  const out = [];
+  for (let i = 0; i < s.length; i += 4) {
+    const a = _B64.indexOf(s[i]), b = _B64.indexOf(s[i+1]);
+    const c = _B64.indexOf(s[i+2]), d = _B64.indexOf(s[i+3]);
+    const n = (a << 18) | (b << 12) | ((c < 0 ? 0 : c) << 6) | (d < 0 ? 0 : d);
+    out.push((n >> 16) & 0xff);
+    if (c >= 0) out.push((n >> 8) & 0xff);
+    if (d >= 0) out.push(n & 0xff);
+  }
+  return new Uint8Array(out);
+}
+function _bytesToB64url(bytes) {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i], b = bytes[i+1], c = bytes[i+2];
+    const n = (a << 16) | ((b||0) << 8) | (c||0);
+    out += _B64[(n >> 18) & 63] + _B64[(n >> 12) & 63];
+    out += (i+1 < bytes.length) ? _B64[(n >> 6) & 63] : '';
+    out += (i+2 < bytes.length) ? _B64[n & 63] : '';
+  }
+  return out.replace(/\\+/g, '-').replace(/\\//g, '_');  // url-safe, no padding
 }
 function _toHex(bytes) {
   let h = ''; for (let i = 0; i < bytes.length; i++) h += bytes[i].toString(16).padStart(2, '0');
@@ -741,11 +759,7 @@ global.__dao3Passkey = {
       return cb('err:react-native-passkey register() unavailable');
     // a random 32-byte challenge + user id (registration binds a NEW credential).
     const rnd = () => { const a = new Uint8Array(32); for (let i = 0; i < 32; i++) a[i] = Math.floor(Math.random() * 256); return a; };
-    const b64url = (bytes) => {
-      let bin = ''; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-      const b = (typeof btoa === 'function') ? btoa(bin) : Buffer.from(bin, 'binary').toString('base64');
-      return b.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
-    };
+    const b64url = (bytes) => _bytesToB64url(bytes);
     const uid = b64url(rnd());
     Passkey.register({
       challenge: b64url(rnd()),
