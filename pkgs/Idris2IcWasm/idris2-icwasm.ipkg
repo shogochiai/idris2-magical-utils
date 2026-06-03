@@ -16,6 +16,7 @@ modules = IcWasm.SQLite
         , IcWasm.Secp256k1.Resumable
         , IcWasm.Verification
         , IcWasm.Tests.InterCanisterCallTests
+        , IcWasm.Tests.Secp256k1Tests
         , WasmBuilder.CanisterEntryGen
         , WasmBuilder.WasmBuilder
         , WasmBuilder.BranchProbe

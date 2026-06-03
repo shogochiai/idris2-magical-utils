@@ -1,0 +1,42 @@
+# IcWasm.Secp256k1 + .Resumable Specification
+# Pure-Idris secp256k1 for EVM recovery-id + point decompression (RefC-safe,
+# Integer-native; no unary Nat). Goldens from a real ICP t-ECDSA signature.
+[definitions]
+prefix = "REQ_SECP"
+module_self = "IcWasm.Secp256k1"
+
+[[spec_area]]
+name = "Field arithmetic"
+[[spec]]
+id = "${prefix}_SQRT_001"
+title = "Modular sqrt round-trips"
+invariant = "modSqrtP a returns y with y*y == a (mod p) when a is a residue"
+[[spec]]
+id = "${prefix}_INV_001"
+title = "Modular inverse via binary egcd"
+invariant = "modInv a m * a == 1 (mod m); cheaper than Fermat modPow, stays under IC instruction limit"
+
+[[spec_area]]
+name = "Point decompression"
+[[spec]]
+id = "${prefix}_DECOMP_001"
+title = "Decompress recovers the bound y"
+invariant = "decompressPoint pfx x yields the curve point whose y-parity matches pfx (fixes getEvmAddress wrong-address bug)"
+
+[[spec_area]]
+name = "EVM recovery id"
+[[spec]]
+id = "${prefix}_RECID_001"
+title = "recoveryId matches on-chain yParity"
+invariant = "recoveryId r s e kx ky == Just v where v is the recId whose recovered Q equals the signer pubkey"
+
+[[spec_area]]
+name = "Resumable recovery (IC message-split)"
+[[spec]]
+id = "${prefix}_RESUME_001"
+title = "Resumable equals non-resumable"
+invariant = "recoverAdvance driven in bounded budgets reaches the same Q as the one-shot recoverPubPoint"
+[[spec]]
+id = "${prefix}_RESUME_002"
+title = "Continuation round-trips"
+invariant = "serializeRecover/deserializeRecover preserve the recovery state across messages; Q is reconstructed identically"
