@@ -66,10 +66,23 @@ public export
 modPow : (base, expo, m : Integer) -> Integer
 modPow = modPowFuel 320
 
-||| Modular inverse via Fermat: a^(p-2) mod p (p prime).
+||| Modular inverse via the extended Euclidean algorithm (binary-friendly).
+||| Far cheaper than Fermat's a^(p-2) (one modPow) — critical for staying under
+||| the IC per-message instruction limit when called inside the group law.
+||| `fuel` bounds the recursion (gcd steps ≤ ~2·bits ≈ 512 for 256-bit inputs).
+egcdFuel : (fuel : Nat) -> (old_r, r, old_s, s : Integer) -> (Integer, Integer)
+egcdFuel Z old_r _ old_s _ = (old_r, old_s)
+egcdFuel (S k) old_r r old_s s =
+  if r == 0 then (old_r, old_s)
+  else let q = old_r `div` r
+       in egcdFuel k r (old_r - q * r) s (old_s - q * s)
+
+||| Modular inverse a⁻¹ mod m via extended GCD.
 public export
 modInv : Integer -> Integer -> Integer
-modInv a p = modPow (mmod a p) (p - 2) p
+modInv a m =
+  let (g, x) = egcdFuel 600 (mmod a m) m 1 0
+  in mmod x m
 
 -- =============================================================================
 -- Modular square root (p ≡ 3 mod 4)  →  √a = a^((p+1)/4) mod p
@@ -157,7 +170,9 @@ ptAdd (PXY x1 y1) (PXY x2 y2) =
           y3 = mmod (l * (x1 - x3) - y1) secpP
       in PXY x3 y3
 
-||| Scalar multiply k·P, double-and-add with fuel (k < n, ≤ 256 bits).
+||| Scalar multiply k·P, double-and-add with fuel. Stops as soon as k reaches 0
+||| (so cost tracks the actual bit length, ~256 doublings worst case, not a fixed
+||| 320). fuel 260 ≥ 256-bit scalars.
 scalarMulFuel : Nat -> Integer -> Pt -> Pt
 scalarMulFuel Z _ _ = PInf
 scalarMulFuel (S f) k pt =
@@ -168,7 +183,7 @@ scalarMulFuel (S f) k pt =
 
 public export
 scalarMul : Integer -> Pt -> Pt
-scalarMul = scalarMulFuel 320
+scalarMul = scalarMulFuel 260
 
 ||| Recover the public-key point from (r, s, e) for a given recovery id.
 ||| Q = r⁻¹ (s·R − e·G).
