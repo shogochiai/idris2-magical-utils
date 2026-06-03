@@ -13,6 +13,7 @@ modules = IcWasm.SQLite
         , IcWasm.InterCanisterCall
         , IcWasm.EvmAddress
         , IcWasm.Secp256k1
+        , IcWasm.Secp256k1.Resumable
         , IcWasm.Verification
         , IcWasm.Tests.InterCanisterCallTests
         , WasmBuilder.CanisterEntryGen

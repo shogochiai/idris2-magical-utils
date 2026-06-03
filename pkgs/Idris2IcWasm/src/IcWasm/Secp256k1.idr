@@ -136,8 +136,10 @@ decompressPoint pfx x =
 ||| Returns the recovered public-key point, or Nothing if R doesn't lift.
 |||
 ||| Generator G.
+public export
 gX : Integer
 gX = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+public export
 gY : Integer
 gY = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
 
@@ -148,6 +150,7 @@ gY = 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8
 public export
 data Pt = PInf | PXY Integer Integer
 
+public export
 ptDbl : Pt -> Pt
 ptDbl PInf = PInf
 ptDbl (PXY x y) =
@@ -158,6 +161,7 @@ ptDbl (PXY x y) =
         y3 = mmod (l * (x - x3) - y) secpP
     in PXY x3 y3
 
+public export
 ptAdd : Pt -> Pt -> Pt
 ptAdd PInf q = q
 ptAdd p PInf = p
