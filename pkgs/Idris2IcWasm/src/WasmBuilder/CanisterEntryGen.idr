@@ -309,6 +309,10 @@ genReplyCode pfx _        CTNat     = "    reply_candid_nat((uint64_t)" ++ pfx +
 genReplyCode pfx _        CTNat64   = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_u64());\n"
 genReplyCode pfx _        CTBool    = "    reply_candid_nat((uint64_t)" ++ pfx ++ "_c_get_result_i32());\n"
 genReplyCode _   _        CTNull    = "    reply_empty();\n"
+-- A record return type = an IC http_request HttpResponse: the handler returns the
+-- body via the result-str channel; we wrap it as a 200 HttpResponse record.
+genReplyCode pfx Nothing  (CTRecord _) = "    reply_http_response(" ++ pfx ++ "_c_get_result_str(), 200);\n"
+genReplyCode _   (Just fn) (CTRecord _) = "    reply_http_response(" ++ fn ++ "(), 200);\n"
 genReplyCode pfx Nothing  _         = "    reply_candid_text(" ++ pfx ++ "_c_get_result_str());\n"
 genReplyCode _   (Just fn) _        = "    reply_candid_text(" ++ fn ++ "());\n"
 
@@ -698,6 +702,33 @@ fixedHeader opts cmdMapEntries =
     "    uint8_t buf[10]; int i=0;\n" ++
     "    do { buf[i]=(uint8_t)(value&0x7F); value>>=7; if(value!=0) buf[i]|=0x80; i++; } while(value!=0);\n" ++
     "    ic0_msg_reply_data_append((int32_t)(uintptr_t)buf, i);\n" ++
+    "    ic0_msg_reply();\n" ++
+    "}\n" ++
+    "\n" ++
+    "/* Reply with an IC http_request HttpResponse:\n" ++
+    " *   record { status_code:nat16; headers:vec record{text;text}; body:blob }\n" ++
+    " * The type table is constant; only body bytes + status vary. Headers are left\n" ++
+    " * empty (sufficient for serving a static asset like assetlinks.json). The\n" ++
+    " * value order is type-table order: body (vec nat8), headers (empty vec),\n" ++
+    " * status_code (nat16, little-endian). Verified byte-exact vs a candid decoder. */\n" ++
+    "static void reply_http_response(const char* body, uint16_t status) {\n" ++
+    "    static const uint8_t hdr[] = { 0x44,0x49,0x44,0x4C,0x04,\n" ++
+    "        0x6c,0x02,0x00,0x71,0x01,0x71,   /* T0 record{0:text;1:text} */\n" ++
+    "        0x6d,0x00,                       /* T1 vec T0 */\n" ++
+    "        0x6d,0x7b,                       /* T2 vec nat8 (blob) */\n" ++
+    "        0x6c,0x03,0xa2,0xf5,0xed,0x88,0x04,0x02,  /* T3 record: body->T2 */\n" ++
+    "        0xc6,0xa4,0xa1,0x98,0x06,0x01,            /*            headers->T1 */\n" ++
+    "        0x9a,0xa1,0xb2,0xf9,0x0c,0x7a,            /*            status_code->nat16 */\n" ++
+    "        0x01,0x03 };                     /* 1 arg of type index 3 */\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)hdr, sizeof(hdr));\n" ++
+    "    uint32_t blen = (uint32_t)strlen(body);\n" ++
+    "    uint8_t leb[5]; int32_t ll=0; uint32_t v=blen;\n" ++
+    "    do { uint8_t b=(uint8_t)(v&0x7F); v>>=7; if(v) b|=0x80; leb[ll++]=b; } while(v);\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)leb, ll);          /* body length */\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)body, (int32_t)blen); /* body bytes */\n" ++
+    "    uint8_t zero = 0x00; ic0_msg_reply_data_append((int32_t)(uintptr_t)&zero, 1); /* headers: empty vec */\n" ++
+    "    uint8_t st[2]; st[0]=(uint8_t)(status&0xFF); st[1]=(uint8_t)((status>>8)&0xFF);\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)st, 2);            /* status_code nat16 LE */\n" ++
     "    ic0_msg_reply();\n" ++
     "}\n" ++
     "\n" ++

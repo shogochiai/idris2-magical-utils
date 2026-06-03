@@ -187,34 +187,6 @@ typeCodes _ = "0x7f"          -- default to null
 -- Simple .did Parser
 -- =============================================================================
 
-||| Parse a simple type reference (handles opt, vec, primitives)
-parseSimpleType : String -> CandidType
-parseSimpleType s =
-  let t = trim s
-  in case t of
-    "nat" => CTNat
-    "int" => CTInt
-    "text" => CTText
-    "bool" => CTBool
-    "blob" => CTBlob
-    "null" => CTNull
-    "nat8" => CTNat8
-    "nat16" => CTNat16
-    "nat32" => CTNat32
-    "nat64" => CTNat64
-    "int8" => CTInt8
-    "int16" => CTInt16
-    "int32" => CTInt32
-    "int64" => CTInt64
-    "float32" => CTFloat32
-    "float64" => CTFloat64
-    "principal" => CTPrincipal
-    _ => if isPrefixOf "opt " t
-           then CTOpt (parseSimpleType (substr 4 (length t) t))
-         else if isPrefixOf "vec " t
-           then CTVec (parseSimpleType (substr 4 (length t) t))
-         else CTNamed t
-
 ||| Remove trailing semicolon if present
 stripSemicolon : String -> String
 stripSemicolon s =
@@ -223,23 +195,56 @@ stripSemicolon s =
        then trim (substr 0 (minus (length trimmed) 1) trimmed)
        else trimmed
 
-||| Parse record fields: "field1: type1; field2: type2"
-parseRecordFields : String -> List (String, CandidType)
-parseRecordFields content =
-  let -- Split by semicolon, handling nested structures
-      parts = split (== ';') content
-      parsePart : String -> Maybe (String, CandidType)
-      parsePart p =
-        let trimmed = trim p
-        in if null trimmed
-             then Nothing
-             else case break (== ':') (unpack trimmed) of
-                    (namePart, ':' :: rest) =>
-                      let fieldName = trim (pack namePart)
-                          fieldType = parseSimpleType (pack rest)
-                      in Just (fieldName, fieldType)
-                    _ => Nothing
-  in mapMaybe parsePart (forget parts)
+mutual
+  ||| Parse a simple type reference (handles opt, vec, primitives, inline record)
+  parseSimpleType : String -> CandidType
+  parseSimpleType s =
+    let t = trim s
+    in case t of
+      "nat" => CTNat
+      "int" => CTInt
+      "text" => CTText
+      "bool" => CTBool
+      "blob" => CTBlob
+      "null" => CTNull
+      "nat8" => CTNat8
+      "nat16" => CTNat16
+      "nat32" => CTNat32
+      "nat64" => CTNat64
+      "int8" => CTInt8
+      "int16" => CTInt16
+      "int32" => CTInt32
+      "int64" => CTInt64
+      "float32" => CTFloat32
+      "float64" => CTFloat64
+      "principal" => CTPrincipal
+      _ => if isPrefixOf "opt " t
+             then CTOpt (parseSimpleType (substr 4 (length t) t))
+           else if isPrefixOf "vec " t
+             then CTVec (parseSimpleType (substr 4 (length t) t))
+           else if isPrefixOf "record" t && isInfixOf "{" t
+             then -- inline record { f1:t1; f2:t2; ... } → CTRecord (parse the body)
+               let afterBrace = pack (drop 1 (dropWhile (/= '{') (unpack t)))
+                   body = pack (takeWhile (/= '}') (unpack afterBrace))
+               in CTRecord (parseRecordFields body)
+           else CTNamed t
+
+  ||| Parse record fields: "field1: type1; field2: type2"
+  parseRecordFields : String -> List (String, CandidType)
+  parseRecordFields content =
+    let parts = split (== ';') content
+        parsePart : String -> Maybe (String, CandidType)
+        parsePart p =
+          let trimmed = trim p
+          in if null trimmed
+               then Nothing
+               else case break (== ':') (unpack trimmed) of
+                      (namePart, ':' :: rest) =>
+                        let fieldName = trim (pack namePart)
+                            fieldType = parseSimpleType (pack rest)
+                        in Just (fieldName, fieldType)
+                      _ => Nothing
+    in mapMaybe parsePart (forget parts)
 
 ||| Parse variant cases: "Case1; Case2: payload; Case3"
 parseVariantCases : String -> List (String, CandidType)
