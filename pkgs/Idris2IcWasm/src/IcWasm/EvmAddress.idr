@@ -18,6 +18,7 @@ module IcWasm.EvmAddress
 
 import Data.Vect
 import Data.Bits
+import IcWasm.Secp256k1
 
 %default total
 
@@ -91,14 +92,33 @@ deriveAddress (MkUncompressed x y) keccak256Fn =
 |||
 ||| @key Compressed SEC1 public key
 ||| Returns Either error or uncompressed key
+||| Big-endian Vect of bytes → Integer.
+bytesToInteger : Vect n Bits8 -> Integer
+bytesToInteger = foldl (\acc, b => acc * 256 + cast b) 0
+
+||| Integer → big-endian Vect of `n` bytes (truncating high bytes if it overflows).
+||| The most-significant byte is `v `div` 256^(n-1)`; recurse on the remainder.
+integerToBytes : (n : Nat) -> Integer -> Vect n Bits8
+integerToBytes Z _ = []
+integerToBytes (S k) v =
+  let shift = pow256 k
+      hi    = (v `div` shift) `mod` 256
+  in cast hi :: integerToBytes k (v `mod` shift)
+  where
+    pow256 : Nat -> Integer
+    pow256 Z = 1
+    pow256 (S j) = 256 * pow256 j
+
+||| Decompress a compressed SEC1 key to uncompressed via secp256k1 field math
+||| (`IcWasm.Secp256k1.decompressPoint`). Pure — no FFI, no external library.
+||| `Left` if the x-coordinate is not a point on the curve.
 export
 decompress : Sec1Key Compressed -> IO (Either String (Sec1Key Uncompressed))
-decompress (MkCompressed pfx x) = do
-  -- TODO: secp256k1 point decompression
-  -- y^2 = x^3 + 7 (mod p)
-  -- y = sqrt(x^3 + 7) mod p
-  -- if prefix == 0x02: y is even; if 0x03: y is odd
-  pure (Left "decompress: not yet implemented (use CLI-side web3.py)")
+decompress (MkCompressed pfx x) =
+  let xInt = bytesToInteger x
+  in case decompressPoint (cast pfx) xInt of
+       Nothing      => pure (Left "decompress: x not on secp256k1 curve")
+       Just (_, y)  => pure (Right (MkUncompressed x (integerToBytes 32 y)))
 
 -- =============================================================================
 -- Parsing from raw bytes
