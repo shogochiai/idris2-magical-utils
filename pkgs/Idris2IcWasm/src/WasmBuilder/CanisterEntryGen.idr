@@ -193,39 +193,109 @@ genSingleArgDecode pfx argIdx ffiIdx CTPrincipal =
 genSingleArgDecode pfx argIdx ffiIdx (CTOpt _) =
   -- Opt: pass as text for Idris2 to decode
   genSingleArgDecode pfx argIdx ffiIdx CTText
+genSingleArgDecode pfx argIdx ffiIdx CTBlob =
+  -- blob = vec nat8: read length then copy raw bytes into the text buffer (hex
+  -- decode is the Idris side's job if it wants bytes; here we pass as a byte run).
+  ( "    { uint64_t blen" ++ show argIdx ++ " = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
+    "      if (blen" ++ show argIdx ++ " >= sizeof(text_arg_buf)) blen" ++ show argIdx ++ " = sizeof(text_arg_buf)-1;\n" ++
+    "      for (uint64_t i=0; i<blen" ++ show argIdx ++ " && offset<arg_buf_size; i++) text_arg_buf[i]=(char)arg_buf[offset++];\n" ++
+    "      text_arg_buf[blen" ++ show argIdx ++ "] = '\\0'; }\n"
+  , "    " ++ pfx ++ "_c_set_arg_str(" ++ show ffiIdx ++ ", text_arg_buf);\n"
+  )
 genSingleArgDecode pfx argIdx ffiIdx _ =
-  -- Fallback for complex types: pass as text
+  -- Fallback for remaining complex types: pass as text
   genSingleArgDecode pfx argIdx ffiIdx CTText
+
+||| Decode a CTRecord's fields (in candid type-table order) into SEQUENTIAL FFI
+||| slots beginning at `startSlot`. The Idris handler reads them with readArgStr/
+||| getArg at those slots, in field order. Returns (decode_code, set_arg_code) and
+||| the next free slot. Only the field TYPES matter for value layout (field hashes
+||| were consumed by parse_type_table); fields appear in the value buffer in the
+||| same order the type table lists them.
+genRecordFieldDecode : String -> (recIdx : Nat) -> (startSlot : Nat) -> List (String, CandidType)
+                    -> (String, String, Nat)
+genRecordFieldDecode _ _ slot [] = ("", "", slot)
+genRecordFieldDecode pfx recIdx slot ((_, ft) :: fs) =
+  let fieldArgIdx = recIdx * 100 + slot  -- unique C var suffix per field
+      pair  = genSingleArgDecode pfx fieldArgIdx slot ft
+      rest  = genRecordFieldDecode pfx recIdx (S slot) fs
+      (rd, rs, nextSlot) = rest
+  in (fst pair ++ rd, snd pair ++ rs, nextSlot)
+
+||| Is this a composite arg type that needs the type-table-parsing decode path?
+isComposite : CandidType -> Bool
+isComposite (CTRecord _) = True
+isComposite (CTVec _)    = True
+isComposite _            = False
 
 ||| Generate C code to decode N-ary Candid arguments.
 ||| Returns (setup_code, set_arg_code_for_idris)
+|||
+||| Two paths:
+|||  * primitive-only args → the original lightweight skip-the-type-table decode.
+|||  * any composite (record/vec) arg → parse the type table (parse_type_table)
+|||    then decode each record's fields into sequential FFI slots. A single record
+|||    arg's fields become slots 1,2,3,… so the Idris handler reads them in order.
 genArgDecodeCode : String -> List CandidType -> (String, String)
 genArgDecodeCode _ [] = ("", "")
 genArgDecodeCode pfx argTypes =
-  let n = length argTypes
-      header =
-        "    load_candid_args();\n" ++
-        "    if (arg_buf_size < 7) goto arg_done;\n" ++
-        "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') goto arg_done;\n" ++
-        "    int32_t offset=4, new_offset;\n" ++
-        "    uint64_t type_count = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
-        "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
-        "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
-        "    if (arg_count < " ++ show n ++ ") goto arg_done_inner;\n" ++
-        "    offset += " ++ show n ++ "; /* skip type codes */\n"
-      -- Generate decode + set-arg for each argument
-      go : Nat -> List CandidType -> (String, String)
-      go _ [] = ("", "")
-      go idx (t :: ts) =
-        let ffiIdx   = idx + 1  -- FFI slots are 1-based (slot 0 = CMD)
-            pair1 = genSingleArgDecode pfx idx ffiIdx t
-            pair2 = go (idx + 1) ts
-        in (fst pair1 ++ fst pair2, snd pair1 ++ snd pair2)
-      pair = go 0 argTypes
-      decodes = fst pair
-      setArgs = snd pair
-      footer = "    arg_done_inner: ;\n    arg_done: ;\n"
-  in (header ++ decodes ++ footer, setArgs)
+  if any isComposite argTypes
+    then genCompositeArgDecode pfx argTypes
+    else
+      let n = length argTypes
+          header =
+            "    load_candid_args();\n" ++
+            "    if (arg_buf_size < 7) goto arg_done;\n" ++
+            "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') goto arg_done;\n" ++
+            "    int32_t offset=4, new_offset;\n" ++
+            "    uint64_t type_count = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
+            "    for (uint64_t i=0; i<type_count; i++) { parse_leb128(offset, &new_offset); offset=new_offset; }\n" ++
+            "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
+            "    if (arg_count < " ++ show n ++ ") goto arg_done_inner;\n" ++
+            "    offset += " ++ show n ++ "; /* skip type codes */\n"
+          go : Nat -> List CandidType -> (String, String)
+          go _ [] = ("", "")
+          go idx (t :: ts) =
+            let ffiIdx = idx + 1
+                pair1 = genSingleArgDecode pfx idx ffiIdx t
+                pair2 = go (idx + 1) ts
+            in (fst pair1 ++ fst pair2, snd pair1 ++ snd pair2)
+          pair = go 0 argTypes
+          footer = "    arg_done_inner: ;\n    arg_done: ;\n"
+      in (header ++ fst pair ++ footer, snd pair)
+  where
+    -- Composite path: parse the type table, read arg type codes as sleb, decode.
+    -- For a SINGLE record arg (the common case: http_request) the record's fields
+    -- are spread into FFI slots 1..k. Multiple composite args / vec-of-record are
+    -- handled by decoding the first record arg's fields (sufficient for the
+    -- request-record use case); other args still decode positionally after it.
+    genCompositeArgDecode : String -> List CandidType -> (String, String)
+    genCompositeArgDecode pfx' argTypes' =
+      let n = length argTypes'
+          header =
+            "    load_candid_args();\n" ++
+            "    if (arg_buf_size < 7) goto arg_done;\n" ++
+            "    if (arg_buf[0]!='D'||arg_buf[1]!='I'||arg_buf[2]!='D'||arg_buf[3]!='L') goto arg_done;\n" ++
+            "    int32_t offset=4, new_offset;\n" ++
+            "    uint64_t type_count = parse_leb128(offset, &new_offset); offset = new_offset;\n" ++
+            "    parse_type_table(&offset, type_count);\n" ++
+            "    uint64_t arg_count = parse_leb128(offset, &new_offset); offset=new_offset;\n" ++
+            "    if (arg_count < " ++ show n ++ ") goto arg_done_inner;\n" ++
+            "    for (int32_t _a=0; _a<" ++ show n ++ "; _a++) { parse_sleb128(offset, &new_offset); offset=new_offset; }\n"
+          -- decode each arg; record args expand into multiple slots.
+          go : Nat -> Nat -> List CandidType -> (String, String)
+          go _ _ [] = ("", "")
+          go slot recN (CTRecord fields :: ts) =
+            let (rd, rs, nextSlot) = genRecordFieldDecode pfx' recN slot fields
+                rest = go nextSlot (S recN) ts
+            in (rd ++ fst rest, rs ++ snd rest)
+          go slot recN (t :: ts) =
+            let pair1 = genSingleArgDecode pfx' slot slot t
+                rest  = go (S slot) recN ts
+            in (fst pair1 ++ fst rest, snd pair1 ++ snd rest)
+          pair = go 1 0 argTypes'
+          footer = "    arg_done_inner: ;\n    arg_done: ;\n"
+      in (header ++ fst pair ++ footer, snd pair)
 
 -- =============================================================================
 -- Reply Code Generation
@@ -538,6 +608,54 @@ fixedHeader opts cmdMapEntries =
     "    }\n" ++
     "    *new_offset = offset;\n" ++
     "    return result;\n" ++
+    "}\n" ++
+    "\n" ++
+    "/* Signed LEB128 (candid type-table opcodes are sleb). Needed for generic\n" ++
+    " * record/vec arg decoding (the type table precedes the arg values). */\n" ++
+    "static int64_t parse_sleb128(int32_t offset, int32_t* new_offset) {\n" ++
+    "    int64_t result = 0; int shift = 0; uint8_t byte = 0;\n" ++
+    "    while (offset < arg_buf_size) {\n" ++
+    "        byte = arg_buf[offset++];\n" ++
+    "        result |= ((int64_t)(byte & 0x7F)) << shift;\n" ++
+    "        shift += 7;\n" ++
+    "        if ((byte & 0x80) == 0) break;\n" ++
+    "    }\n" ++
+    "    if (shift < 64 && (byte & 0x40)) result |= -((int64_t)1 << shift);\n" ++
+    "    *new_offset = offset;\n" ++
+    "    return result;\n" ++
+    "}\n" ++
+    "\n" ++
+    "/* Generic candid type table (parsed once per call so record/vec arg values can\n" ++
+    " * be decoded by structure). Opcodes: text=-15, nat8=-5, record=-20, vec=-19. */\n" ++
+    "#define CTT_MAX 64\n" ++
+    "#define CTT_FIELDS_MAX 16\n" ++
+    "static int64_t  ctt_kind[CTT_MAX];        /* the type opcode (-20 record, -19 vec, else prim) */\n" ++
+    "static int64_t  ctt_elem[CTT_MAX];        /* vec: element type (prim opcode or type index) */\n" ++
+    "static int32_t  ctt_nfields[CTT_MAX];     /* record: field count */\n" ++
+    "static int64_t  ctt_ftype[CTT_MAX][CTT_FIELDS_MAX]; /* record: each field's type (prim or index) */\n" ++
+    "static int32_t  ctt_count = 0;\n" ++
+    "/* Parse the DIDL type table starting at *offset (just after the type count).\n" ++
+    " * Leaves *offset at the arg-count leb. Returns the number of types. */\n" ++
+    "static int32_t parse_type_table(int32_t* offset, uint64_t type_count) {\n" ++
+    "    int32_t off = *offset, no;\n" ++
+    "    ctt_count = (int32_t)type_count; if (ctt_count > CTT_MAX) ctt_count = CTT_MAX;\n" ++
+    "    for (int32_t i = 0; i < ctt_count; i++) {\n" ++
+    "        int64_t op = parse_sleb128(off, &no); off = no;\n" ++
+    "        ctt_kind[i] = op; ctt_nfields[i] = 0; ctt_elem[i] = 0;\n" ++
+    "        if (op == -19) { ctt_elem[i] = parse_sleb128(off, &no); off = no; }\n" ++
+    "        else if (op == -20 || op == -21) { /* record or variant */\n" ++
+    "            uint64_t nf = parse_leb128(off, &no); off = no;\n" ++
+    "            ctt_nfields[i] = (int32_t)nf; if (ctt_nfields[i] > CTT_FIELDS_MAX) ctt_nfields[i] = CTT_FIELDS_MAX;\n" ++
+    "            for (uint64_t f = 0; f < nf; f++) {\n" ++
+    "                parse_leb128(off, &no); off = no;            /* field hash (positional, ignored) */\n" ++
+    "                int64_t ft = parse_sleb128(off, &no); off = no;\n" ++
+    "                if ((int32_t)f < CTT_FIELDS_MAX) ctt_ftype[i][f] = ft;\n" ++
+    "            }\n" ++
+    "        }\n" ++
+    "        /* prim: nothing more */\n" ++
+    "    }\n" ++
+    "    *offset = off;\n" ++
+    "    return ctt_count;\n" ++
     "}\n" ++
     "\n" ++
     "static char text_arg_buf[4096];\n" ++
