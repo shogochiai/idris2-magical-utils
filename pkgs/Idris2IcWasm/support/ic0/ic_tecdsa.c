@@ -190,43 +190,95 @@ static void format_reject_error(char* out, uint32_t out_size, const char* prefix
     out[plen + (uint32_t)msg_size] = '\0';
 }
 
+/* sign_with_ecdsa arg:
+ *   record { message_hash: blob; derivation_path: vec blob;
+ *            key_id: record { curve: variant { secp256k1 }; name: text } }
+ *
+ * CORRECTED (2026-06-03): the previous type table used WRONG candid field-id
+ * hashes (curve=0x8DF6D6D2, name=0xD3C5CC99, secp256k1=0xCFD1E33B,
+ * derivation_path=0x8F3AB8BA, key_id=0x931C2F2A, message_hash=0xCE890A2B) and a
+ * declaration order that did not match candid's ascending-hash requirement, so
+ * the IC management canister rejected it ("Cannot parse header"). The working
+ * encode_pubkey_request in this same file uses the CORRECT candid hashes
+ * (name=0x48FF724B, curve=0x4E584CAF) — proof of the right algorithm
+ * (h = h*223 + byte mod 2^32). Corrected hashes:
+ *   name=0x48FF724B  curve=0x4E584CAF  secp256k1=0x1D592F1A
+ *   key_id=0x3FEB75BB  derivation_path=0x562C942D  message_hash=0xBB8CC486
+ * Candid orders record fields by ASCENDING hash, and the arg bytes follow the
+ * same order, so:
+ *   key_id record fields: name (0x48FF724B) < curve (0x4E584CAF)
+ *   main  record fields:  key_id (0x3FEB75BB) < derivation_path (0x562C942D)
+ *                         < message_hash (0xBB8CC486)
+ */
+/* Byte-for-byte matches the authoritative ic-py candid encoding of
+ *   sign_with_ecdsa(record{message_hash:blob; derivation_path:vec blob;
+ *                          key_id:record{curve:variant{secp256k1}; name:text}})
+ * verified via: ic.candid.encode(...). Type table is FIVE entries — crucially
+ * blob = `vec nat8` = its OWN type entry (0x6D 0x7B), referenced by both
+ * message_hash and the derivation_path element. The earlier encoder wrote blob
+ * inline as 0x6D + sleb(-19) (= vec vec) which is malformed → IC rejected it.
+ * Authoritative bytes (type table + arg header):
+ *   4449444c 05
+ *   6b01 9adee4ea01 7f                  T0 variant{secp256k1:null}
+ *   6c02 cbe4fdc704 71 af99e1f204 00    T1 record{name:text; curve:T0}
+ *   6d 7b                               T2 vec nat8 (blob)
+ *   6d 02                               T3 vec T2 (vec blob)
+ *   6c03 bbebadff03 01 ada8b2b105 03 8689b3dc0b 02
+ *                                       T4 record{key_id:T1; derivation_path:T3; message_hash:T2}
+ *   01 04                               1 arg of type T4
+ * arg value (T4 fields ascending: key_id, derivation_path, message_hash).
+ */
 static uint32_t encode_sign_request(uint8_t* buf) {
     uint32_t pos = 0;
 
-    buf[pos++] = 'D';
-    buf[pos++] = 'I';
-    buf[pos++] = 'D';
-    buf[pos++] = 'L';
+    buf[pos++] = 'D'; buf[pos++] = 'I'; buf[pos++] = 'D'; buf[pos++] = 'L';
 
-    pos += encode_leb128_unsigned(buf + pos, 4);
+    pos += encode_leb128_unsigned(buf + pos, 5);          /* 5 types */
 
-    buf[pos++] = 0x6D;
-    pos += encode_leb128_signed(buf + pos, -19);
-
-    buf[pos++] = 0x6C;
-    pos += encode_leb128_unsigned(buf + pos, 2);
-    pos += encode_leb128_unsigned(buf + pos, 0x8DF6D6D2UL & 0xFFFFFFFF);
-    pos += encode_leb128_unsigned(buf + pos, 2);
-    pos += encode_leb128_unsigned(buf + pos, 0xD3C5CC99UL & 0xFFFFFFFF);
-    pos += encode_leb128_signed(buf + pos, -15);
-
+    /* T0: variant { secp256k1 : null } */
     buf[pos++] = 0x6B;
     pos += encode_leb128_unsigned(buf + pos, 1);
-    pos += encode_leb128_unsigned(buf + pos, 0xCFD1E33BUL & 0xFFFFFFFF);
-    pos += encode_leb128_signed(buf + pos, -17);
+    pos += encode_leb128_unsigned(buf + pos, 0x1D592F1AUL); /* secp256k1 */
+    pos += encode_leb128_signed(buf + pos, -1);           /* null (candid null = -1/0x7f) */
 
+    /* T1: record { name: text; curve: T0 }  (ascending: name < curve) */
+    buf[pos++] = 0x6C;
+    pos += encode_leb128_unsigned(buf + pos, 2);
+    pos += encode_leb128_unsigned(buf + pos, 0x48FF724BUL); /* name */
+    pos += encode_leb128_signed(buf + pos, -15);          /* text */
+    pos += encode_leb128_unsigned(buf + pos, 0x4E584CAFUL); /* curve */
+    pos += encode_leb128_unsigned(buf + pos, 0);          /* type 0 */
+
+    /* T2: vec nat8  (= blob) */
+    buf[pos++] = 0x6D;
+    pos += encode_leb128_signed(buf + pos, -5);           /* nat8 */
+
+    /* T3: vec T2  (= vec blob) */
+    buf[pos++] = 0x6D;
+    pos += encode_leb128_unsigned(buf + pos, 2);          /* type 2 */
+
+    /* T4: record { key_id: T1; derivation_path: T3; message_hash: T2 } (asc) */
     buf[pos++] = 0x6C;
     pos += encode_leb128_unsigned(buf + pos, 3);
-    pos += encode_leb128_unsigned(buf + pos, 0x8F3AB8BAUL & 0xFFFFFFFF);
-    pos += encode_leb128_unsigned(buf + pos, 0);
-    pos += encode_leb128_unsigned(buf + pos, 0x931C2F2AUL & 0xFFFFFFFF);
-    pos += encode_leb128_unsigned(buf + pos, 1);
-    pos += encode_leb128_unsigned(buf + pos, 0xCE890A2BUL & 0xFFFFFFFF);
-    pos += encode_leb128_signed(buf + pos, -19);
+    pos += encode_leb128_unsigned(buf + pos, 0x3FEB75BBUL); /* key_id */
+    pos += encode_leb128_unsigned(buf + pos, 1);          /* type 1 */
+    pos += encode_leb128_unsigned(buf + pos, 0x562C942DUL); /* derivation_path */
+    pos += encode_leb128_unsigned(buf + pos, 3);          /* type 3 */
+    pos += encode_leb128_unsigned(buf + pos, 0xBB8CC486UL); /* message_hash */
+    pos += encode_leb128_unsigned(buf + pos, 2);          /* type 2 */
 
+    /* 1 argument, of type T4 */
     pos += encode_leb128_unsigned(buf + pos, 1);
-    pos += encode_leb128_unsigned(buf + pos, 3);
+    pos += encode_leb128_unsigned(buf + pos, 4);
 
+    /* Arg value (T4 ascending: key_id, derivation_path, message_hash) */
+    /* key_id = record{ name: text; curve: variant } (T1 order: name, then curve) */
+    pos += encode_leb128_unsigned(buf + pos, g_key_name_len);
+    memcpy(buf + pos, g_key_name, g_key_name_len);
+    pos += g_key_name_len;
+    pos += encode_leb128_unsigned(buf + pos, 0);          /* curve variant idx 0 */
+
+    /* derivation_path : vec blob */
     {
         uint32_t path_count = g_derivation_path_len / 4;
         uint32_t i;
@@ -238,11 +290,7 @@ static uint32_t encode_sign_request(uint8_t* buf) {
         }
     }
 
-    pos += encode_leb128_unsigned(buf + pos, 0);
-    pos += encode_leb128_unsigned(buf + pos, g_key_name_len);
-    memcpy(buf + pos, g_key_name, g_key_name_len);
-    pos += g_key_name_len;
-
+    /* message_hash : blob (32 bytes) */
     pos += encode_leb128_unsigned(buf + pos, 32);
     memcpy(buf + pos, g_message_hash, 32);
     pos += 32;
@@ -450,15 +498,25 @@ static int parse_pubkey_reply(void) {
     if (reply_size <= 0) return 0;
     ic0_msg_arg_data_copy((int32_t)(uintptr_t)reply, 0, reply_size);
 
-    for (offset = 0; offset < reply_size - 34; offset++) {
-        if (reply[offset] == 33 && offset + 34 <= reply_size &&
+    /* ICP's ecdsa_public_key always returns a 33-byte COMPRESSED SEC1 key
+     * (Candid frames a vec nat8 as leb128(len)=0x21 then the bytes). Match the
+     * compressed key across the WHOLE reply FIRST. The previous loop checked
+     * both 33 and 65 per offset, so a spurious "65,0x04" pair appearing at a
+     * lower offset (in the type table or chain_code) would win and copy 64
+     * garbage bytes -> wrong address (the 0x595508 regression). Compressed is
+     * then decompressed on-curve in ic_tecdsa_derive_evm_address. */
+    for (offset = 0; offset + 34 <= reply_size; offset++) {
+        if (reply[offset] == 33 &&
             (reply[offset + 1] == 0x02 || reply[offset + 1] == 0x03)) {
             g_public_key_len = 33;
             memcpy(g_public_key, reply + offset + 1, 33);
             ic_tecdsa_derive_evm_address();
             return 1;
         }
-        if (reply[offset] == 65 && offset + 66 <= reply_size && reply[offset + 1] == 0x04) {
+    }
+    /* Fallback: framed uncompressed key (0x41=65, 0x04, then 64 bytes). */
+    for (offset = 0; offset + 66 <= reply_size; offset++) {
+        if (reply[offset] == 65 && reply[offset + 1] == 0x04) {
             g_public_key_len = 65;
             memcpy(g_public_key, reply + offset + 1, 65);
             ic_tecdsa_derive_evm_address();
