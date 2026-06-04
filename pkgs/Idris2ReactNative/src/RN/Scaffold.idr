@@ -855,7 +855,64 @@ global.__dao3Passkey = {
       cb('ok:' + JSON.stringify({ pubX: pk.pubX, pubY: pk.pubY, credId: res.id }));
     }).catch((e) => cb('err:register ' + (e && e.message ? e.message : String(e))));
   },
+
+  // authenticate(challengeHex, credId, cb): run WebAuthn .get() over the 32-byte
+  // userOpHash (challengeHex) with allowCredentials pinned to the bound credId, and
+  // assemble the flat signature blob the AA account's validateUserOp decodes:
+  //   adLen(32) ‖ authenticatorData ‖ cdLen(32) ‖ clientDataJSON ‖ r(32) ‖ s(32)
+  // The authenticator signs ECDSA-P256 over sha256(authData ‖ sha256(clientDataJSON)),
+  // carrying challengeHex as the b64url challenge inside clientDataJSON — the contract
+  // re-derives that digest and RIP-7212-verifies it. cb('ok:<sigBlobHex>') | 'err:..'.
+  authenticate(challengeHex, credId, cb) {
+    let RNPasskey = null;
+    try { RNPasskey = require('react-native-passkey'); } catch (e) { RNPasskey = null; }
+    const Passkey = RNPasskey && (RNPasskey.Passkey || RNPasskey.default || RNPasskey);
+    if (!Passkey || typeof Passkey.authenticate !== 'function')
+      return cb('err:react-native-passkey authenticate() unavailable');
+    const chBytes = (function (h) { h = h.replace(/^0x/, ''); const a = new Uint8Array(h.length/2); for (let i=0;i<a.length;i++) a[i]=parseInt(h.substr(i*2,2),16); return a; })(challengeHex);
+    Passkey.authenticate({
+      challenge: _bytesToB64url(chBytes),
+      rpId: RP_ID,
+      allowCredentials: credId ? [{ type: 'public-key', id: credId }] : [],
+      timeout: 60000,
+      userVerification: 'required',
+    }).then((res) => {
+      const r0 = res && res.response;
+      if (!r0 || !r0.authenticatorData || !r0.clientDataJSON || !r0.signature)
+        return cb('err:incomplete assertion');
+      const ad = _b64urlToBytes(r0.authenticatorData);
+      const cd = _b64urlToBytes(r0.clientDataJSON);
+      const rs = _derToRS(_b64urlToBytes(r0.signature));   // DER ECDSA → {r,s}
+      if (!rs) return cb('err:bad DER signature');
+      const W = (n) => { const a = new Uint8Array(32); for (let i=31;i>=0;i--){ a[i]=Number(n & 255n); n >>= 8n; } return a; };
+      const lenW = (n) => W(BigInt(n));
+      const parts = [lenW(ad.length), ad, lenW(cd.length), cd, W(rs.r), W(rs.sLow)];
+      let total = 0; for (const p of parts) total += p.length;
+      const blob = new Uint8Array(total); let o = 0;
+      for (const p of parts) { blob.set(p, o); o += p.length; }
+      cb('ok:' + _toHex(blob));
+    }).catch((e) => cb('err:authenticate ' + (e && e.message ? e.message : String(e))));
+  },
 };
+
+// Parse a DER-encoded ECDSA signature (SEQ { INT r, INT s }) → { r, s, sLow } as
+// BigInt, with sLow = the low-s normalization RIP-7212 / EIP-2 require.
+function _derToRS(der) {
+  try {
+    let i = 0;
+    if (der[i++] !== 0x30) return null;          // SEQUENCE
+    if (der[i] & 0x80) i += 1 + (der[i] & 0x7f); else i++;  // seq length
+    if (der[i++] !== 0x02) return null;          // INTEGER r
+    let rlen = der[i++]; let r = 0n;
+    for (let k = 0; k < rlen; k++) r = (r << 8n) | BigInt(der[i++]);
+    if (der[i++] !== 0x02) return null;          // INTEGER s
+    let slen = der[i++]; let s = 0n;
+    for (let k = 0; k < slen; k++) s = (s << 8n) | BigInt(der[i++]);
+    const N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551n;
+    const sLow = (s > N / 2n) ? (N - s) : s;
+    return { r, s, sLow };
+  } catch (e) { return null; }
+}
 module.exports = global.__dao3Passkey;
 """
 
