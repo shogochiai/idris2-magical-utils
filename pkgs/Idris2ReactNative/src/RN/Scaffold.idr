@@ -867,9 +867,9 @@ global.__dao3Passkey = {
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],  // ES256 / P-256
       timeout: 60000,
       authenticatorSelection: {
+        authenticatorAttachment: 'platform',
         userVerification: 'required',
-        residentKey: 'required',
-        requireResidentKey: true,
+        residentKey: 'preferred',
       },
     }).then((res) => {
       const att = res && res.response && res.response.attestationObject;
