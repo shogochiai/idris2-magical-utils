@@ -890,13 +890,21 @@ global.__dao3Passkey = {
     if (!Passkey || typeof Passkey.authenticate !== 'function')
       return cb('err:react-native-passkey authenticate() unavailable');
     const chBytes = (function (h) { h = h.replace(/^0x/, ''); const a = new Uint8Array(h.length/2); for (let i=0;i<a.length;i++) a[i]=parseInt(h.substr(i*2,2),16); return a; })(challengeHex);
-    Passkey.authenticate({
-      challenge: _bytesToB64url(chBytes),
-      rpId: RP_ID,
-      allowCredentials: credId ? [{ type: 'public-key', id: credId }] : [],
-      timeout: 60000,
-      userVerification: 'required',
-    }).then((res) => {
+    const chB64 = _bytesToB64url(chBytes);
+    // Try pinned-to-credId first (if any), then fall back to EMPTY allowCredentials
+    // so the OS offers ANY passkey registered for this rpId. The AA verifies the
+    // signature against the bound pubkey, not the credential id, so an empty
+    // allow-list is safe and survives a lost/rotated credId (e.g. an app restart
+    // clearing it → "No viable credential" on the pinned attempt → retry empty).
+    const doAuth = (allow) => Passkey.authenticate({
+      challenge: chB64, rpId: RP_ID, allowCredentials: allow,
+      timeout: 60000, userVerification: 'required',
+    });
+    const allow0 = credId ? [{ type: 'public-key', id: credId }] : [];
+    Promise.resolve()
+      .then(() => doAuth(allow0))
+      .catch((e) => { if (allow0.length === 0) throw e; return doAuth([]); })
+      .then((res) => {
       const r0 = res && res.response;
       if (!r0 || !r0.authenticatorData || !r0.clientDataJSON || !r0.signature)
         return cb('err:incomplete assertion');
