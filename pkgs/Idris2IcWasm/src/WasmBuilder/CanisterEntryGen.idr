@@ -707,9 +707,12 @@ fixedHeader opts cmdMapEntries =
     "\n" ++
     "/* Reply with an IC http_request HttpResponse:\n" ++
     " *   record { status_code:nat16; headers:vec record{text;text}; body:blob }\n" ++
-    " * The type table is constant; only body bytes + status vary. Headers are left\n" ++
-    " * empty (sufficient for serving a static asset like assetlinks.json). The\n" ++
-    " * value order is type-table order: body (vec nat8), headers (empty vec),\n" ++
+    " * The type table is constant; only body bytes + status vary. We set ONE header\n" ++
+    " * Content-Type: application/json — required so Google's Digital Asset Links\n" ++
+    " * fetch accepts /.well-known/assetlinks.json (an empty header vec → the IC\n" ++
+    " * gateway defaults to application/octet-stream, which fails assetlinks\n" ++
+    " * verification and blocks WebAuthn passkey creation). The value order is\n" ++
+    " * type-table order: body (vec nat8), headers (vec record{text;text}),\n" ++
     " * status_code (nat16, little-endian). Verified byte-exact vs a candid decoder. */\n" ++
     "static void reply_http_response(const char* body, uint16_t status) {\n" ++
     "    static const uint8_t hdr[] = { 0x44,0x49,0x44,0x4C,0x04,\n" ++
@@ -726,7 +729,16 @@ fixedHeader opts cmdMapEntries =
     "    do { uint8_t b=(uint8_t)(v&0x7F); v>>=7; if(v) b|=0x80; leb[ll++]=b; } while(v);\n" ++
     "    ic0_msg_reply_data_append((int32_t)(uintptr_t)leb, ll);          /* body length */\n" ++
     "    ic0_msg_reply_data_append((int32_t)(uintptr_t)body, (int32_t)blen); /* body bytes */\n" ++
-    "    uint8_t zero = 0x00; ic0_msg_reply_data_append((int32_t)(uintptr_t)&zero, 1); /* headers: empty vec */\n" ++
+    "    /* headers: vec record{text;text} = [(\"Content-Type\",\"application/json\")] */\n" ++
+    "    static const char ct_name[]  = \"Content-Type\";\n" ++
+    "    static const char ct_value[] = \"application/json\";\n" ++
+    "    uint8_t one = 0x01; ic0_msg_reply_data_append((int32_t)(uintptr_t)&one, 1);\n" ++
+    "    uint8_t nlen = (uint8_t)(sizeof(ct_name)-1);\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)&nlen, 1);\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)ct_name, (int32_t)nlen);\n" ++
+    "    uint8_t vlen = (uint8_t)(sizeof(ct_value)-1);\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)&vlen, 1);\n" ++
+    "    ic0_msg_reply_data_append((int32_t)(uintptr_t)ct_value, (int32_t)vlen);\n" ++
     "    uint8_t st[2]; st[0]=(uint8_t)(status&0xFF); st[1]=(uint8_t)((status>>8)&0xFF);\n" ++
     "    ic0_msg_reply_data_append((int32_t)(uintptr_t)st, 2);            /* status_code nat16 LE */\n" ++
     "    ic0_msg_reply();\n" ++
