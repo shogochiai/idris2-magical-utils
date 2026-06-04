@@ -866,7 +866,11 @@ global.__dao3Passkey = {
       user: { id: uid, name: label || 'dao3-user', displayName: label || 'DAO3 User' },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }],  // ES256 / P-256
       timeout: 60000,
-      authenticatorSelection: { userVerification: 'required' },
+      authenticatorSelection: {
+        userVerification: 'required',
+        residentKey: 'required',
+        requireResidentKey: true,
+      },
     }).then((res) => {
       const att = res && res.response && res.response.attestationObject;
       if (!att) return cb('err:no attestationObject');
@@ -891,19 +895,16 @@ global.__dao3Passkey = {
       return cb('err:react-native-passkey authenticate() unavailable');
     const chBytes = (function (h) { h = h.replace(/^0x/, ''); const a = new Uint8Array(h.length/2); for (let i=0;i<a.length;i++) a[i]=parseInt(h.substr(i*2,2),16); return a; })(challengeHex);
     const chB64 = _bytesToB64url(chBytes);
-    // Try pinned-to-credId first (if any), then fall back to EMPTY allowCredentials
-    // so the OS offers ANY passkey registered for this rpId. The AA verifies the
-    // signature against the bound pubkey, not the credential id, so an empty
-    // allow-list is safe and survives a lost/rotated credId (e.g. an app restart
-    // clearing it → "No viable credential" on the pinned attempt → retry empty).
-    const doAuth = (allow) => Passkey.authenticate({
-      challenge: chB64, rpId: RP_ID, allowCredentials: allow,
+    // ALWAYS empty allowCredentials. Passkeys are discoverable (resident) keys, so
+    // the OS surfaces any passkey for this rpId without a credential descriptor —
+    // and the AA verifies the SIGNATURE against the bound pubkey, not the id. A
+    // non-empty allowCredentials with a malformed/encoding-mismatched id makes
+    // Android's PublicKeyCredentialDescriptor parse fail ("GetCredentialResponse
+    // error returned from framework"), shown as a chooser with no usable passkey.
+    Passkey.authenticate({
+      challenge: chB64, rpId: RP_ID, allowCredentials: [],
       timeout: 60000, userVerification: 'required',
-    });
-    const allow0 = credId ? [{ type: 'public-key', id: credId }] : [];
-    Promise.resolve()
-      .then(() => doAuth(allow0))
-      .catch((e) => { if (allow0.length === 0) throw e; return doAuth([]); })
+    })
       .then((res) => {
       const r0 = res && res.response;
       if (!r0 || !r0.authenticatorData || !r0.clientDataJSON || !r0.signature)
