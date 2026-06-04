@@ -27,16 +27,18 @@ Show SendResult where
   show (SendOk h)  = "ok:" ++ h
   show (SendErr e) = "err:" ++ e
 
-%foreign "react-native:lambda: (op, cb) => __dao3Bundler.sendToken(op, (s) => cb(s)())"
-prim__sendToken : String -> (String -> PrimIO ()) -> PrimIO ()
+%foreign "react-native:lambda: (op, credId, cb) => __dao3Bundler.sendToken(op, credId, (s) => cb(s)())"
+prim__sendToken : String -> String -> (String -> PrimIO ()) -> PrimIO ()
 
 ||| Submit a UserOp through the canister bundler. `userOpJson` is the app-built
 ||| EntryPoint v0.7 op (sender, nonce, initCode, callData, gas fields,
-||| paymasterAndData, signature) plus the beneficiary. The callback receives the
-||| broadcast result.
+||| paymasterAndData, signature-placeholder) plus the beneficiary; `credId` is the
+||| bound passkey credential id. The bridge fetches the canonical userOpHash,
+||| runs the WebAuthn assertion over it (pinned to credId), sets op.signature to
+||| the assertion blob, then submits + broadcasts. The callback gets the result.
 export
-sendToken : (userOpJson : String) -> (SendResult -> IO ()) -> IO ()
-sendToken op k = primIO (prim__sendToken op (\s => toPrim (handle s)))
+sendToken : (userOpJson : String) -> (credId : String) -> (SendResult -> IO ()) -> IO ()
+sendToken op credId k = primIO (prim__sendToken op credId (\s => toPrim (handle s)))
   where
     handle : String -> IO ()
     handle s =

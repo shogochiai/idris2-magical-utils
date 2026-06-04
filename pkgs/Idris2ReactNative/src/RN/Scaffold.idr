@@ -555,6 +555,7 @@ const idl = ({ IDL }) => IDL.Service({
   signedEvmTxResume:   IDL.Func([IDL.Text], [IDL.Text], []),
   assembleSignedTx:    IDL.Func([IDL.Text], [IDL.Text], []),
   initAccountCalldata: IDL.Func([IDL.Text], [IDL.Text], []),
+  userOpHash:          IDL.Func([IDL.Text], [IDL.Text], []),
   getEvmAddress:       IDL.Func([IDL.Nat], [IDL.Text], []),
   refreshSignerPubkey: IDL.Func([IDL.Text], [IDL.Text], []),
 });
@@ -717,12 +718,31 @@ async function signAndBroadcast(to, data, gas) {
 
 global.__dao3Bundler = {
   // op: JSON the app (Dao3WalletApp.Send) built — {sender,nonce,initCode,callData,
-  // accountGasLimits,preVerificationGas,gasFees,paymasterAndData,signature}.
-  async sendToken(opJson, cb) {
+  // accountGasLimits,preVerificationGas,gasFees,paymasterAndData,signature}. The
+  // incoming `signature` is a placeholder; we REPLACE it with a real WebAuthn
+  // assertion over the canonical userOpHash:
+  //   1. ask the bundler canister for the ERC-4337 v0.7 userOpHash (signature
+  //      excluded from the hash, so this is well-defined before signing),
+  //   2. WebAuthn .get() over that hash via __dao3Passkey.authenticate (pinned to
+  //      the bound credId) → the flat blob the AA's validateUserOp decodes,
+  //   3. set op.signature = blob, build handleOps, t-ECDSA-sign + broadcast.
+  // credId: the bound passkey credential id (from register; persisted by the app).
+  async sendToken(opJson, credId, cb) {
     try {
       const a = await actor();
       const op = JSON.parse(opJson);
       op.beneficiary = strip0x(op.beneficiary || ENTRY_POINT);
+      // 1. canonical userOpHash (entryPoint + chainId fold in here).
+      const hreq = { ...op, entryPoint: strip0x(ENTRY_POINT), chainId: String(CHAIN_ID) };
+      const uoh = await a.userOpHash(JSON.stringify(hreq));
+      if (!uoh.startsWith('0x')) return cb('err:userOpHash ' + uoh);
+      // 2. WebAuthn assertion over the userOpHash → flat signature blob.
+      const sigBlob = await new Promise((res, rej) => {
+        global.__dao3Passkey.authenticate(strip0x(uoh), credId, (r) =>
+          r.startsWith('ok:') ? res(r.slice(3)) : rej(new Error(r.replace(/^err:/, ''))));
+      });
+      op.signature = sigBlob;
+      // 3. build handleOps + broadcast.
       const handleOps = await a.submitUserOp(JSON.stringify(op));
       if (handleOps.startsWith('error')) return cb('err:' + handleOps);
       const txHash = await signAndBroadcast(ENTRY_POINT, handleOps, 800000);
