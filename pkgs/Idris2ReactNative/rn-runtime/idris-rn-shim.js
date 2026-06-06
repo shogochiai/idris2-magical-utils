@@ -81,10 +81,13 @@ const __idrisRN = {
     return {};
   },
   setProp(p, k, v) {
-    // RN's `style` prop expects an object/array. If the caller passes a JSON
-    // string for style, parse it; otherwise set the prop verbatim.
-    if (k === 'style' && typeof v === 'string') {
-      try { p.style = JSON.parse(v); return; } catch (_) { /* fall through */ }
+    // Some RN props expect an object/array, not a string. If the caller passes a
+    // JSON string for one of these (style, and scroll-geometry props like
+    // contentOffset / contentContainerStyle), parse it; otherwise set verbatim.
+    // This is generic (no app-specific knowledge) — Idris drives it via a Prop.
+    if (typeof v === 'string'
+        && (k === 'style' || k === 'contentContainerStyle' || k === 'contentOffset')) {
+      try { p[k] = JSON.parse(v); return; } catch (_) { /* fall through */ }
     }
     p[k] = v;
   },
@@ -93,9 +96,24 @@ const __idrisRN = {
     p[k] = () => { cb()(); };
   },
   setStrHandler(p, k, cb) {
-    // cb is an Idris closure expecting a String (e.g. TextInput onChangeText).
-    // Apply with the event's text, then invoke the returned IO thunk.
-    p[k] = (text) => { cb(text)(); };
+    // cb is an Idris closure expecting a String. RN hands different handlers
+    // different event shapes; extract a string generically so one StrHandler kind
+    // serves text inputs (onChangeText) AND scroll (onScroll → contentOffset.y):
+    //   - a plain string arg (onChangeText)         → use it
+    //   - e.nativeEvent.text                          → use it
+    //   - e.nativeEvent.contentOffset.y (scroll)      → stringified y
+    //   - else                                        → "" (no crash)
+    // Idris parses the string back into the value it needs. No per-widget logic.
+    p[k] = (e) => {
+      let s = '';
+      if (typeof e === 'string') s = e;
+      else if (e && e.nativeEvent) {
+        const ne = e.nativeEvent;
+        if (ne.contentOffset && ne.contentOffset.y != null) s = String(ne.contentOffset.y);
+        else if (ne.text != null) s = String(ne.text);
+      }
+      cb(s)();
+    };
   },
 
   // ---- children accumulator ----
