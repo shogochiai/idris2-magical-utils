@@ -38,6 +38,15 @@ const COMPONENTS = {
   Image,
 };
 
+// RN props that MUST be numbers (passing a string throws
+// JSApplicationIllegalArgumentException). `Prop` carries strings, so setProp
+// Number()-coerces these. Generic list of common numeric RN props.
+const NUMBER_PROPS = new Set([
+  'scrollEventThrottle', 'numberOfLines', 'maxLength', 'numColumns',
+  'minimumZoomScale', 'maximumZoomScale', 'snapToInterval', 'decelerationRate',
+  'progress', 'maxFontSizeMultiplier', 'tabIndex',
+]);
+
 // Internet Identity WebView host: when global.__idrisAuth (the generated auth
 // bridge) reports a login is in progress, the root renders a full-screen WebView
 // at the II authorize URL and relays its postMessages back to the bridge. Loaded
@@ -81,13 +90,19 @@ const __idrisRN = {
     return {};
   },
   setProp(p, k, v) {
-    // Some RN props expect an object/array, not a string. If the caller passes a
-    // JSON string for one of these (style, and scroll-geometry props like
-    // contentOffset / contentContainerStyle), parse it; otherwise set verbatim.
-    // This is generic (no app-specific knowledge) — Idris drives it via a Prop.
-    if (typeof v === 'string'
-        && (k === 'style' || k === 'contentContainerStyle' || k === 'contentOffset')) {
-      try { p[k] = JSON.parse(v); return; } catch (_) { /* fall through */ }
+    // `Prop` is string-only by design, but several RN props expect a non-string.
+    // Coerce generically so Idris can drive them via a Prop (no per-app JS):
+    //   - object/array props (style, contentOffset, contentContainerStyle): JSON.parse
+    //   - number props (scrollEventThrottle, numberOfLines, …): Number()
+    // RN THROWS (JSApplicationIllegalArgumentException) if e.g. scrollEventThrottle
+    // is a string, so the number coercion is required, not cosmetic.
+    if (typeof v === 'string') {
+      if (k === 'style' || k === 'contentContainerStyle' || k === 'contentOffset') {
+        try { p[k] = JSON.parse(v); return; } catch (_) { /* fall through */ }
+      } else if (NUMBER_PROPS.has(k)) {
+        const num = Number(v);
+        if (!Number.isNaN(num)) { p[k] = num; return; }
+      }
     }
     p[k] = v;
   },
