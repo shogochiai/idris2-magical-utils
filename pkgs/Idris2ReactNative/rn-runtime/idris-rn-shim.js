@@ -147,6 +147,38 @@ const __idrisRN = {
   createElement(comp, props, kids) {
     const Comp = COMPONENTS[comp] || comp;
     const children = (kids || []).filter((c) => c !== null && c !== undefined && c !== '');
+    // Generic ScrollView auto-scroll-to-bottom: a `Prop "autoScrollToEnd" "true"`
+    // makes the view keep itself pinned to the newest content via a ref +
+    // onContentSizeChange (the correct RN pattern — NOT a declarative contentOffset,
+    // which fights the user's scrolling and jitters). The consumer opts in with one
+    // Prop; no app-specific scroll logic in the shim. A user scroll-up cancels the
+    // auto-pin (so they can read history) until the next mount.
+    if (props && props.autoScrollToEnd != null) {
+      delete props.autoScrollToEnd;
+      const userScrolled = { v: false };
+      const prevOnScroll = props.onScroll;
+      props.onScroll = (e) => {
+        try {
+          const ne = e && e.nativeEvent;
+          if (ne) {
+            const y = ne.contentOffset ? ne.contentOffset.y : 0;
+            const ch = ne.contentSize ? ne.contentSize.height : 0;
+            const lh = ne.layoutMeasurement ? ne.layoutMeasurement.height : 0;
+            // near the bottom (within 40px) → keep auto-pinning; scrolled up → stop.
+            userScrolled.v = (ch - lh - y) > 40;
+          }
+        } catch (_) {}
+        if (prevOnScroll) prevOnScroll(e);
+      };
+      props.ref = (r) => { props.__scrollRef = r; };
+      const prevOnCSC = props.onContentSizeChange;
+      props.onContentSizeChange = (w, h) => {
+        if (!userScrolled.v && props.__scrollRef && props.__scrollRef.scrollToEnd) {
+          try { props.__scrollRef.scrollToEnd({ animated: false }); } catch (_) {}
+        }
+        if (prevOnCSC) prevOnCSC(w, h);
+      };
+    }
     // Lift a `key` prop into React's reserved key slot (React ignores props.key
     // and warns; array children NEED a real key or RN-Paper crashes on mount).
     if (props && props.key != null) {

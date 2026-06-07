@@ -268,7 +268,10 @@ async function restore() {
     }
   } catch (e) {}
 }
-restore();
+// Kick the async restore on module load AND keep the promise: whoami() MUST await
+// it, else Startup's whoami runs before AsyncStorage resolves and reports "" (anon)
+// even though a valid delegation is persisted — the "login didn't stick" bug.
+const _restorePromise = restore();
 
 // Parse the deep-link return: <scheme>://auth?delegation=<base64url(JSON)>
 // where JSON is a DelegationChain.toJSON() the middlepage produced for our pubkey.
@@ -327,7 +330,11 @@ global.__idrisAuth = {
     cb('ok');
   },
   whoami(cb) {
-    cb(_identity ? _identity.getPrincipal().toText() : '');
+    // Await the on-load restore so a returning user with a persisted, unexpired
+    // delegation is reported signed-in (not "" / anonymous due to the async race).
+    _restorePromise.then(() => {
+      cb(_identity ? _identity.getPrincipal().toText() : '');
+    }).catch(() => { cb(_identity ? _identity.getPrincipal().toText() : ''); });
   },
   // Consumed by the canister shim to sign agent calls (null = anonymous).
   getIdentity() { return _identity; },
