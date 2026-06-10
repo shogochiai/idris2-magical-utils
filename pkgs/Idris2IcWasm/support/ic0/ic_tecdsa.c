@@ -537,7 +537,10 @@ static int32_t begin_sign_call(int32_t reply_idx, int32_t reject_idx) {
                  (int32_t)(uintptr_t)METHOD_SIGN, (int32_t)(sizeof(METHOD_SIGN) - 1),
                  reply_idx, 0, reject_idx, 0);
     ic0_call_data_append((int32_t)(uintptr_t)request, (int32_t)request_len);
-    ic0_call_cycles_add128(0, 25000000000ULL);
+    /* sign_with_ecdsa fee: ~26.15B on a local pocketIC/system subnet, ~26B on
+     * mainnet. 25B under-paid and the call was rejected locally; 30B covers both
+     * (overpayment is refunded). */
+    ic0_call_cycles_add128(0, 30000000000ULL);
     return ic0_call_perform();
 }
 
@@ -680,6 +683,19 @@ void ic_tecdsa_set_message_hash(uint32_t h0, uint32_t h1, uint32_t h2, uint32_t 
     uint32_t* hash32 = (uint32_t*)g_message_hash;
     hash32[0] = h0; hash32[1] = h1; hash32[2] = h2; hash32[3] = h3;
     hash32[4] = h4; hash32[5] = h5; hash32[6] = h6; hash32[7] = h7;
+}
+
+/* Set one byte of g_message_hash directly (idx 0..31). This is the BYTE-EXACT
+ * setter the in-canister deploy executor needs: the uint32-word setter above
+ * round-trips through the host's word endianness (a caller packing big-endian
+ * words then this storing them little-endian reverses each word), which silently
+ * corrupts the signed hash so the executor's v-recovery never matches the signer.
+ * Writing the hash byte-for-byte (same as icw_tecdsa_sign_hash_entry's hex parse)
+ * guarantees g_message_hash == the intended hash. */
+void ic_tecdsa_set_message_hash_byte(int64_t idx, int64_t byte) {
+    if (idx >= 0 && idx < 32) {
+        g_message_hash[(int)idx] = (uint8_t)(byte & 0xFF);
+    }
 }
 
 void ic_tecdsa_set_key(int64_t key_type) {
