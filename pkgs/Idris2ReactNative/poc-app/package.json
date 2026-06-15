@@ -1,0 +1,17 @@
+{
+  "name": "idrisapp",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "ios": "react-native run-ios",
+    "android": "react-native run-android"
+  },
+  "dependencies": {
+    "react": "18.2.0",
+    "react-native": "0.73.6"
+  },
+  "devDependencies": {
+    "@react-native/metro-config": "0.73.5"
+  }
+}

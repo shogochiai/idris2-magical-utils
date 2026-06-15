@@ -1,0 +1,7 @@
+package rn-demo
+version = "0.1.0"
+sourcedir = "src"
+depends = base, contrib, idris2-react-native
+modules = Main
+main = Main
+executable = rn-demo

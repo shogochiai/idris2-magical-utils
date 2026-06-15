@@ -429,21 +429,21 @@ int64_t sql_ffi_is_open(void) {
 }
 
 int64_t sql_ffi_exec(int64_t sql_ptr, int64_t sql_len) {
-    /* Null-terminate the string */
-    char* sql = (char*)(uintptr_t)sql_ptr;
-    char saved = sql[sql_len];
-    sql[sql_len] = '\0';
-    int rc = sql_exec(sql);
-    sql[sql_len] = saved;
+    /*
+     * Idris writes SQL into g_str_buffer before calling this wrapper.  Reading
+     * that buffer directly keeps local Chez tests independent of pointer-sized
+     * Int round-trips while preserving the wasm path's calling convention.
+     */
+    (void)sql_ptr;
+    (void)sql_len;
+    int rc = sql_exec(g_str_buffer);
     return (int64_t)rc;
 }
 
 int64_t sql_ffi_prepare(int64_t sql_ptr, int64_t sql_len) {
-    char* sql = (char*)(uintptr_t)sql_ptr;
-    char saved = sql[sql_len];
-    sql[sql_len] = '\0';
-    int rc = sql_prepare(sql);
-    sql[sql_len] = saved;
+    (void)sql_ptr;
+    (void)sql_len;
+    int rc = sql_prepare(g_str_buffer);
     return (int64_t)rc;
 }
 

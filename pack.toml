@@ -8,6 +8,11 @@ type = "local"
 path = "pkgs/Idris2Evm"
 ipkg = "idris2-evm.ipkg"
 
+[custom.all.idris2-react-native]
+type = "local"
+path = "pkgs/Idris2ReactNative"
+ipkg = "idris2-react-native.ipkg"
+
 [custom.all.idris2-icwasm]
 type = "local"
 path = "pkgs/Idris2IcWasm"

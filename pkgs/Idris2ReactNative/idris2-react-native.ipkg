@@ -1,0 +1,22 @@
+package idris2-react-native
+
+version = "0.1.0"
+
+authors = "EtherClaw"
+
+brief = "Idris2 React Native backend: emits Metro-ready JS from the ES codegen, plus a dom-mvc-compatible RN renderer"
+
+sourcedir = "src"
+
+depends = base, contrib, idris2
+
+modules = Compiler.ReactNative.Codegen
+        , RN.Node
+        , RN.Style
+        , RN.Runtime
+        , RN.Scaffold
+        , RNMain
+
+main = RNMain
+
+executable = idris2-rn
