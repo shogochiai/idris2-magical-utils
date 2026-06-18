@@ -43,7 +43,7 @@ stub_funcs = []
 import_count = 0
 wasi_imports = {}  # func_idx -> (name, type_idx)
 
-# First pass: identify WASI imports and their types
+# First pass: identify WASI imports and env imports to stub
 for i, line in enumerate(lines):
     # Match both formats:
     #   (import "wasi_snapshot_preview1" "fd_close" (func (;3;) (type 0)))
@@ -55,6 +55,14 @@ for i, line in enumerate(lines):
         type_idx = m.group(4)
         wasi_imports[func_idx] = (name, int(type_idx))
         print(f"  Found WASI import: {name} (func {func_idx}, type {type_idx})", file=sys.stderr)
+    # Also match env imports (like emscripten_notify_memory_growth)
+    m = re.match(r'\s*\(import "env" "(\w+)" \(func (?:\(;(\d+);\)|\$(\w+)) \(type (\d+)\)\)\)', line)
+    if m:
+        name = m.group(1)
+        func_idx = m.group(2) if m.group(2) else m.group(3)
+        type_idx = m.group(4)
+        wasi_imports[func_idx] = ("env:" + name, int(type_idx))
+        print(f"  Found env import: {name} (func {func_idx}, type {type_idx})", file=sys.stderr)
 
 if not wasi_imports:
     print("No WASI imports to stub", file=sys.stderr)
@@ -96,6 +104,10 @@ def make_stub_body(type_sig):
 for line in lines:
     # Check if this is a WASI import to replace - handle both numeric and named formats
     m = re.match(r'(\s*)\(import "wasi_snapshot_preview1" "(\w+)" \(func (?:\(;(\d+);\)|\$(\w+)) \(type (\d+)\)\)\)', line)
+    # Also match env imports
+    m_env = re.match(r'(\s*)\(import "env" "(\w+)" \(func (?:\(;(\d+);\)|\$(\w+)) \(type (\d+)\)\)\)', line)
+    if m_env:
+        m = m_env  # Use env match
     if m:
         indent = m.group(1)
         name = m.group(2)

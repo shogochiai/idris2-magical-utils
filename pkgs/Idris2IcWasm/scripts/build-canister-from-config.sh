@@ -313,18 +313,28 @@ load_config() {
             echo "Error: gen_entry.sql_vfs_memory_id requires paths.icwasm_sqlite_support" >&2
             exit 1
         fi
+        # VFS implementation selection. The append-only sqlite_vfs_bridge.c is the
+        # default; setting BULLETPROOF_VFS=1 swaps in bulletproof_vfs.c (the in-place
+        # vertex-BC VFS that borrows atomicity from IC message atomicity, bounding
+        # stable allocation at ~M). Both provide the SAME FFI boundary and
+        # sqlite3_os_init, so exactly one must be linked.
+        VFS_IMPL_C="$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.c"
+        if [[ "${BULLETPROOF_VFS:-0}" == "1" ]]; then
+            VFS_IMPL_C="$ICWASM_SQLITE_SUPPORT/bulletproof_vfs.c"
+            echo "[vfs] BulletproofVFS selected (in-place, message-atomic; stable bounded at ~M)"
+        fi
         for required in \
             "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.h" \
             "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.h" \
             "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.c" \
-            "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.c" \
+            "$VFS_IMPL_C" \
             "$ICWASM_SQLITE_SUPPORT/sqlite/libsqlite3.a"; do
             [[ -f "$required" ]] || { echo "Error: SQLite VFS support file not found: $required" >&2; exit 1; }
         done
         append_unique EXTRA_FORCE_INCLUDES "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.h"
         append_unique EXTRA_FORCE_INCLUDES "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.h"
         append_unique EXTRA_C_FILES "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.c"
-        append_unique EXTRA_C_FILES "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.c"
+        append_unique EXTRA_C_FILES "$VFS_IMPL_C"
         append_unique EXTRA_C_FILES "$ICWASM_SQLITE_SUPPORT/sqlite/libsqlite3.a"
         append_unique EXTRA_INCLUDE_DIRS "$ICWASM_SQLITE_SUPPORT"
         append_unique EXTRA_INCLUDE_DIRS "$ICWASM_SQLITE_SUPPORT/sqlite"
