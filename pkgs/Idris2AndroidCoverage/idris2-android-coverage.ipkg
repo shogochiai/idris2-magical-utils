@@ -5,3 +5,7 @@ sourcedir = "src"
 depends = base, contrib, idris2-react-native-lib
 
 modules = Android.Coverage.DeviceProbe
+        , Android.Coverage.PathCoverage
+        , Android.Coverage.PathCovMain
+main = Android.Coverage.PathCovMain
+executable = device-pathcov

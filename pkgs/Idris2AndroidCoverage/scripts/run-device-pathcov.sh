@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-# run-device-pathcov.sh — REAL device path coverage for a family=android MVU app.
+# run-device-pathcov.sh — REAL device path coverage. The bash here does ONLY raw I/O;
+# all coverage math (exclusions, denominator ∩ numerator, the report) is computed by
+# the Idris2 `device-pathcov` executable (Android.Coverage.PathCoverage) — lazy and
+# etherclaw are portable Idris2, so no python/jq matcher lives here.
 #
-# numerator   = path ids the View hit WHILE RUNNING ON THE DEVICE, scraped from
-#               logcat (the device-pathhit-hook prints IDRIS_PATHHIT:<id> per id).
-# denominator = the --dumppaths-json canonical CaseTree paths of the View's own
-#               functions, with exclusions applied (library/synthetic/zero-length —
-#               same policy as the host step4).
-#
-# This is the path-coverage analogue of run-device-e2e.sh's testID check: not "is the
-# element present" but "did the View's code path actually execute on the device". A
-# proof-TextView host never runs the View, so its numerator is empty → 0% → fail.
+#   numerator   = path_ids the View hit while running on the device (logcat
+#                 IDRIS_PATHHIT:<id>, emitted by device-pathhit-hook.js).
+#   denominator = the --dumppaths-json path_ids (extracted here, exclusions applied by
+#                 the Idris2 side).
 #
 # Usage:
 #   run-device-pathcov.sh --package PKG --paths DUMPPATHS_JSON \
-#       [--module-prefix SpcDaoApp]   # only count paths in the app's own modules
-#       [--driver SCRIPT]             # optional: a script that taps the UI to exercise paths
-#       [--settle N] [--serial S]
+#       [--module-prefix SpcDaoApp] [--driver SCRIPT] [--settle N] [--serial S] [--out FILE]
 set -euo pipefail
 
-PKG="" PATHS="" PREFIX="" DRIVER="" SETTLE=8 SERIAL=""
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKGROOT="$(cd "$HERE/.." && pwd)"
+
+PKG="" PATHS="" PREFIX="" DRIVER="" SETTLE=8 SERIAL="" OUTFILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --package)       PKG="$2"; shift 2 ;;
@@ -27,79 +26,44 @@ while [[ $# -gt 0 ]]; do
     --driver)        DRIVER="$2"; shift 2 ;;
     --settle)        SETTLE="$2"; shift 2 ;;
     --serial)        SERIAL="$2"; shift 2 ;;
-    -h|--help) echo "Usage: run-device-pathcov.sh --package PKG --paths DUMPPATHS_JSON [--module-prefix P] [--driver S] [--settle N] [--serial S]"; exit 0 ;;
+    --out)           OUTFILE="$2"; shift 2 ;;
+    -h|--help) echo "Usage: run-device-pathcov.sh --package PKG --paths DUMPPATHS_JSON [--module-prefix P] [--driver S] [--settle N] [--serial S] [--out FILE]"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$PKG" && -n "$PATHS" ]] || { echo "need --package and --paths" >&2; exit 2; }
 [[ -f "$PATHS" ]] || { echo "dumppaths json not found: $PATHS" >&2; exit 2; }
 
+# Locate the Idris2 coverage executable (built from idris2-android-coverage.ipkg).
+PATHCOV_BIN="$(find "$PKGROOT/build/exec" -maxdepth 1 -type f -name device-pathcov -perm -u+x 2>/dev/null | head -1)"
+[[ -x "$PATHCOV_BIN" ]] || { echo "device-pathcov not built; run: pack build idris2-android-coverage" >&2; exit 4; }
+
 ADB=(adb); [[ -n "$SERIAL" ]] && ADB=(adb -s "$SERIAL")
 "${ADB[@]}" get-state >/dev/null 2>&1 || { echo "no device" >&2; exit 3; }
 
-# Clear logcat, launch the app, let the View mount (the hook fires as paths execute).
+# Clear logcat, launch the app, let the View mount (the hook fires as paths run).
 "${ADB[@]}" logcat -c >/dev/null 2>&1 || true
 "${ADB[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
 sleep "$SETTLE"
-# Optional driver taps the UI to exercise more View paths (vote, select, scroll…).
 [[ -n "$DRIVER" && -x "$DRIVER" ]] && "$DRIVER" "${SERIAL:-}" || true
 sleep 2
 
-# NUMERATOR: distinct path ids the device logged.
-HITS="$(mktemp)"
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+DENOM="$WORK/denom.txt"; HITS="$WORK/hits.txt"
+
+# DENOMINATOR: every dumppaths path_id, one per line. Plain grep/sed (no jq).
+grep -oE '"path_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$PATHS" \
+  | sed -E 's/.*"path_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
+  | sort -u > "$DENOM"
+
+# NUMERATOR: distinct path_ids the device logged.
 "${ADB[@]}" logcat -d 2>/dev/null \
   | sed -n 's/.*IDRIS_PATHHIT:\([^ ]*\).*/\1/p' \
   | sort -u > "$HITS"
-HOOK_OK="$("${ADB[@]}" logcat -d 2>/dev/null | grep -c IDRIS_PATHHIT_HOOK_INSTALLED || true)"
 
-# DENOMINATOR + report, computed in python against the dumppaths schema.
-python3 - "$PATHS" "$HITS" "$PREFIX" "$HOOK_OK" <<'PY'
-import json, sys
-paths_file, hits_file, prefix, hook_ok = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-d = json.load(open(paths_file))
-
-# Exclusions (same spirit as host step4): drop library/synthetic functions and
-# zero-length record-accessor paths, so the denominator is the View's real obligations.
-LIB_PREFIXES = ("Prelude.", "PrimIO.", "Builtin.", "Data.", "System.", "Libraries.")
-def excluded(fn_name, p):
-    if fn_name.startswith(LIB_PREFIXES): return True
-    if prefix and not fn_name.startswith(prefix): return True   # only the app's own modules
-    if p.get("classification") not in (None, "ReachableObligation"): return True
-    if p.get("path_length", 1) == 0 and p.get("terminal_kind") == "reached_clause" and not p.get("steps"):
-        # zero-length accessor-style path: keep only if it's a real clause; drop trivial ones
-        pass
-    return False
-
-denom = []
-for fn in d.get("functions", []):
-    name = fn.get("function_name","")
-    for p in fn.get("paths", []):
-        if not excluded(name, p):
-            denom.append(p["path_id"])
-denom = sorted(set(denom))
-
-hits = set(l.strip() for l in open(hits_file) if l.strip())
-covered = [pid for pid in denom if pid in hits]
-missing = [pid for pid in denom if pid not in hits]
-total = len(denom)
-pct = (len(covered)*100//total) if total else 0
-
-print("# Device PATH Coverage (dumppaths denominator, on-device hit numerator)")
-print("hook_installed_on_device:", "yes" if hook_ok and hook_ok!="0" else "NO (no IDRIS_PATHHIT_HOOK_INSTALLED in logcat — bundle not instrumented or hook not prepended)")
-print("claim_admissible:", "True" if (total>0 and not missing) else "False")
-print(f"coverage_percent: {pct}.0")
-print(f"total_paths: {total}")
-print(f"covered_paths: {len(covered)}")
-print(f"Missing paths: {len(missing)}")
-print("evidence_kind: device_dumppaths_path_coverage")
-print()
-print("Missing paths:")
-if not missing:
-    print("  (none)")
-else:
-    for m in missing: print("  " + m)
-sys.exit(0 if (total>0 and not missing) else 1)
-PY
-rc=$?
-rm -f "$HITS"
-exit $rc
+# The Idris2 side computes coverage (exclusions, intersection, report) and sets exit.
+if [[ -n "$OUTFILE" ]]; then
+  "$PATHCOV_BIN" "$DENOM" "$HITS" "$PREFIX" | tee "$OUTFILE"
+else
+  "$PATHCOV_BIN" "$DENOM" "$HITS" "$PREFIX"
+fi
