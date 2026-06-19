@@ -1,0 +1,30 @@
+[definitions]
+prefix = "REQ_ANDCOV"
+
+[[spec_area]]
+name = "Device UI Coverage"
+
+[[spec]]
+id = "${prefix}_001"
+title = "Extract the View's observable testID surface"
+invariant = "viewTestIDs returns every testID prop declared anywhere in a Node tree; this is exactly what uiautomator can observe on a real device."
+
+[[spec]]
+id = "${prefix}_002"
+title = "GapZero when the scenario drives every declared element"
+invariant = "deviceGapZero is True iff every testID the View declares is exercised by the DeviceScenario."
+
+[[spec]]
+id = "${prefix}_003"
+title = "A skipped element is reported as a screen gap"
+invariant = "uncoveredTestIDs names every declared testID no scenario step exercises; non-empty ⟺ not GapZero, mirroring parity-ti Missing paths."
+
+[[spec]]
+id = "${prefix}_004"
+title = "A proof-TextView host has no observable surface"
+invariant = "A hollow View (one text node, no testIDs) yields viewTestIDs == [] — the structural reason an acceptance hack cannot be driven on-device."
+
+[[spec]]
+id = "${prefix}_005"
+title = "Coverage report mirrors parity-ti shape"
+invariant = "deviceCoverage yields totalElements/coveredElements/missing so the android step4/parity layer can consume device coverage uniformly with path coverage."

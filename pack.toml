@@ -13,6 +13,21 @@ type = "local"
 path = "pkgs/Idris2ReactNative"
 ipkg = "idris2-react-native.ipkg"
 
+[custom.all.idris2-react-native-lib]
+type = "local"
+path = "pkgs/Idris2ReactNative"
+ipkg = "idris2-react-native-lib.ipkg"
+
+[custom.all.idris2-android-coverage]
+type = "local"
+path = "pkgs/Idris2AndroidCoverage"
+ipkg = "idris2-android-coverage.ipkg"
+
+[custom.all.idris2-android-coverage-tests]
+type = "local"
+path = "pkgs/Idris2AndroidCoverage"
+ipkg = "idris2-android-coverage-tests.ipkg"
+
 [custom.all.idris2-icwasm]
 type = "local"
 path = "pkgs/Idris2IcWasm"

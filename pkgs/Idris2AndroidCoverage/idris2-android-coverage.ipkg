@@ -1,0 +1,7 @@
+package idris2-android-coverage
+version = "0.1.0"
+authors = "EtherClaw"
+sourcedir = "src"
+depends = base, contrib, idris2-react-native-lib
+
+modules = Android.Coverage.DeviceProbe
