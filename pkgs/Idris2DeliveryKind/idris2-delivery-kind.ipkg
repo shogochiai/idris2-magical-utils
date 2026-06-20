@@ -1,0 +1,10 @@
+package idris2-delivery-kind
+version = 0.1.0
+authors = "EtherClaw"
+brief = "Canonical DeliveryKind — what a deliverable is delivered as (the delivery axis A; coverage 'family' is axis B). base-only, sharable by app/canister/etherclaw"
+
+depends = base
+
+sourcedir = "src"
+
+modules = Idris2.DeliveryKind

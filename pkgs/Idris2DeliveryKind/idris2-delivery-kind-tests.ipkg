@@ -1,0 +1,7 @@
+package idris2-delivery-kind-tests
+version = 0.1.0
+depends = base
+sourcedir = "src"
+modules = Idris2.DeliveryKind, Idris2.DeliveryKind.Tests
+main = Idris2.DeliveryKind.Tests
+executable = delivery-kind-tests
