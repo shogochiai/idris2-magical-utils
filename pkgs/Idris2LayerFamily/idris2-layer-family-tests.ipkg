@@ -1,0 +1,7 @@
+package idris2-layer-family-tests
+version = 0.1.0
+depends = base
+sourcedir = "src"
+modules = Idris2.LayerFamily, Idris2.LayerFamily.Tests
+main = Idris2.LayerFamily.Tests
+executable = layer-family-tests

@@ -1,0 +1,10 @@
+package idris2-layer-family
+version = 0.1.0
+authors = "EtherClaw"
+brief = "Canonical LayerFamily — the single source of truth for EtherClaw's family/layer axis (base-only, sharable by app/canister/etherclaw)"
+
+depends = base
+
+sourcedir = "src"
+
+modules = Idris2.LayerFamily
