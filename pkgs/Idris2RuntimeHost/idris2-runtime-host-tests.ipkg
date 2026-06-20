@@ -1,0 +1,7 @@
+package idris2-runtime-host-tests
+version = 0.1.0
+depends = base
+sourcedir = "src"
+modules = Idris2.RuntimeHost, Idris2.RuntimeHost.Tests
+main = Idris2.RuntimeHost.Tests
+executable = runtime-host-tests

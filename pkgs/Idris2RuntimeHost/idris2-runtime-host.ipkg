@@ -1,0 +1,10 @@
+package idris2-runtime-host
+version = 0.1.0
+authors = "EtherClaw"
+brief = "Canonical RuntimeHost — what machine etherclaw itself runs on (axis C: macOS / Linux distro / unknown). base-only, sharable by app/canister/etherclaw. Projections (package manager, lib suffix, default tool roots, step3 accelerator) derive from it."
+
+depends = base
+
+sourcedir = "src"
+
+modules = Idris2.RuntimeHost
