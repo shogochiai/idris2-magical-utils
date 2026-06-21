@@ -513,14 +513,34 @@ parseIpkgModules : String -> List String
 parseIpkgModules content =
   let ls = lines content
       moduleLines = collectModuleLines ls False
-      joined = fastConcat $ intersperse " " moduleLines
+      -- strip inline `-- ...` comments PER LINE before joining, so a commented
+      -- module (e.g. "-- , EtherClaw.Main  -- TEMP DISABLED") contributes nothing
+      -- instead of being mangled into a fake module name.
+      cleanedLines = map stripInlineComment moduleLines
+      joined = fastConcat $ intersperse " " cleanedLines
       afterEq = case break (== '=') (unpack joined) of
                   (_, rest) => pack $ drop 1 rest
       parts = forget $ split (== ',') afterEq
-  in map (trim . pack . filter isModuleChar . unpack . trim) parts
+      named = map (trim . pack . filter isModuleChar . unpack . trim) parts
+  in filter isValidModule named
   where
     isModuleChar : Char -> Bool
     isModuleChar c = isAlphaNum c || c == '.' || c == '_'
+
+    -- a real module name starts with an uppercase letter; drops empties and junk
+    isValidModule : String -> Bool
+    isValidModule m = case unpack m of
+                        (c :: _) => isUpper c
+                        []       => False
+
+    stripInlineComment : String -> String
+    stripInlineComment s = pack (go (unpack s))
+      where
+        go : List Char -> List Char
+        go []                = []
+        go ['-']             = ['-']
+        go ('-' :: '-' :: _) = []        -- start of a `--` comment: drop the rest
+        go (c :: cs)         = c :: go cs
 
     collectModuleLines : List String -> Bool -> List String
     collectModuleLines [] _ = []
@@ -530,8 +550,8 @@ parseIpkgModules content =
          else collectModuleLines ls False
     collectModuleLines (l :: ls) True =
       let trimmed = trim l
-      in if null trimmed
-            then collectModuleLines ls True
+      in if null trimmed || isPrefixOf "--" trimmed
+            then collectModuleLines ls True       -- skip blank / fully-commented lines
             else if isPrefixOf "," trimmed || isPrefixOf " " l || isPrefixOf "\t" l
                     then l :: collectModuleLines ls True
                     else []
