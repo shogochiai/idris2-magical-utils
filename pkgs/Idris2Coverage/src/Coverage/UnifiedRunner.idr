@@ -1405,6 +1405,87 @@ parsePathHitLineLocal line =
               in Just (MkPathRuntimeHit (trim pathId) parsed)
             _ => Just (MkPathRuntimeHit trimmed 1)
 
+||| Tests per intra-module slice. The exe is built ONCE and run repeatedly with
+||| IDRIS2COV_TEST_OFFSET/_LIMIT windows of this size — each a fresh process whose
+||| heap is reclaimed, so a single huge test module (EtherClaw's ~1100 tests)
+||| never executes in one OOM-prone process. Test modules that honour the env
+||| (via Idris2.TestSuite.Runner) get real intra-module chunking; modules that
+||| ignore it run everything on the first slice and the loop detects that and
+||| stops (see runExeSlices).
+intraSliceLimit : Nat
+intraSliceLimit = 100
+
+||| Safety ceiling on the offset walk (slices), so a runner that neither honours
+||| nor signals end can't loop forever. 200 slices × 100 = 20k tests.
+intraSliceMaxSlices : Nat
+intraSliceMaxSlices = 200
+
+||| Parse "Results: P passed, F failed" → (P, F). Nothing if absent. Pulls the
+||| whitespace-separated tokens of the LAST Results line that parse as Nat.
+parseResultsPF : String -> Maybe (Nat, Nat)
+parseResultsPF out =
+  case lastResultsLine (filter (isInfixOf "Results:") (lines out)) of
+    Nothing => Nothing
+    Just line =>
+      case mapMaybe (parsePositive {a = Nat}) (words line) of
+        (p :: f :: _) => Just (p, f)
+        (p :: [])     => Just (p, 0)
+        []            => Nothing
+  where
+    lastResultsLine : List String -> Maybe String
+    lastResultsLine []        = Nothing
+    lastResultsLine [x]       = Just x
+    lastResultsLine (_ :: xs) = lastResultsLine xs
+
+||| Run the built path-coverage exe in IDRIS2COV_TEST_OFFSET/_LIMIT slices,
+||| accumulating runtime path hits across slices (each a fresh process → bounded
+||| memory). `--dumppathshits` rewrites the hits file per run, so we read+accumulate
+||| after each slice. Termination, robust for BOTH env-aware and env-ignoring exes:
+|||   * a slice reporting 0 passed + 0 failed = past the end → stop;
+|||   * a slice at offset>0 whose (passed+failed) equals the first slice's count =
+|||     the exe IGNORES the window (ran everything again) → stop, keep slice-0 hits;
+|||   * the offset walk is bounded by intraSliceMaxSlices.
+runExeSlices : (projectDir : String) -> (relExecPath : String) -> (pathHitsPath : String)
+            -> IO (List PathRuntimeHit)
+runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceMaxSlices
+  where
+    -- offset, sliceIdx, firstCount (passed+failed of slice 0), accHits, fuel
+    go : Nat -> Nat -> Maybe Nat -> List PathRuntimeHit -> Nat -> IO (List PathRuntimeHit)
+    go _ _ _ acc Z = pure acc
+    go offset idx firstCount acc (S fuel) = do
+      removeFileIfExists pathHitsPath
+      let outPath = pathHitsPath ++ ".out"
+      _ <- system $ "cd " ++ projectDir
+                 ++ " && IDRIS2COV_TEST_OFFSET=" ++ show offset
+                 ++ " IDRIS2COV_TEST_LIMIT=" ++ show intraSliceLimit
+                 ++ " " ++ relExecPath ++ " > " ++ outPath ++ " 2>&1"
+      out <- readFile outPath
+      removeFileIfExists outPath
+      hitsContent <- readFile pathHitsPath
+      let sliceHits = case hitsContent of
+                        Left _ => []
+                        Right c => mapMaybe parsePathHitLineLocal (lines c)
+      let pf : Maybe (Nat, Nat)
+          pf = case out of
+                 Left _  => Nothing
+                 Right o => parseResultsPF o
+      let count : Nat
+          count = case pf of
+                    Just (p, f) => p + f
+                    Nothing     => 0
+      let acc' = sliceHits ++ acc
+      -- empty slice → done
+      if count == 0
+        then pure acc'
+        else case firstCount of
+               -- slice 0: record its count, advance
+               Nothing => go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
+               Just fc =>
+                 -- env-ignoring exe re-ran everything → stop with slice-0 hits only
+                 if idx == 1 && count == fc && offset >= intraSliceLimit
+                   then pure acc   -- discard this slice's dup hits; acc already has slice-0
+                   else go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+
 ||| Test-module count above which the runtime path-coverage exe is built and run
 ||| in sequential chunks instead of one whole-suite process. A single exe that
 ||| links + executes the FULL test suite (e.g. EtherClaw's ~1100 tests across
@@ -1624,12 +1705,12 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
                 removeFileIfExists pathHitsPath
                 pure $ Left $ "Failed to read dumppaths JSON: " ++ show err
 
-          _ <- system $ "cd " ++ projectDir ++ " && " ++ relExecPath ++ " > /dev/null 2>&1"
-
-          hitsContent <- readFile pathHitsPath
-          let hits = case hitsContent of
-                       Left _ => []
-                       Right content => mapMaybe parsePathHitLineLocal (lines content)
+          -- Run the exe in intra-module offset/limit slices (each a fresh process)
+          -- so a single huge test module never executes in one OOM-prone process.
+          -- Modules using Idris2.TestSuite.Runner honour the env and chunk for
+          -- real; others run everything on slice 0 and the loop stops. Hits
+          -- accumulate across slices (keyed by stable path id → concat-safe).
+          hits <- runExeSlices projectDir relExecPath pathHitsPath
 
           removeFileIfExists tempIdrPath
           removeFileIfExists tempIpkgPath
