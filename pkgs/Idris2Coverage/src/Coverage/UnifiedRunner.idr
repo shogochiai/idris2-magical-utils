@@ -538,43 +538,65 @@ parseIpkgModules content =
 
 ||| Find and read first matching ipkg file content
 ||| Prefers files without -minimal, -test, -temp prefixes
+||| Lowercase + strip non-alphanumerics — for matching an ipkg basename to a dir
+||| name regardless of case/separators (e.g. "EtherClaw" ~ "etherclaw.ipkg").
+normIdent : String -> String
+normIdent = pack . map toLower . filter isAlphaNum . unpack
+
+||| The last path segment of a dir (its name).
+dirBaseName : String -> String
+dirBaseName dir =
+  case reverse (filter (/= "") (forget (split (== '/') dir))) of
+    (s :: _) => s
+    []       => dir
+
+||| Choose the project's main ipkg from the candidates. CRUCIAL fix: a package dir
+||| can hold MANY ipkgs (etherclaw.ipkg + release-bundle.ipkg + various *-test.ipkg);
+||| picking an arbitrary first one yields the WRONG dependency list (e.g.
+||| release-bundle's deps lack `toml`, so the coverage build then fails "Module
+||| Language.TOML not found"). Prefer, in order: (1) the ipkg whose basename matches
+||| the dir name, (2) any non-test/minimal/temp ipkg, (3) any ipkg.
+chooseMainIpkg : (projectDir : String) -> (ipkgFiles : List String) -> Maybe String
+chooseMainIpkg projectDir ipkgFiles =
+  let isAux = \f => isInfixOf "-minimal" f || isInfixOf "-test" f || isInfixOf "-tests" f || isPrefixOf "temp-" f
+      mains = filter (not . isAux) ipkgFiles
+      wantName = normIdent (dirBaseName projectDir)
+      byName = filter (\f => normIdent (dropIpkgExt f) == wantName) mains
+  in case byName of
+       (f :: _) => Just f
+       [] => case mains of
+               (f :: _) => Just f
+               [] => case ipkgFiles of
+                       (f :: _) => Just f
+                       [] => Nothing
+  where
+    dropIpkgExt : String -> String
+    dropIpkgExt f = if isSuffixOf ".ipkg" f
+                      then substr 0 (length f `minus` 5) f
+                      else f
+
 findIpkgContent : String -> IO (Maybe String)
 findIpkgContent projectDir = do
-  -- Try to find any .ipkg file in the directory
   Right entries <- listDir projectDir
     | Left _ => pure Nothing
   let ipkgFiles = filter (isSuffixOf ".ipkg") entries
-  -- Filter out minimal/test/temp ipkg files
-  let isMainIpkg = \f => not (isInfixOf "-minimal" f || isInfixOf "-test" f || isPrefixOf "temp-" f)
-  let mainIpkgs = filter isMainIpkg ipkgFiles
-  -- Prefer main ipkg, fall back to any ipkg
-  let chosen = case mainIpkgs of
-                 [] => ipkgFiles
-                 xs => xs
-  case chosen of
-    [] => pure Nothing
-    (f :: _) => do
+  case chooseMainIpkg projectDir ipkgFiles of
+    Nothing => pure Nothing
+    Just f => do
       Right content <- readFile (projectDir ++ "/" ++ f)
         | Left _ => pure Nothing
       pure (Just content)
 
-||| Find the project's main ipkg PATH (not content), using the same
-||| main-vs-temp/test/minimal selection as findIpkgContent. Used by the chunked
-||| path-coverage denominator, which needs to hand a real ipkg path to
-||| runStaticDumppathsJson.
+||| Find the project's main ipkg PATH (not content), same selection as
+||| findIpkgContent. Used by the chunked path-coverage denominator.
 findProjectIpkgPath : String -> IO (Maybe String)
 findProjectIpkgPath projectDir = do
   Right entries <- listDir projectDir
     | Left _ => pure Nothing
   let ipkgFiles = filter (isSuffixOf ".ipkg") entries
-  let isMainIpkg = \f => not (isInfixOf "-minimal" f || isInfixOf "-test" f || isPrefixOf "temp-" f)
-  let mainIpkgs = filter isMainIpkg ipkgFiles
-  let chosen = case mainIpkgs of
-                 [] => ipkgFiles
-                 xs => xs
-  case chosen of
-    [] => pure Nothing
-    (f :: _) => pure (Just (projectDir ++ "/" ++ f))
+  case chooseMainIpkg projectDir ipkgFiles of
+    Nothing => pure Nothing
+    Just f => pure (Just (projectDir ++ "/" ++ f))
 
 ||| Read depends from project's ipkg file
 public export
@@ -1543,7 +1565,12 @@ runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chun
     | Left _ => pure []
 
   let allModules = nub (tempModName :: chunkTestModules)
-  let opts = "--dumppaths-json " ++ dumppathsPath ++ " --dumppathshits " ++ pathHitsPath
+  -- NUMERATOR only: --dumppathshits (lightweight hit recording). The denominator
+  -- (--dumppaths-json path enumeration) already comes from the chunked static
+  -- path, and emitting it here too would re-instrument every module = the heavy
+  -- compile that OOMs a many-module package (EtherClaw ~108 modules). Recording
+  -- hits is cheap; enumerating paths is what's expensive.
+  let opts = "--dumppathshits " ++ pathHitsPath
   let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just opts) (Just tempBuildDir)
   Right () <- writeFile tempIpkgPath ipkgContent
     | Left _ => do removeFileIfExists tempIdrPath; pure []
@@ -1603,17 +1630,24 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
   case testModules of
     [] => pure $ Left "No test modules specified"
     _ =>
+      -- Chunk when EITHER the test-module count OR the PROJECT-module count is
+      -- large. A package like EtherClaw has few test modules (1) but many project
+      -- modules (~108): building all of them with --dumppaths-json in ONE process
+      -- OOM-kills the COMPILER (exit 137) before any test runs. The whole-suite
+      -- path is only safe for genuinely small packages on both axes.
       if length testModules > runtimeChunkTestModuleCeiling
+           || length projectModules > staticWholeModuleCeiling
         then runChunkedPathCoverage projectDir projectModules testModules
         else runWholePathCoverage projectDir projectModules testModules timeout
   where
-    ||| Large-suite path: denominator from the chunked static path, runtime hits
-    ||| from sequential per-chunk exes (bounded memory, OOM-safe).
+    ||| Large-package path: denominator from the chunked static path (groups of 8
+    ||| modules — bounds COMPILER memory), runtime hits from sequential per-test-
+    ||| chunk exes (bounds RUN memory). OOM-safe on both axes.
     runChunkedPathCoverage : String -> List String -> List String -> IO (Either String (String, List PathRuntimeHit))
     runChunkedPathCoverage projectDir projectModules testModules = do
-      putStrLn $ "    Large test suite (" ++ show (length testModules)
-              ++ " test modules > " ++ show runtimeChunkTestModuleCeiling
-              ++ "); chunking runtime path coverage to bound memory..."
+      putStrLn $ "    Large package (" ++ show (length testModules)
+              ++ " test / " ++ show (length projectModules)
+              ++ " project modules); chunking path coverage to bound memory..."
       projectDepends <- readProjectDepends projectDir
       sourcedir <- readProjectSourcedir projectDir
       projectPackToml <- readProjectPackToml projectDir
