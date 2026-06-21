@@ -223,20 +223,173 @@ generateTempPackToml projectPackToml =
        then coverageDef
        else projectPackToml ++ "\n\n" ++ coverageDef
 
-||| Read project's existing pack.toml content if it exists
-|||
-||| This preserves any custom package dependencies the target project may have.
-||| For example, if the project depends on non-public packages via GitHub URLs,
-||| those dependencies will be merged into the generated pack.toml.
-|||
-||| @projectDir - Directory containing the project
-||| @return - Content of pack.toml, or empty string if not found
+||| Parent directory of a path (drop the last "/segment"). "" or "/" at the root.
+parentOf : String -> String
+parentOf path =
+  let segs = forget (split (== '/') path)
+      kept = case reverse segs of
+               (_ :: rest) => reverse rest
+               []          => []
+  in case kept of
+       []   => ""
+       [""] => "/"
+       _    => fastConcat (intersperse "/" kept)
+
+||| Rewrite each `path = "rel"` in pack.toml content so a relative dep path
+||| resolves from `baseDir` regardless of where the temp pack.toml is written.
+||| pack resolves a local dep's `path` relative to the pack.toml that declares it;
+||| when we INHERIT an ancestor pack.toml into a package-dir temp pack.toml, its
+||| relative paths (e.g. "../idris2-magical-utils/pkgs/Foo") would otherwise
+||| resolve from the wrong dir and dependency resolution fails. Absolutizing
+||| against the ancestor dir makes them location-independent. Already-absolute
+||| paths (leading "/") are left untouched.
+absolutizePackPaths : (baseDir : String) -> (content : String) -> String
+absolutizePackPaths baseDir content = unlines (map rewriteLine (lines content))
+  where
+    -- the value inside `path = "..."`, or Nothing if this isn't a path line
+    pathValue : String -> Maybe String
+    pathValue line =
+      let t = trim line in
+      if isPrefixOf "path" t
+        then case break (== '=') (unpack t) of
+               (_, eqRest) =>
+                 let afterEq = trim (pack (drop 1 eqRest))
+                 in if isPrefixOf "\"" afterEq
+                      then Just (pack (takeWhile (/= '"') (drop 1 (unpack afterEq))))
+                      else Nothing
+        else Nothing
+
+    rewriteLine : String -> String
+    rewriteLine line =
+      case pathValue line of
+        Nothing  => line
+        Just rel =>
+          if isPrefixOf "/" rel
+            then line                                    -- already absolute
+            else "path = \"" ++ baseDir ++ "/" ++ rel ++ "\""
+
+||| Read the project's pack.toml, preserving its custom dependency entries.
+||| If the package has no pack.toml of its own, walk UP to the nearest ancestor
+||| pack.toml and inherit it — pack resolves custom local deps (e.g.
+||| idris2-react-native-lib, idris2-delivery-kind) from an ancestor pack.toml, so
+||| the temp coverage build must too, else web/native apps and monorepo
+||| sub-packages fail with "no matching version is installed". Inherited
+||| relative `path =` entries are absolutized against the ancestor dir so they
+||| resolve correctly from the package-dir temp pack.toml. Bounded walk.
 readProjectPackToml : String -> IO String
 readProjectPackToml projectDir = do
-  let packPath = projectDir ++ "/pack.toml"
-  Right content <- readFile packPath
-    | Left _ => pure ""
-  pure content
+  -- The package's own pack.toml: paths are already correct relative to it.
+  Right own <- readFile (projectDir ++ "/pack.toml")
+    | Left _ => do
+        absDir <- toAbsolutePath projectDir
+        inheritFrom (parentOf absDir) 8
+  pure own
+  where
+    inheritFrom : String -> Nat -> IO String
+    inheritFrom _ Z = pure ""
+    inheritFrom dir (S fuel) =
+      if dir == "" || dir == "/"
+        then do
+          Right c <- readFile "/pack.toml"
+            | Left _ => pure ""
+          pure (absolutizePackPaths "/" c)
+        else do
+          Right c <- readFile (dir ++ "/pack.toml")
+            | Left _ => inheritFrom (parentOf dir) fuel
+          pure (absolutizePackPaths dir c)
+
+||| The string value of a `key = "value"` toml line (already trimmed), or Nothing.
+tomlStringField : (key : String) -> String -> Maybe String
+tomlStringField key line =
+  let t = trim line in
+  if isPrefixOf key t
+    then case break (== '=') (unpack t) of
+           (_, eqRest) =>
+             let afterEq = trim (pack (drop 1 eqRest))
+             in if isPrefixOf "\"" afterEq
+                  then Just (pack (takeWhile (/= '"') (drop 1 (unpack afterEq))))
+                  else Nothing
+    else Nothing
+
+||| Extract (depName, absolutePath, ipkgFileName) for every `type = "local"` custom
+||| dep in pack.toml content. Paths are expected already absolutized (see
+||| absolutizePackPaths). Used to install local deps into the FORKED compiler's
+||| package path before a direct `idris2 --build` (which reads neither pack.toml
+||| nor pack's store — only ~/.idris2 and ./depends).
+localDepEntries : String -> List (String, String, String)
+localDepEntries content = go (lines content) Nothing Nothing Nothing Nothing []
+  where
+    -- the dep NAME from a `[custom.all.<name>]` (or `[custom.<profile>.<name>]`)
+    -- header — the last dot-segment, trailing ']' stripped.
+    blockName : String -> Maybe String
+    blockName line =
+      let t = trim line in
+      if isPrefixOf "[custom." t
+        then let inner = pack (filter (\c => c /= '[' && c /= ']') (unpack t))
+             in case reverse (forget (split (== '.') inner)) of
+                  (n :: _) => Just (trim n)
+                  []       => Nothing
+        else Nothing
+
+    -- track current block's name/type/path/ipkg; flush (name,path,ipkg) when type=local
+    go : List String -> (mname : Maybe String) -> (mty : Maybe String) -> (mpath : Maybe String)
+       -> (mipkg : Maybe String) -> List (String, String, String) -> List (String, String, String)
+    flush : Maybe String -> Maybe String -> Maybe String -> Maybe String
+          -> List (String, String, String) -> List (String, String, String)
+    flush (Just n) (Just "local") (Just p) (Just i) acc = (n, p, i) :: acc
+    flush _ _ _ _ acc = acc
+
+    go [] mname mty mpath mipkg acc = reverse (flush mname mty mpath mipkg acc)
+    go (l :: ls) mname mty mpath mipkg acc =
+      let t = trim l in
+      case blockName l of
+        Just n  => go ls (Just n) Nothing Nothing Nothing (flush mname mty mpath mipkg acc)
+        Nothing =>
+          if isPrefixOf "[" t
+            -- a non-custom block ends the current custom block
+            then go ls Nothing Nothing Nothing Nothing (flush mname mty mpath mipkg acc)
+            else
+              let mty'   = maybe mty   Just (tomlStringField "type" l)
+                  mpath' = maybe mpath Just (tomlStringField "path" l)
+                  mipkg' = maybe mipkg Just (tomlStringField "ipkg" l)
+              in go ls mname mty' mpath' mipkg' acc
+
+||| The coverage stack the temp ipkg always pulls in (generateTempIpkgWithOpts
+||| hardcodes idris2-coverage; it depends on these). Always install these.
+coverageStackDeps : List String
+coverageStackDeps =
+  [ "idris2-coverage", "idris2-coverage-core", "idris2-coverage-standardization" ]
+
+||| Install ONLY the local deps this project needs into the FORKED compiler's
+||| package path so a direct `idris2 --build` (the only path that honours
+||| --dumppaths-json) can resolve them — fork reads ~/.idris2 / ./depends, not
+||| pack.toml / pack's store. Filtered to (project ipkg `depends` ∪ coverage
+||| stack) so we don't build unrelated heavyweight monorepo packages (e.g. the
+||| canister). Best-effort + multi-round for dep ordering. No-op when IDRIS2_BIN
+||| is unset (pack resolves deps itself then).
+installNeededDepsIntoFork : (projectDepends : List String) -> (packTomlContent : String) -> IO ()
+installNeededDepsIntoFork projectDepends packTomlContent = do
+  Just idris2 <- getEnv "IDRIS2_BIN"
+    | Nothing => pure ()
+  let wanted = projectDepends ++ coverageStackDeps
+  let deps = filter (\(n, _, _) => elem n wanted) (localDepEntries packTomlContent)
+  -- Multi-round (no topo-sort): a dep whose own deps aren't installed yet fails
+  -- this round but succeeds once they land in a later round (installs idempotent).
+  let rounds = 4
+  putStrLn $ "    [dep-install] " ++ show (length deps) ++ " local deps for forked compiler"
+  for_ (replicate rounds ()) $ \_ => traverse_ (installOne idris2) deps
+  where
+    installOne : String -> (String, String, String) -> IO ()
+    installOne idris2 (_, path, ipkg) = do
+      -- Always build THEN install with the FORKED compiler, in the dep's own dir.
+      -- Build is incremental (cached TTCs), and only a successful build installs a
+      -- real package — so a dep whose own deps are missing this round simply fails
+      -- here and is retried next round (idempotent). && chains so a failed build
+      -- never installs a hollow package.
+      _ <- system $ "cd " ++ path ++ " && " ++ idris2 ++ " --build " ++ ipkg
+                 ++ " > /dev/null 2>&1 && " ++ idris2 ++ " --install " ++ ipkg
+                 ++ " > /dev/null 2>&1"
+      pure ()
 
 ||| Check if a file exists
 fileExists : String -> IO Bool
@@ -245,7 +398,11 @@ fileExists path = do
     | Left _ => pure False
   pure True
 
-||| Write pack.toml only if it doesn't exist, return True if we created it
+||| Write pack.toml only if it doesn't exist, return True if we created it.
+||| (Local-dep install into the forked compiler happens separately via
+||| installNeededDepsIntoFork at the path-coverage entry points, where the
+||| project's declared depends are known and can filter out unrelated heavyweight
+||| monorepo packages.)
 writePackTomlIfMissing : String -> String -> IO (Either String Bool)
 writePackTomlIfMissing packTomlPath packTomlContent = do
   exists <- fileExists packTomlPath
@@ -671,6 +828,17 @@ staticWholeModuleCeiling = 40
 export
 runStaticDumppathsJson : String -> IO (Either String String)
 runStaticDumppathsJson ipkgPath = do
+  -- Install the project's custom LOCAL deps into the forked compiler's package
+  -- path FIRST. runStaticDumppathsJsonWhole builds the project's REAL ipkg with a
+  -- direct `idris2 --build` (the only path that honours --dumppaths-json), which
+  -- resolves deps from ~/.idris2 / ./depends only — not pack.toml / pack store.
+  -- Without this, web/native apps and monorepo sub-packages that inherit custom
+  -- deps from an ancestor pack.toml (e.g. idris2-delivery-kind) fail dep
+  -- resolution. No-op when IDRIS2_BIN is unset.
+  let (staticProjectDir, _) = splitPath ipkgPath
+  staticPackToml <- readProjectPackToml staticProjectDir
+  staticDepends  <- readProjectDepends staticProjectDir
+  installNeededDepsIntoFork staticDepends staticPackToml
   -- Peek the module count: large packages skip the OOM-prone whole-package build
   -- and chunk directly (chunks run sequentially in groups of 8 — bounded memory).
   modCount <- do
@@ -1406,6 +1574,9 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       let packTomlPath = projectDir ++ "/pack.toml"
       projectPackToml <- readProjectPackToml projectDir
       let packTomlContent = generateTempPackToml projectPackToml
+      -- Install the project's needed local deps into the forked compiler so the
+      -- direct --dumppaths-json build resolves them (fork ignores pack.toml).
+      installNeededDepsIntoFork projectDepends packTomlContent
       let dumppathsPath = "/tmp/idris2_dumppaths_runtime_" ++ uid ++ ".json"
       let pathHitsPath = "/tmp/idris2_pathhits_runtime_" ++ uid ++ ".txt"
       let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
