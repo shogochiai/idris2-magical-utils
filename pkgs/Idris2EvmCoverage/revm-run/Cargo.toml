@@ -1,0 +1,24 @@
+[package]
+name = "revm-run"
+version = "0.1.0"
+edition = "2021"
+
+# A drop-in, faster replacement for `idris2-evm-run --trace` in the EVM coverage
+# pipeline. It executes instrumented runtime bytecode with revm (the EVM engine
+# behind foundry/anvil/reth) IN-PROCESS and prints the captured logs in the SAME
+# stdout format idris2-evm-run emits, so EvmCoverage.Runtime.parseProfileFlushCounters
+# parses it unchanged. Coverage data is self-reported by the bytecode via a
+# ProfileFlush LOG1 event — any EIP-correct EVM can surface it; revm is just far
+# faster and more spec-accurate than the pure-Idris interpreter.
+
+[[bin]]
+name = "revm-run"
+path = "src/main.rs"
+
+[dependencies]
+revm = "14"
+hex = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -920,8 +920,37 @@ extractRuntimeBytecode content =
        (_ :: byteLine :: _) => extractRuntimeSegment (trim byteLine)
        _ => ""
 
-||| Run instrumented bytecode via idris2-evm-run and capture trace
-||| Returns path to trace output
+||| Is an executable resolvable on PATH? (`command -v` exits 0 when found.)
+isOnPath : String -> IO Bool
+isOnPath name = do
+  code <- system $ "command -v " ++ name ++ " >/dev/null 2>&1"
+  pure (code == 0)
+
+||| Resolve the EVM runner that produces a coverage trace from runtime bytecode.
+||| Both revm-run and idris2-evm-run honour the SAME CLI contract
+||| (`<runner> --trace <bytecode-file> --gas <N>` → trace on stdout with a
+||| ProfileFlush LOG1 event), so they are interchangeable here.
+|||
+||| Selection: EVM_COV_RUNNER env override > revm-run if on PATH (native, fast,
+||| EIP-accurate) > idris2-evm-run (pure-Idris fallback; slow, can hit the
+||| timeout the whole pipeline used to stall on). revm self-reports the same
+||| coverage because the counters are emitted by the bytecode's own LOG1, not by
+||| any interpreter-specific tracing.
+export
+resolveEvmRunner : IO String
+resolveEvmRunner = do
+  mOverride <- getEnv "EVM_COV_RUNNER"
+  case mOverride of
+    Just r => if trim r == "" then resolveDefault else pure (trim r)
+    Nothing => resolveDefault
+  where
+    resolveDefault : IO String
+    resolveDefault = do
+      hasRevm <- isOnPath "revm-run"
+      pure (if hasRevm then "revm-run" else "idris2-evm-run")
+
+||| Run instrumented bytecode through the resolved EVM runner and capture trace.
+||| Returns path to trace output.
 export
 runIdrisEvmTest : String -> String -> IO (Either String String)
 runIdrisEvmTest binPath traceOutput = do
@@ -933,24 +962,28 @@ runIdrisEvmTest binPath traceOutput = do
   let runtimePath = "/tmp/runtime.bin"
   Right () <- writeFile runtimePath runtimeHex
     | Left _ => pure $ Left "Cannot write runtime bytecode"
+  runner <- resolveEvmRunner
   mTimeout <- getEnv "IDRIS2_EVM_RUN_TIMEOUT_SECS"
   let timeoutSecs = fromMaybe "20" mTimeout
+  -- Same Python timeout wrapper, parameterized by runner binary. revm-run is
+  -- fast and won't hit the timeout; the guard stays as defence for the
+  -- idris2-evm-run fallback path.
   let cmd =
         "python3 -c 'import os,signal,subprocess,sys\n"
         ++ "out=open(sys.argv[1],\"wb\")\n"
         ++ "try:\n"
-        ++ " p=subprocess.Popen([\"idris2-evm-run\",\"--trace\",sys.argv[2],\"--gas\",\"100000000\"], stdout=out, stderr=subprocess.STDOUT, start_new_session=True)\n"
+        ++ " p=subprocess.Popen([sys.argv[4],\"--trace\",sys.argv[2],\"--gas\",\"100000000\"], stdout=out, stderr=subprocess.STDOUT, start_new_session=True)\n"
         ++ " sys.exit(p.wait(timeout=int(sys.argv[3])))\n"
         ++ "except subprocess.TimeoutExpired:\n"
         ++ " os.killpg(p.pid, signal.SIGKILL)\n"
         ++ " sys.exit(124)\n"
-        ++ "' \"" ++ traceOutput ++ "\" \"" ++ runtimePath ++ "\" \"" ++ timeoutSecs ++ "\""
+        ++ "' \"" ++ traceOutput ++ "\" \"" ++ runtimePath ++ "\" \"" ++ timeoutSecs ++ "\" \"" ++ runner ++ "\""
   exitCode <- system cmd
   Right trace <- readFile traceOutput
     | Left _ => pure $ Left "Cannot read trace output"
   if exitCode == 124
      then if null (trim trace)
-             then pure $ Left ("idris2-evm-run timed out after " ++ timeoutSecs ++ "s with no trace")
+             then pure $ Left (runner ++ " timed out after " ++ timeoutSecs ++ "s with no trace")
              else pure $ Right traceOutput
      else pure $ Right traceOutput
 
