@@ -1,0 +1,10 @@
+package idris2-test-suite
+version = 0.1.0
+
+-- base-only: every test module (canister, app, lazy, coverage tools) can depend
+-- on the canonical TestSuite type without pulling in anything heavier.
+depends = base
+
+sourcedir = "src"
+modules = Idris2.TestSuite
+        , Idris2.TestSuite.Runner
