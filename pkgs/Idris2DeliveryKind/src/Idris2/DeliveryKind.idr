@@ -71,6 +71,7 @@ data DeliveryKind
   | CLI                        -- bin/xxx: frontend layer (scripts / CLI)
   | Web                        -- idris2-dom-mvc: frontend layer (CLI's browser twin)
   | Android                    -- idris2-react-native: phone layer (MVU → signed APK)
+  | IOS                        -- idris2-react-native: phone layer (MVU → signed IPA)
   | Humanoid (Maybe HumanoidConfig)  -- embodiment layer (robot; config optional)
   | Core                       -- a pure Idris2 library
 
@@ -81,6 +82,7 @@ Eq DeliveryKind where
   CLI          == CLI          = True
   Web          == Web          = True
   Android      == Android      = True
+  IOS          == IOS          = True
   (Humanoid _) == (Humanoid _) = True
   Core         == Core         = True
   _            == _            = False
@@ -101,7 +103,8 @@ coverageFamilyOf EVM          = "evm"
 coverageFamilyOf (ICP _)      = "dfx"
 coverageFamilyOf CLI          = "core"
 coverageFamilyOf Web          = "web"
-coverageFamilyOf Android      = "web"       -- MVU Msg-branch coverage parity (no forked compiler)
+coverageFamilyOf Android      = "web"       -- MVU dumppaths path coverage over the pure layer
+coverageFamilyOf IOS          = "web"       -- same MVU layer as Android/Web → same coverage
 coverageFamilyOf (Humanoid _) = "humanoid"
 coverageFamilyOf Core         = "core"
 
@@ -117,6 +120,7 @@ deliveryTag (ICP _)      = "dfx"
 deliveryTag CLI          = "cli"
 deliveryTag Web          = "web"
 deliveryTag Android      = "android"
+deliveryTag IOS          = "ios"
 deliveryTag (Humanoid _) = "humanoid"
 deliveryTag Core         = "core"
 
@@ -135,6 +139,7 @@ deliveryKindFromString "dfx"      = ICP Nothing
 deliveryKindFromString "cli"      = CLI
 deliveryKindFromString "web"      = Web
 deliveryKindFromString "android"  = Android
+deliveryKindFromString "ios"      = IOS
 deliveryKindFromString "humanoid" = Humanoid Nothing
 deliveryKindFromString _          = Core   -- "core" + unknown → Core
 
@@ -142,4 +147,4 @@ deliveryKindFromString _          = Core   -- "core" + unknown → Core
 ||| deliveries (the app's release-wiring picker) and exhaustiveness-style iteration.
 public export
 allDeliveryKinds : List DeliveryKind
-allDeliveryKinds = [EVM, ICP Nothing, CLI, Web, Android, Humanoid Nothing, Core]
+allDeliveryKinds = [EVM, ICP Nothing, CLI, Web, Android, IOS, Humanoid Nothing, Core]
