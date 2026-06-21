@@ -401,6 +401,24 @@ findIpkgContent projectDir = do
         | Left _ => pure Nothing
       pure (Just content)
 
+||| Find the project's main ipkg PATH (not content), using the same
+||| main-vs-temp/test/minimal selection as findIpkgContent. Used by the chunked
+||| path-coverage denominator, which needs to hand a real ipkg path to
+||| runStaticDumppathsJson.
+findProjectIpkgPath : String -> IO (Maybe String)
+findProjectIpkgPath projectDir = do
+  Right entries <- listDir projectDir
+    | Left _ => pure Nothing
+  let ipkgFiles = filter (isSuffixOf ".ipkg") entries
+  let isMainIpkg = \f => not (isInfixOf "-minimal" f || isInfixOf "-test" f || isPrefixOf "temp-" f)
+  let mainIpkgs = filter isMainIpkg ipkgFiles
+  let chosen = case mainIpkgs of
+                 [] => ipkgFiles
+                 xs => xs
+  case chosen of
+    [] => pure Nothing
+    (f :: _) => pure (Just (projectDir ++ "/" ++ f))
+
 ||| Read depends from project's ipkg file
 public export
 readProjectDepends : String -> IO (List String)
@@ -1026,21 +1044,92 @@ runTestsWithTestCoverage projectDir testModules timeout = do
 -- Extended Entry Point with Per-Function Runtime Hits
 -- =============================================================================
 
+||| Forward declaration so the chunked dispatcher (runTestsWithFunctionHits'
+||| where-block) can reference this single-build helper, whose definition lives
+||| after the dispatcher. Idris resolves the name from this signature.
+runFunctionHitsOnce : String -> List String -> Nat -> IO (Either String (List FunctionRuntimeHit))
+
+||| Test-module count above which function-hits coverage is built+run in
+||| sequential chunks instead of one whole-suite process (the 8GB-host OOM fix).
+functionHitsChunkTestModuleCeiling : Nat
+functionHitsChunkTestModuleCeiling = 12
+
+||| Number of test modules built+run together in one function-hits chunk process.
+functionHitsChunkSize : Nat
+functionHitsChunkSize = 8
+
 ||| Run tests and return per-function runtime coverage data
 ||| This is the recommended API for accurate severity calculation
 |||
 ||| @projectDir - Path to project root (containing .ipkg)
 ||| @testModules - List of test module names
 ||| @timeout - Max seconds for build+run
+|||
+||| For large test suites (> functionHitsChunkTestModuleCeiling test modules) the
+||| build+run is split into sequential per-chunk processes to bound peak memory
+||| (the 8GB-host OOM fix): a single build+run that links and executes the FULL
+||| suite holds every module's closures live at once. Per-function hits from
+||| separate chunks are merged by funcName (static fields = max, runtime fields =
+||| max, so a function exercised in any chunk reports its best observed coverage
+||| and is never double-counted). Small suites keep the original single build+run.
 export
 runTestsWithFunctionHits : (projectDir : String)
                           -> (testModules : List String)
                           -> (timeout : Nat)
                           -> IO (Either String (List FunctionRuntimeHit))
-runTestsWithFunctionHits projectDir testModules timeout = do
+runTestsWithFunctionHits projectDir testModules timeout =
   case testModules of
     [] => pure $ Left "No test modules specified"
-    _ => do
+    _ =>
+      if length testModules > functionHitsChunkTestModuleCeiling
+        then runChunkedFunctionHits projectDir testModules timeout
+        else runFunctionHitsOnce projectDir testModules timeout
+  where
+    ||| Merge per-function hits across chunks by funcName. Static fields
+    ||| (canonicalCount, totalExprs) are identical wherever the function appears
+    ||| so max is a safe pick; runtime fields (executedCount, coveredExprs) take
+    ||| the max across chunks — a function exercised by tests in any chunk reports
+    ||| its best observed coverage, and is never double-counted by summing.
+    mergeFunctionHit : FunctionRuntimeHit -> FunctionRuntimeHit -> FunctionRuntimeHit
+    mergeFunctionHit a b =
+      MkFunctionRuntimeHit a.funcName a.schemeFunc
+        (max a.canonicalCount b.canonicalCount)
+        (max a.executedCount b.executedCount)
+        (max a.totalExprs b.totalExprs)
+        (max a.coveredExprs b.coveredExprs)
+
+    insertHit : List FunctionRuntimeHit -> FunctionRuntimeHit -> List FunctionRuntimeHit
+    insertHit [] h = [h]
+    insertHit (x :: xs) h =
+      if x.funcName == h.funcName
+        then mergeFunctionHit x h :: xs
+        else x :: insertHit xs h
+
+    mergeAllHits : List FunctionRuntimeHit -> List FunctionRuntimeHit -> List FunctionRuntimeHit
+    mergeAllHits acc [] = acc
+    mergeAllHits acc (h :: hs) = mergeAllHits (insertHit acc h) hs
+
+    runChunks : List (List String) -> Nat -> List FunctionRuntimeHit -> IO (Either String (List FunctionRuntimeHit))
+    runChunks [] _ acc = pure $ Right acc
+    runChunks (mods :: rest) idx acc = do
+      putStrLn $ "    Function-hits chunk " ++ show idx ++ " (" ++ show (length mods) ++ " test modules)..."
+      chunkResult <- runFunctionHitsOnce projectDir mods timeout
+      case chunkResult of
+        Left err => pure $ Left $ "Function-hits chunk " ++ show idx ++ " failed: " ++ err
+        Right hits => runChunks rest (idx + 1) (mergeAllHits acc hits)
+
+    runChunkedFunctionHits : String -> List String -> Nat -> IO (Either String (List FunctionRuntimeHit))
+    runChunkedFunctionHits projectDir testModules timeout = do
+      putStrLn $ "    Large test suite (" ++ show (length testModules)
+              ++ " test modules > " ++ show functionHitsChunkTestModuleCeiling
+              ++ "); chunking function-hits coverage to bound memory..."
+      runChunks (chunkList functionHitsChunkSize testModules) 0 []
+
+-- One build+run of function-hits coverage over the given test modules.
+-- (Type signature forward-declared above so the chunked dispatcher can call it.)
+-- Builds the test exe with --dumpcases (static denominator) + profiler, runs it
+-- once, returns per-function hits.
+runFunctionHitsOnce projectDir testModules timeout = do
       -- Read project dependencies and sourcedir
       projectDepends <- readProjectDepends projectDir
       sourcedir <- readProjectSourcedir projectDir
@@ -1132,9 +1221,9 @@ runTestsWithFunctionHits projectDir testModules timeout = do
           removeFileIfExists dumpcasesPath
 
           pure $ Right functionHits
-  where
-    countCanonical : List CompiledCase -> Nat
-    countCanonical = length . filter (\c => c.kind == Canonical)
+      where
+        countCanonical : List CompiledCase -> Nat
+        countCanonical = length . filter (\c => c.kind == Canonical)
 
 parsePathHitLineLocal : String -> Maybe PathRuntimeHit
 parsePathHitLineLocal line =
@@ -1148,18 +1237,158 @@ parsePathHitLineLocal line =
               in Just (MkPathRuntimeHit (trim pathId) parsed)
             _ => Just (MkPathRuntimeHit trimmed 1)
 
+||| Test-module count above which the runtime path-coverage exe is built and run
+||| in sequential chunks instead of one whole-suite process. A single exe that
+||| links + executes the FULL test suite (e.g. EtherClaw's ~1100 tests across
+||| ~140 modules) is the 8GB-host OOM hog: the whole-suite compiler/runtime
+||| process holds every module's closures live at once. Chunking by test module
+||| keeps peak memory bounded by one chunk's transitive build+run — each chunk is
+||| a separate process, so its heap is reclaimed before the next chunk starts.
+||| Runtime path hits are keyed by stable compiler-exported path id, so hits from
+||| separate chunks aggregate by plain concatenation (coverage = union of covered
+||| ids; see coveredPathIds / buildPathCoverageResultFromHits).
+runtimeChunkTestModuleCeiling : Nat
+runtimeChunkTestModuleCeiling = 12
+
+||| Number of test modules built+run together in one runtime chunk process.
+runtimeChunkSize : Nat
+runtimeChunkSize = 8
+
+||| Run ONE runtime path-hits chunk: build a temp exe over (tempRunner + this
+||| chunk's test modules), run it with --dumppathshits, return the chunk's hits.
+||| Each chunk is its own process so the OS reclaims its heap between chunks —
+||| this is what bounds peak memory for large suites. The temp build dir is
+||| per-chunk and removed by the caller; the project's real build/ is never
+||| touched. Returns [] on a chunk that fails to produce hits (the denominator
+||| stays real via the static path; a hit-less chunk just contributes no hits).
+runRuntimePathHitsChunk : (projectDir : String)
+                       -> (sourcedir : String)
+                       -> (projectDepends : List String)
+                       -> (packTomlContent : String)
+                       -> (chunkTestModules : List String)
+                       -> (idx : Nat)
+                       -> IO (List PathRuntimeHit)
+runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chunkTestModules idx = do
+  uid <- getUniqueId
+  let tempModName = "TempPathRunnerChunk_" ++ uid
+  let tempExecName = "temp-paths-chunk-" ++ uid
+  let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
+  let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
+  let tempIpkgName = tempExecName ++ ".ipkg"
+  let tempBuildDir = ".idris2-coverage-runtime-" ++ uid
+  let packTomlPath = projectDir ++ "/pack.toml"
+  let dumppathsPath = "/tmp/idris2_dumppaths_chunk_" ++ uid ++ "_" ++ show idx ++ ".json"
+  let pathHitsPath = "/tmp/idris2_pathhits_chunk_" ++ uid ++ "_" ++ show idx ++ ".txt"
+  let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
+
+  let cleanup : IO ()
+      cleanup = do
+        removeFileIfExists tempIdrPath
+        removeFileIfExists tempIpkgPath
+        _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
+        removeFileIfExists dumppathsPath
+        removeFileIfExists pathHitsPath
+
+  let runnerSource = generateTempRunner tempModName chunkTestModules
+  Right () <- writeFile tempIdrPath runnerSource
+    | Left _ => pure []
+
+  let allModules = nub (tempModName :: chunkTestModules)
+  let opts = "--dumppaths-json " ++ dumppathsPath ++ " --dumppathshits " ++ pathHitsPath
+  let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just opts) (Just tempBuildDir)
+  Right () <- writeFile tempIpkgPath ipkgContent
+    | Left _ => do removeFileIfExists tempIdrPath; pure []
+
+  Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
+    | Left _ => do removeFileIfExists tempIdrPath; removeFileIfExists tempIpkgPath; pure []
+
+  buildResult <- buildIpkgWithClean False projectDir tempIpkgName
+  case buildResult of
+    Left err => do
+      putStrLn $ "    Runtime chunk " ++ show idx ++ " build failed: " ++ err
+      cleanupPackToml packTomlPath createdPackToml
+      cleanup
+      pure []
+    Right () => do
+      _ <- system $ "cd " ++ projectDir ++ " && " ++ relExecPath ++ " > /dev/null 2>&1"
+      hitsContent <- readFile pathHitsPath
+      let hits = case hitsContent of
+                   Left _ => []
+                   Right content => mapMaybe parsePathHitLineLocal (lines content)
+      cleanupPackToml packTomlPath createdPackToml
+      cleanup
+      pure hits
+
+||| Sequentially run runtime path-hits chunks, accumulating hits. Chunks run one
+||| at a time (NOT in parallel) so peak memory is one chunk's build+run, not the
+||| sum — bounded memory is the entire point. Hits accumulate across chunks.
+runRuntimePathHitsChunks : (projectDir : String)
+                        -> (sourcedir : String)
+                        -> (projectDepends : List String)
+                        -> (packTomlContent : String)
+                        -> (chunks : List (List String))
+                        -> (idx : Nat)
+                        -> (acc : List PathRuntimeHit)
+                        -> IO (List PathRuntimeHit)
+runRuntimePathHitsChunks _ _ _ _ [] _ acc = pure acc
+runRuntimePathHitsChunks projectDir sourcedir deps packTomlContent (mods :: rest) idx acc = do
+  putStrLn $ "    Runtime path-hits chunk " ++ show idx ++ " (" ++ show (length mods) ++ " test modules)..."
+  hits <- runRuntimePathHitsChunk projectDir sourcedir deps packTomlContent mods idx
+  runRuntimePathHitsChunks projectDir sourcedir deps packTomlContent rest (idx + 1) (hits ++ acc)
+
 ||| Build and run test modules with forked Idris2 path instrumentation enabled.
 ||| Returns static dumppaths JSON plus runtime path hits from the executed test binary.
+|||
+||| For large test suites (> runtimeChunkTestModuleCeiling test modules) the
+||| runtime hits are collected in sequential per-chunk processes to keep peak
+||| memory bounded (the 8GB-host OOM fix), while the denominator JSON comes from
+||| the already-chunked static path (runStaticDumppathsJson). Small suites keep
+||| the original single whole-suite build+run.
 export
 runTestsWithPathCoverageArtifacts : (projectDir : String)
                                  -> (projectModules : List String)
                                  -> (testModules : List String)
                                  -> (timeout : Nat)
                                  -> IO (Either String (String, List PathRuntimeHit))
-runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout = do
+runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout =
   case testModules of
     [] => pure $ Left "No test modules specified"
-    _ => do
+    _ =>
+      if length testModules > runtimeChunkTestModuleCeiling
+        then runChunkedPathCoverage projectDir projectModules testModules
+        else runWholePathCoverage projectDir projectModules testModules timeout
+  where
+    ||| Large-suite path: denominator from the chunked static path, runtime hits
+    ||| from sequential per-chunk exes (bounded memory, OOM-safe).
+    runChunkedPathCoverage : String -> List String -> List String -> IO (Either String (String, List PathRuntimeHit))
+    runChunkedPathCoverage projectDir projectModules testModules = do
+      putStrLn $ "    Large test suite (" ++ show (length testModules)
+              ++ " test modules > " ++ show runtimeChunkTestModuleCeiling
+              ++ "); chunking runtime path coverage to bound memory..."
+      projectDepends <- readProjectDepends projectDir
+      sourcedir <- readProjectSourcedir projectDir
+      projectPackToml <- readProjectPackToml projectDir
+      let packTomlContent = generateTempPackToml projectPackToml
+
+      -- Denominator: the full static dumppaths JSON over the project ipkg. This
+      -- path is already chunked internally (runStaticDumppathsJsonChunks) so it
+      -- never builds the whole package in one process.
+      Just projectIpkgPath <- findProjectIpkgPath projectDir
+        | Nothing => pure $ Left "Chunked path coverage: no project ipkg found for static denominator"
+      denomResult <- runStaticDumppathsJson projectIpkgPath
+      case denomResult of
+        Left err => pure $ Left $ "Chunked path coverage: static denominator failed: " ++ err
+        Right denomJson => do
+          -- Numerator: runtime path hits, collected one test-module chunk per
+          -- process so peak memory stays bounded.
+          let chunks = chunkList runtimeChunkSize testModules
+          hits <- runRuntimePathHitsChunks projectDir sourcedir projectDepends packTomlContent chunks 0 []
+          pure $ Right (denomJson, hits)
+
+    ||| The original whole-suite single build+run, kept for small suites where the
+    ||| memory cost is negligible and one clean process is simplest.
+    runWholePathCoverage : String -> List String -> List String -> Nat -> IO (Either String (String, List PathRuntimeHit))
+    runWholePathCoverage projectDir projectModules testModules timeout = do
       putStrLn "    Preparing path coverage runner..."
       projectDepends <- readProjectDepends projectDir
       putStrLn $ "    Project dependencies: " ++ show projectDepends
