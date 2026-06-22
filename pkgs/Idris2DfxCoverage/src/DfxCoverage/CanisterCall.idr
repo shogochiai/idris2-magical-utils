@@ -355,6 +355,15 @@ resolveIcWasmExecutable projectDir = do
   let cwdVal = fromMaybe "." cwd
   let candidates =
         [ envCandidate
+        -- Prefer the freshly-built local idris2-icwasm (with current fixes) over a
+        -- stale `~/.local/bin/idris2-icwasm` (pack install-app does not refresh the
+        -- ~/.local/bin copy, so it can lag behind source). The canonical monorepo
+        -- layout is <root>/idris2-magical-utils/pkgs/Idris2IcWasm and a sibling
+        -- consumer like <root>/etherclaw/pkgs/<Canister>, so from projectDir the
+        -- icwasm build/exec is ../../../idris2-magical-utils/pkgs/Idris2IcWasm/...
+        , projectDir ++ "/../../../idris2-magical-utils/pkgs/Idris2IcWasm/build/exec/idris2-icwasm"
+        , projectDir ++ "/../../../../idris2-magical-utils/pkgs/Idris2IcWasm/build/exec/idris2-icwasm"
+        , projectDir ++ "/../../idris2-magical-utils/pkgs/Idris2IcWasm/build/exec/idris2-icwasm"
         , projectDir ++ "/../Idris2IcWasm/build/exec/idris2-icwasm"
         , projectDir ++ "/../../Idris2IcWasm/build/exec/idris2-icwasm"
         , projectDir ++ "/../../../Idris2IcWasm/build/exec/idris2-icwasm"
@@ -469,15 +478,14 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
       -- the canister deps (idris2-icwasm, ...) into the SHARED ~/.idris2/idris2-0.8.0
       -- against the FORKED compiler; the pack-wrapper numerator build would then
       -- resolve those fork-built TTCs → "installed with an older compiler version".
-      -- Pointing IDRIS2_PREFIX at a CLEAN temp dir makes idris2 ignore the polluted
-      -- ~/.idris2 lib path entirely, while the pack wrapper still supplies the
-      -- pack-built deps via `pack package-path` (IDRIS2_PACKAGE_PATH, independent of
-      -- PREFIX). Verified: with ~/.idris2 fork-polluted, a clean IDRIS2_PREFIX build
-      -- still reaches "Build complete".
-      t <- time
-      let cleanPrefix = "/tmp/idris2-dfxcov-prefix-" ++ show t
-      _ <- system $ "mkdir -p " ++ shellQuote (cleanPrefix ++ "/idris2-0.8.0")
-      let prefixAssign = ["IDRIS2_PREFIX=" ++ shellQuote cleanPrefix]
+      -- The verified fix is the eviction of those fork-built ~/.idris2 dep dirs in
+      -- installCanisterDepsViaPack (above, run at ensureDeployed start): with
+      -- ~/.idris2 cleaned, the default-prefix build falls through to the pack store
+      -- (via the wrapper's IDRIS2_PACKAGE_PATH) and resolves the pack-built deps.
+      -- NOTE: do NOT override IDRIS2_PREFIX to a clean temp dir here — that points
+      -- idris2 at an EMPTY lib dir and breaks resolution (the store is reached via
+      -- the lib path rooted at the real prefix); eviction + default prefix is what
+      -- the isolation test verified ("Build complete").
       let baseArgs =
             [ "build"
             , "--project=" ++ opts.projectDir
@@ -491,7 +499,8 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
                then "--for-test-build" ::
                     maybe [] (\path => ["--test-module=" ++ path]) testModPath
                else []
-      let cmd = unwords (unsetPrefix ++ prefixAssign ++ cpathAssign ++ (icwasmBin :: baseArgs ++ probeArgs ++ testArgs))
+      let cmd = unwords (unsetPrefix ++ cpathAssign ++ (icwasmBin :: baseArgs ++ probeArgs ++ testArgs))
+      putStrLn $ "    [numerator] WASM build via " ++ icwasmBin
       (exitCode, stdout, stderr) <- executeCommand cmd
       if exitCode /= 0
          then pure (Left (if null stderr then stdout else stderr))

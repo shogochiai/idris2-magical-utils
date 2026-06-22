@@ -167,5 +167,11 @@ analyzePathHitsFromBranchProbeFiles dumppathsContent staticAnalysis branchProbeM
   Right probeEntries <- readBranchProbeMap branchProbeMapPath
     | Left err => pure $ Left err
   Right hitProbeIndices <- getBranchProbeIndices mProjectDir canisterRef network
-    | Left err => pure $ Left err
-  pure $ analyzePathHitsFromBranchProbeCoverage dumppathsContent staticAnalysis probeEntries hitProbeIndices
+    | Left err => do
+        putStrLn $ "    [numerator] getBranchProbeIndices FAILED: " ++ err
+        pure $ Left err
+  let hits = analyzePathHitsFromBranchProbeCoverage dumppathsContent staticAnalysis probeEntries hitProbeIndices
+  putStrLn $ "    [numerator] probeEntries=" ++ show (length probeEntries)
+          ++ " hitProbeIndices=" ++ show (length hitProbeIndices)
+          ++ " -> mapped hits=" ++ show (either (const 0) length hits)
+  pure hits

@@ -43,9 +43,12 @@ record Options where
   canisterName  : Maybe String
   network       : String
   fullPipeline  : Bool
+  numeratorOnly : Bool          -- phase-2: deploy+call+collect only (no denominator)
+  hitsOut       : Maybe String  -- phase-2 writes covered path-ids here, one per line
+  selfPath      : String        -- argv[0]; used to spawn the phase-2 subprocess
 
 defaultOptions : Options
-defaultOptions = MkOptions Nothing Nothing Text False False Nothing Nothing Nothing Nothing Nothing Nothing "local" False
+defaultOptions = MkOptions Nothing Nothing Text False False Nothing Nothing Nothing Nothing Nothing Nothing "local" False False Nothing "idris2-dfx-cov"
 
 parseArgs : List String -> Options -> Options
 parseArgs [] opts = opts
@@ -64,6 +67,8 @@ parseArgs ("--public-names-wasm" :: path :: rest) opts = parseArgs rest ({ publi
 parseArgs ("--canister" :: name :: rest) opts = parseArgs rest ({ canisterName := Just name } opts)
 parseArgs ("--network" :: net :: rest) opts = parseArgs rest ({ network := net } opts)
 parseArgs ("--full-pipeline" :: rest) opts = parseArgs rest ({ fullPipeline := True } opts)
+parseArgs ("--numerator-only" :: rest) opts = parseArgs rest ({ numeratorOnly := True } opts)
+parseArgs ("--hits-out" :: path :: rest) opts = parseArgs rest ({ hitsOut := Just path } opts)
 parseArgs (arg :: rest) opts =
   if isPrefixOf "-" arg
      then parseArgs rest opts
@@ -997,6 +1002,139 @@ pathCoverageReportToJson result = unlines
       let ls = lines s
       in fastConcat $ intersperse "\n" $ map ("  " ++) ls
 
+||| Phase-2 body (runs in the FRESH numerator-only process). Deploys the
+||| test-harness coverage canister, calls its runTests* methods, collects the real
+||| branch-probe hits from the live replica, and writes the covered path-ids to
+||| opts.hitsOut (one per line) for the orchestrator to read back. Returns the
+||| (dumppaths, hits) pair so this process can also emit a standalone report.
+runNumeratorInProcess : Options -> (ipkgPath : String)
+                      -> (staticProjectDir : String) -> (staticIpkgName : String)
+                      -> (staticIpkgPath : String) -> (projectDir : String)
+                      -> (originalIpkgName : String) -> (dumppathsContent : String)
+                      -> IO (Either String (String, List PathRuntimeHit))
+runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPath projectDir originalIpkgName dumppathsContent = do
+  staticResult <- runAndAnalyzeDumpcases staticProjectDir staticIpkgName
+  case staticResult of
+    Left err => do
+      cleanupGeneratedDumppathsIpkg staticIpkgPath
+      pure $ Left err
+    Right staticAnalysis => do
+      let defaultCanister = pack (takeWhile (/= '.') (unpack originalIpkgName))
+      canister <- case opts.canisterName of
+        Just name => pure name
+        Nothing => detectCanisterName projectDir defaultCanister
+      let deployOpts =
+            { canisterName := canister
+            , network := opts.network
+            , dfxPath := "dfx"
+            , projectDir := projectDir
+            , instrumentBranchProbes := True
+            , forTestBuild := True
+            } defaultDeployOptions
+      deployResult' <- the (IO (Either String String)) (ensureDeployed deployOpts)
+      case deployResult' of
+        Left err => pure $ Left err
+        Right _ => do
+          let batchMethods = map (\idx => "runTestBatch" ++ show idx) [0, 1, 2]
+          let methods = "runTests" :: "runMinimalTests" :: "runTrivialTest" :: batchMethods
+          callResult <- runProjectMethods projectDir canister methods opts.network
+          case callResult of
+            Left err => do
+              cleanupGeneratedDumppathsIpkg staticIpkgPath
+              pure $ Left err
+            Right _ => do
+              _ <- runProjectProbeCalls projectDir canister opts.network
+              let branchProbeMapPath = projectDir ++ "/build/idris2-branch-probes.csv"
+              hitsResult <- analyzePathHitsFromBranchProbeFiles
+                             dumppathsContent staticAnalysis branchProbeMapPath
+                             (Just projectDir) canister opts.network
+              cleanupGeneratedDumppathsIpkg staticIpkgPath
+              case hitsResult of
+                Left err => pure $ Left err
+                Right hits => do
+                  -- Persist covered path-ids for the orchestrator (phase-1) to read.
+                  case opts.hitsOut of
+                    Just hp => do
+                      _ <- writeFile hp (unlines (map (.pathId) hits))
+                      pure ()
+                    Nothing => pure ()
+                  pure $ Right (dumppathsContent, hits)
+
+||| Derive the chez WRAPPER script path from argv[0]. A Chez-backed Idris exe is
+||| `<dir>/<name>` (wrapper, sets DYLD/LD_LIBRARY_PATH) and `<dir>/<name>_app/<name>.so`
+||| (the program). If argv[0] is the .so, strip the trailing `<name>_app/<name>.so`
+||| to recover `<dir>/<name>`; otherwise return it unchanged.
+wrapperFromArgv0 : String -> String
+wrapperFromArgv0 p =
+  -- argv[0] of a Chez Idris exe is "<dir>/<name>_app/<name>.so"; the wrapper is
+  -- "<dir>/<name>". Find the "_app/" segment and rebuild "<dir>/<name>".
+  case splitOnAppDir (unpack p) [] of
+    Just wrapper => wrapper   -- text before "_app/" == "<dir>/<name>" == the wrapper
+    Nothing => p
+  where
+    splitOnAppDir : List Char -> List Char -> Maybe String
+    splitOnAppDir cs acc =
+      if isPrefixOf "_app/" (pack cs)
+         then Just (pack (reverse acc))
+         else case cs of
+                [] => Nothing
+                (c :: rest) => splitOnAppDir rest (c :: acc)
+
+||| Phase-2 (numerator) in a FRESH subprocess. The denominator phase runs
+||| installNeededDepsIntoFork (fork compiler → shared ~/.idris2 + in-process env
+||| state) which makes the in-same-process pack-wrapper WASM build flaky
+||| ("installed with an older compiler version"). Running deploy+build+collect as
+||| a separate OS process (clean env/state, only the pre-computed dumppaths passed
+||| in) sidesteps that interference. The child writes covered path-ids to hitsOut.
+runNumeratorSubprocess : Options -> (ipkgPath : String) -> (dumppathsContent : String)
+                       -> IO (Either String (List PathRuntimeHit))
+runNumeratorSubprocess opts ipkgPath dumppathsContent = do
+  t <- time
+  let dumpFile = "/tmp/dfxcov-phase1-dumppaths-" ++ show t ++ ".json"
+  let hitsFile = "/tmp/dfxcov-phase2-hits-" ++ show t ++ ".txt"
+  let logFile  = "/tmp/dfxcov-phase2-" ++ show t ++ ".log"
+  -- The child MUST be launched via the chez WRAPPER script (build/exec/<name>),
+  -- not the raw .so (build/exec/<name>_app/<name>.so): the wrapper exports
+  -- DYLD_LIBRARY_PATH/LD_LIBRARY_PATH for libidris2_support. argv[0] may be either,
+  -- so derive the wrapper: strip a trailing "_app/<name>.so" segment if present.
+  let childExe = wrapperFromArgv0 opts.selfPath
+  Right () <- writeFile dumpFile dumppathsContent
+    | Left err => pure $ Left $ "Failed to write phase-1 dumppaths: " ++ show err
+  _ <- system $ "rm -f " ++ hitsFile
+  let canisterArg = maybe "" (\c => " --canister " ++ c) opts.canisterName
+  -- Spawn the child with a NORMAL env: the idris2-dfx-cov chez binary itself needs
+  -- IDRIS2_PREFIX/IDRIS2_LIBS at startup to load libidris2_support (stripping them
+  -- with `env -u` here caused a dlopen failure → zero hits collected). The INNER
+  -- WASM build (buildWasmViaIcWasmCli) applies its own env -u IDRIS2_BIN /
+  -- IDRIS2_PACKAGE_PATH + clean IDRIS2_PREFIX isolation, so the fork compiler is
+  -- still kept out of the numerator build. We only unset IDRIS2_BIN here so the
+  -- child does not inherit the fork as its DEFAULT compiler.
+  let cmd = "env -u IDRIS2_BIN "
+          ++ "\"" ++ childExe ++ "\" paths --numerator-only"
+          ++ " --ipkg \"" ++ ipkgPath ++ "\""
+          ++ " --dumppaths-json \"" ++ dumpFile ++ "\""
+          ++ " --hits-out \"" ++ hitsFile ++ "\""
+          ++ " --network " ++ opts.network
+          ++ canisterArg
+          ++ " > " ++ logFile ++ " 2>&1"
+  rc <- system cmd
+  hitsResult <- loadPathHits (Just hitsFile)
+  _ <- system $ "rm -f " ++ dumpFile ++ " " ++ hitsFile
+  case hitsResult of
+    Right hits =>
+      if rc == 0
+         then pure (Right hits)
+         else if not (null hits)
+                 then pure (Right hits)  -- child exited nonzero but produced hits
+                 else do
+                   logTail <- readFile logFile
+                   let tailMsg = case logTail of
+                                   Right c => unlines (reverse (take 15 (reverse (lines c))))
+                                   Left _ => ""
+                   pure $ Left $ "phase-2 numerator subprocess failed (rc=" ++ show rc
+                              ++ ")\n" ++ tailMsg
+    Left _ => pure (Right [])  -- no hits file → empty numerator (denominator still real)
+
 runPathFullPipelineArtifacts : Options -> IO (Either String (String, List PathRuntimeHit))
 runPathFullPipelineArtifacts opts = do
   ipkgResult <- resolveIpkgForPaths opts
@@ -1031,74 +1169,28 @@ runPathFullPipelineArtifacts opts = do
         Left err => do
           cleanupGeneratedDumppathsIpkg staticIpkgPath
           pure $ Left err
-        Right dumppathsContent => do
-          staticResult <- runAndAnalyzeDumpcases staticProjectDir staticIpkgName
-          case staticResult of
-            Left err => do
-              cleanupGeneratedDumppathsIpkg staticIpkgPath
-              pure $ Left err
-            Right staticAnalysis => do
-              let defaultCanister = pack (takeWhile (/= '.') (unpack originalIpkgName))
-              canister <- case opts.canisterName of
-                Just name => pure name
-                Nothing => detectCanisterName projectDir defaultCanister
-              let deployOpts =
-                    { canisterName := canister
-                    , network := opts.network
-                    , dfxPath := "dfx"
-                    , projectDir := projectDir
-                    , instrumentBranchProbes := True
-                    , forTestBuild := False
-                    } defaultDeployOptions
-              -- For COVERAGE we always build the test-harness canister
-              -- (forTestBuild := True): it exposes the runTests* methods the
-              -- numerator calls AND instruments the test-exercised code with branch
-              -- probes. The old code first tried a forTestBuild:=False build (the
-              -- real canister Main, which exposes no test methods and serves no
-              -- coverage purpose) and only fell back on failure — that double-build
-              -- re-polluted ~/.idris2 and made the producer report the wrong (failed)
-              -- attempt's status even when the test-harness build succeeded. Single
-              -- forTestBuild build, isolated via IDRIS2_PREFIX in buildWasmViaIcWasmCli.
-              deployResult' <- the (IO (Either String String)) $
-                ensureDeployed ({ forTestBuild := True } deployOpts)
-              case deployResult' of
-                Left err => pure $ Left err
-                Right _ => do
-                  let batchMethods =
-                        map (\idx => "runTestBatch" ++ show idx)
-                          [0, 1, 2]
-                  let methods = "runTests" :: "runMinimalTests" :: "runTrivialTest" :: batchMethods
-                  callResult <- runProjectMethods
-                                  projectDir
-                                  canister
-                                  methods
-                                  opts.network
-                  case callResult of
-                    Left err => do
-                      cleanupGeneratedDumppathsIpkg staticIpkgPath
-                      pure $ Left err
-                    Right _ => do
-                      probeSuccesses <- runProjectProbeCalls projectDir canister opts.network
-                      let branchProbeMapPath = projectDir ++ "/build/idris2-branch-probes.csv"
-                      hitsResult <- analyzePathHitsFromBranchProbeFiles
-                                     dumppathsContent
-                                     staticAnalysis
-                                     branchProbeMapPath
-                                     (Just projectDir)
-                                     canister
-                                     opts.network
-                      cleanupGeneratedDumppathsIpkg staticIpkgPath
-                      -- HONESTY: the numerator is ONLY the real branch-probe hits
-                      -- collected from the live canister (__get_branch_probes), NOT
-                      -- the old synthetic method→function mapping (methodPathHitsFromContent),
-                      -- which fabricated coverage from a hardcoded allowlist without
-                      -- observing execution. Real in-environment hits only.
-                      pure $ map (\hits => (dumppathsContent, hits)) hitsResult
+        Right dumppathsContent => if not opts.numeratorOnly
+          then do
+            -- ORCHESTRATOR (phase 1 done): denominator computed in THIS process
+            -- (which ran the fork dep-install). Run the numerator (deploy + build +
+            -- collect) in a FRESH subprocess so the fork-polluted in-process/env
+            -- state can't break the pack-wrapper WASM build.
+            cleanupGeneratedDumppathsIpkg staticIpkgPath
+            hitsResult <- runNumeratorSubprocess opts ipkgPath dumppathsContent
+            pure $ map (\hits => (dumppathsContent, hits)) hitsResult
+          else
+            -- PHASE 2 (numerator-only, fresh process): no fork dep-install ran in
+            -- this process; do deploy + call + collect, then persist hits to hitsOut.
+            runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName
+              staticIpkgPath projectDir originalIpkgName dumppathsContent
 
 runPaths : Options -> IO ()
 runPaths opts = do
   artifactsResult <-
-    if opts.fullPipeline
+    if opts.fullPipeline || opts.numeratorOnly
+       -- numeratorOnly also routes here: runPathFullPipelineArtifacts takes its
+       -- numerator-only sub-branch (reads the provided dumppaths, skips the
+       -- denominator, deploys+collects, writes hits-out).
        then runPathFullPipelineArtifacts opts
        else do
          pathHitsResult <-
@@ -1149,7 +1241,8 @@ runPaths opts = do
 main : IO ()
 main = do
   args <- getArgs
-  let opts = parseArgs (drop 1 args) defaultOptions
+  let self = fromMaybe "idris2-dfx-cov" (head' args)
+  let opts = parseArgs (drop 1 args) ({ selfPath := self } defaultOptions)
   if opts.showHelp
      then putStrLn helpText
      else if opts.showVersion
