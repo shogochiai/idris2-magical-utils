@@ -1056,12 +1056,10 @@ runNumeratorInProcess : Options -> (ipkgPath : String)
                       -> (originalIpkgName : String) -> (dumppathsContent : String)
                       -> IO (Either String (String, List PathRuntimeHit))
 runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPath projectDir originalIpkgName dumppathsContent = do
-  staticResult <- runAndAnalyzeDumpcases staticProjectDir staticIpkgName
-  case staticResult of
-    Left err => do
-      cleanupGeneratedDumppathsIpkg staticIpkgPath
-      pure $ Left err
-    Right staticAnalysis => do
+  -- The identity-join numerator (recorded canonical path-ids ∩ dumppaths path_ids)
+  -- does NOT need dumpcases/StaticBranchAnalysis — that was only for the old
+  -- probe-index↔branch-id bridge. Go straight to deploy + __get_path_hits.
+  do
       let defaultCanister = pack (takeWhile (/= '.') (unpack originalIpkgName))
       canister <- case opts.canisterName of
         Just name => pure name

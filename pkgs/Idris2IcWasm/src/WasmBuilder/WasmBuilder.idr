@@ -1069,8 +1069,16 @@ compileToRefC opts buildDir = do
             ++ joinBy " " candidateDirs
             ++ " -name \"*.c\" -delete 2>/dev/null || true; rm -f "
             ++ outputBase ++ ".c'"
+      -- Path-coverage: enable --dumppathshits so the (forked) compiler injects
+      -- prim__recordPathHit at every CaseTree leaf → idris2_recordPathHit (pathcov.c).
+      -- The file arg content is irrelevant for WASM (recording is in-memory).
+      let pathHitsFlag =
+            if opts'.instrumentPathHits
+               then "--dumppathshits " ++ tempDir ++ "/.pathhits-enable "
+               else ""
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
                 idris2Bin ++ " --codegen refc " ++
+                pathHitsFlag ++
                 "--source-dir " ++ tempSrcDir ++ " " ++
                 pkgFlags ++ " " ++
                 "-o " ++ outputBase ++ " " ++
@@ -1344,6 +1352,7 @@ compileToWasm cFile refcSrc miniGmp ic0Support outputWasm = do
   let refcForceIncludeFlags = "-DIDRIS2_ICWASM_HAS_REFC_HEADERS=1 " ++
                               "-Didris2_cast_string_to_Integer=idris2_cast_String_to_Integer " ++
                               "-include " ++ refcSrc ++ "/cBackend.h " ++
+                              "-include " ++ refcSrc ++ "/pathcov.h " ++
                               "-include " ++ miniGmp ++ "/gmp.h "
   extraIncludeDirs <- findExtraIncludeDirs ic0Support
   let extraIncludeFlags = unwords $ map (\d => "-I" ++ d) extraIncludeDirs
@@ -1452,6 +1461,7 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
   let refcForceIncludeFlags = "-DIDRIS2_ICWASM_HAS_REFC_HEADERS=1 " ++
                               "-Didris2_cast_string_to_Integer=idris2_cast_String_to_Integer " ++
                               "-include " ++ refcSrc ++ "/cBackend.h " ++
+                              "-include " ++ refcSrc ++ "/pathcov.h " ++
                               "-include " ++ miniGmp ++ "/gmp.h "
   extraIncludeDirs <- findExtraIncludeDirs ic0Support
   let extraIncludeFlags = unwords $ map (\d => "-I" ++ d) extraIncludeDirs

@@ -270,8 +270,8 @@ ensureProjectIc0Support projectDir = do
 ||| are otherwise absent and the build fails with "Can't find package <dep>".
 ||| Installing them all in ONE `pack install` call (idempotent, env -u so the
 ||| wrapper toolchain is used) keeps the package-path stable for the build.
-installCanisterDepsViaPack : String -> IO ()
-installCanisterDepsViaPack projectDir = do
+installCanisterDepsViaPack : (instrumentPathHits : Bool) -> String -> IO ()
+installCanisterDepsViaPack instrumentPathHits projectDir = do
   -- Collect `depends` lists from the project's stable ipkgs (skip generated temps).
   let stableIpkgFilter = " ! -name 'temp*.ipkg' ! -name 'dumpcases-temp-*.ipkg' ! -name 'dfx-dumppaths-temp-*.ipkg' ! -name '*-temp-*.ipkg' ! -name 'canister-dfxprepared-*.ipkg'"
   (_, ipkgList, _) <- executeCommand $
@@ -279,7 +279,24 @@ installCanisterDepsViaPack projectDir = do
   let ipkgs = filter (not . null) (map trim (lines ipkgList))
   rawDeps <- traverse readDependsLine ipkgs
   let deps = nub (filter isCustomDep (concat rawDeps))
-  unless (null deps) $ do
+  unless (null deps) $
+    if instrumentPathHits
+       then do
+         -- Path-hits build uses the FORKED compiler for codegen (--dumppathshits),
+         -- so it must resolve FORK-built dep TTCs. Do NOT evict them; instead
+         -- (re)install each dep with the fork into ~/.idris2 so the fork codegen
+         -- resolves them. (pack-built TTCs are released-compiler and would be
+         -- rejected by the fork as "older compiler version".)
+         putStrLn $ "    [dep-install] fork-installing deps for path-hits build: " ++ show deps
+         let forkBin = "/Users/bob/code/idrislang-idris2/build/exec/idris2"
+         let installLog = "/tmp/dfxcov-dep-install.log"
+         rc <- system $ "cd \"" ++ projectDir ++ "\""
+                     ++ " && IDRIS2_BIN=" ++ forkBin
+                     ++ " env -u IDRIS2_PACKAGE_PATH pack install "
+                     ++ unwords deps ++ " > " ++ installLog ++ " 2>&1"
+         putStrLn $ "    [dep-install] fork pack install exit=" ++ show rc ++ " (log: " ++ installLog ++ ")"
+         pure ()
+    else do
     -- THE FIX for denominator→numerator pollution (2026-06-22, verified):
     -- The denominator (chunked dumppaths) step's installNeededDepsIntoFork runs
     -- `idris2 --install` with the FORKED compiler, which writes FORK-built TTCs to
@@ -473,7 +490,22 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
       -- recompute it. Verified: `env -u IDRIS2_PACKAGE_PATH IDRIS2_BIN= idris2 --check
       -- -p idris2-icwasm` resolves; `IDRIS2_PACKAGE_PATH= ...` does NOT. CPATH (GMP
       -- include) is still threaded as a normal assignment.
-      let unsetPrefix = ["env", "-u", "IDRIS2_BIN", "-u", "IDRIS2_PACKAGE_PATH"]
+      -- Path-coverage instrumentation (--path-hits) REQUIRES the forked compiler:
+      -- the pack-managed released idris2 silently ignores --dumppathshits (it lacks
+      -- the CompileExpr pass), so the WASM gets the __get_path_hits query export but
+      -- NO idris2_recordPathHit calls → 0 recorded hits. Use the fork for codegen,
+      -- and give it the pack-computed IDRIS2_PACKAGE_PATH so `-p idris2-icwasm` still
+      -- resolves (the fork's own package path lacks it). For non-instrumented builds
+      -- keep the original pack-wrapper path (env -u both).
+      forkBin <- getEnv "IDRIS2_PATHCOV_FORK_BIN"
+      let forkPath = fromMaybe "/Users/bob/code/idrislang-idris2/build/exec/idris2"
+                              (map trim forkBin)
+      let unsetPrefix =
+            if opts.instrumentPathHits
+               then [ "env"
+                    , "IDRIS2_BIN=" ++ shellQuote forkPath
+                    , "IDRIS2_PACKAGE_PATH=\"$(pack package-path)\"" ]
+               else ["env", "-u", "IDRIS2_BIN", "-u", "IDRIS2_PACKAGE_PATH"]
       let cpathAssign = maybe [] (\v => ["CPATH=" ++ shellQuote v]) cpathValue
       -- ISOLATE the numerator build from the denominator's ~/.idris2 pollution.
       -- The denominator (chunked dumppaths) step's installNeededDepsIntoFork builds
@@ -626,7 +658,7 @@ public export
 ensureDeployed : DeployOptions -> IO (Either String String)
 ensureDeployed opts = do
   ensureProjectIc0Support opts.projectDir
-  installCanisterDepsViaPack opts.projectDir
+  installCanisterDepsViaPack opts.instrumentPathHits opts.projectDir
   -- Step 1: Build WASM (always rebuild to avoid cache bugs)
   -- forTestBuild generates temp Main.idr in /tmp importing Tests.AllTests (atomic)
   -- First, find test module if forTestBuild is enabled
