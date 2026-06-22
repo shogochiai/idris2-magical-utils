@@ -9,6 +9,11 @@ import DfxCoverage.CanisterCall
 import DfxCoverage.Exclusions
 
 import Coverage.Standardization.Types
+-- Reuse core's OOM-safe chunked dumppaths producer (runStaticDumppathsJson):
+-- it peeks the module count and, for large packages (e.g. GlobalRegistry, 181
+-- modules), skips the whole-package `--dumppaths-json` build (which the OS
+-- OOM-kills) and chunks modules into sequential groups of 8 with bounded memory.
+import Coverage.UnifiedRunner as CoreUnified
 import Data.List
 import Data.List1
 import Data.Maybe
@@ -1001,13 +1006,27 @@ runPathFullPipelineArtifacts opts = do
       let (projectDir, originalIpkgName) = splitPath ipkgPath
       staticIpkgPath <- prepareDumppathsIpkg ipkgPath
       let (staticProjectDir, staticIpkgName) = splitPath staticIpkgPath
-      dumppathsResult <-
+      dumppathsResult <- the (IO (Either String String)) $
         case opts.dumppathsJson of
           Just path => do
             Right content <- readFile path
               | Left err => pure $ Left $ "Failed to read dumppaths JSON: " ++ show err
             pure $ Right content
-          Nothing => runDumppathsJsonPrepared staticIpkgPath
+          Nothing => do
+            -- OOM-safe denominator: chunk large packages (core's producer peeks the
+            -- module count and chunks > 40 modules into sequential groups of 8).
+            -- The whole-package runDumppathsJsonPrepared OOM-kills on big canisters
+            -- (GlobalRegistry, 181 modules → idris2 SIGKILL). Fall back to the whole
+            -- build only if the chunked producer itself errs (small packages, or a
+            -- chunking edge case).
+            chunked <- CoreUnified.runStaticDumppathsJson staticIpkgPath
+            case chunked of
+              Right content => pure (Right content)
+              Left chunkErr => do
+                whole <- runDumppathsJsonPrepared staticIpkgPath
+                pure $ case whole of
+                  Right content => Right content
+                  Left wholeErr => Left (chunkErr ++ "\n(whole-package fallback also failed) " ++ wholeErr)
       case dumppathsResult of
         Left err => do
           cleanupGeneratedDumppathsIpkg staticIpkgPath
@@ -1031,15 +1050,17 @@ runPathFullPipelineArtifacts opts = do
                     , instrumentBranchProbes := True
                     , forTestBuild := False
                     } defaultDeployOptions
-              hasNativeTestEntrypoints <- projectHasNativeTestEntrypoints ipkgPath
-              deployResult <- the (IO (Either String String)) $
-                if hasNativeTestEntrypoints
-                   then ensureDeployed deployOpts
-                   else ensureDeployed ({ forTestBuild := True } deployOpts)
+              -- For COVERAGE we always build the test-harness canister
+              -- (forTestBuild := True): it exposes the runTests* methods the
+              -- numerator calls AND instruments the test-exercised code with branch
+              -- probes. The old code first tried a forTestBuild:=False build (the
+              -- real canister Main, which exposes no test methods and serves no
+              -- coverage purpose) and only fell back on failure — that double-build
+              -- re-polluted ~/.idris2 and made the producer report the wrong (failed)
+              -- attempt's status even when the test-harness build succeeded. Single
+              -- forTestBuild build, isolated via IDRIS2_PREFIX in buildWasmViaIcWasmCli.
               deployResult' <- the (IO (Either String String)) $
-                case deployResult of
-                  Right ok => pure (Right ok)
-                  Left _ => ensureDeployed ({ forTestBuild := True } deployOpts)
+                ensureDeployed ({ forTestBuild := True } deployOpts)
               case deployResult' of
                 Left err => pure $ Left err
                 Right _ => do
@@ -1067,8 +1088,12 @@ runPathFullPipelineArtifacts opts = do
                                      canister
                                      opts.network
                       cleanupGeneratedDumppathsIpkg staticIpkgPath
-                      let syntheticHits = methodPathHitsFromContent dumppathsContent (methods ++ probeSuccesses)
-                      pure $ map (\hits => (dumppathsContent, syntheticHits ++ hits)) hitsResult
+                      -- HONESTY: the numerator is ONLY the real branch-probe hits
+                      -- collected from the live canister (__get_branch_probes), NOT
+                      -- the old synthetic method→function mapping (methodPathHitsFromContent),
+                      -- which fabricated coverage from a hardcoded allowlist without
+                      -- observing execution. Real in-environment hits only.
+                      pure $ map (\hits => (dumppathsContent, hits)) hitsResult
 
 runPaths : Options -> IO ()
 runPaths opts = do

@@ -685,6 +685,21 @@ generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrum
         , "typedef struct { uint16_t refCounter; uint8_t tag; uint8_t reserved; } Value_header;"
         , "typedef struct { Value_header header; int32_t total; int32_t tag; char const *name; void* args[]; } Value_Constructor;"
         , "typedef void Value;"
+        , "#else"
+        , "/* RefC headers ARE present (IDRIS2_ICWASM_HAS_REFC_HEADERS=1). Newer RefC"
+        , "   (forked idris2 / 0.8.0) renamed the value types to the Idris2_* family"
+        , "   (Idris2_Value / Idris2_header / Idris2_Constructor). Alias the legacy"
+        , "   Value / Value_header / Value_Constructor names this generated entry uses"
+        , "   onto them so the entry compiles against the real runtime headers"
+        , "   (previously these names were undefined here → 'unknown type name Value')."
+        , "   The idris2_trampoline / idris2_apply_closure / idris2_newReference funcs"
+        , "   keep their names across versions, so only the TYPES need aliasing. */"
+        , "#ifndef IDRIS2_ICWASM_VALUE_COMPAT_ALIASES"
+        , "#define IDRIS2_ICWASM_VALUE_COMPAT_ALIASES 1"
+        , "typedef Idris2_Value Value;"
+        , "typedef Idris2_header Value_header;"
+        , "typedef Idris2_Constructor Value_Constructor;"
+        , "#endif"
         , "#endif"
         , "extern Value* __mainExpression_0(void);"
         , "extern Value* idris2_trampoline(Value*);"
@@ -1521,9 +1536,28 @@ findDidFile projectDir = do
 ||| This is required because top-level `IO a` exports may compile either as:
 ||| - unary symbols accepting the world directly, or
 ||| - nullary symbols returning an IO closure
+||| Normalize RefC value-type naming so the arity patterns match across compiler
+||| versions. Newer RefC (forked idris2 / 0.8.0) emits `Idris2_Value *Foo(...)`
+||| signatures; the patterns below were written for the older bare `Value *Foo`.
+||| Without this, EVERY export's arity inference silently fails (the C never
+||| contains a bare `Value *` signature) → "Failed to infer RefC arity for one or
+||| more exports", which blocked the dfx coverage test-build entirely.
+normalizeRefCValueType : String -> String
+normalizeRefCValueType s =
+  pack (go (unpack s))
+  where
+    needle : List Char
+    needle = unpack "Idris2_Value"
+    go : List Char -> List Char
+    go [] = []
+    go cs@(c :: rest) =
+      if isPrefixOf needle cs
+         then unpack "Value" ++ go (drop (length needle) cs)
+         else c :: go rest
+
 parseRefCExportArities : String -> String -> List ExportedFunc -> List (String, RefCArity)
 parseRefCExportArities modulePrefix cContent exports =
-  let ls = lines cContent
+  let ls = map normalizeRefCValueType (lines cContent)
   in mapMaybe (parseOne ls) exports
   where
     targetName : ExportedFunc -> String

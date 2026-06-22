@@ -5,6 +5,7 @@
 module DfxCoverage.CanisterCall
 
 import Data.List
+import Data.List1
 import Data.Maybe
 import Data.String
 import System
@@ -259,6 +260,84 @@ ensureProjectIc0Support projectDir = do
                  pure ()
   pure ()
 
+||| Ensure the canister's custom (non-stdlib) deps are pack-installed so the
+||| numerator WASM build's `idris2 -p <dep>` resolves them. The build uses the
+||| pack-wrapper idris2 (IDRIS2_BIN/IDRIS2_PACKAGE_PATH unset → wrapper runs
+||| `pack package-path`), and `pack package-path` only lists packages that have
+||| been `pack install`ed — local custom packages (e.g. icp-indexer, idris2-cdk)
+||| are otherwise absent and the build fails with "Can't find package <dep>".
+||| Installing them all in ONE `pack install` call (idempotent, env -u so the
+||| wrapper toolchain is used) keeps the package-path stable for the build.
+installCanisterDepsViaPack : String -> IO ()
+installCanisterDepsViaPack projectDir = do
+  -- Collect `depends` lists from the project's stable ipkgs (skip generated temps).
+  let stableIpkgFilter = " ! -name 'temp*.ipkg' ! -name 'dumpcases-temp-*.ipkg' ! -name 'dfx-dumppaths-temp-*.ipkg' ! -name '*-temp-*.ipkg' ! -name 'canister-dfxprepared-*.ipkg'"
+  (_, ipkgList, _) <- executeCommand $
+    "find " ++ projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f" ++ stableIpkgFilter
+  let ipkgs = filter (not . null) (map trim (lines ipkgList))
+  rawDeps <- traverse readDependsLine ipkgs
+  let deps = nub (filter isCustomDep (concat rawDeps))
+  unless (null deps) $ do
+    -- THE FIX for denominator→numerator pollution (2026-06-22, verified):
+    -- The denominator (chunked dumppaths) step's installNeededDepsIntoFork runs
+    -- `idris2 --install` with the FORKED compiler, which writes FORK-built TTCs to
+    -- the SHARED ~/.idris2/idris2-0.8.0/<dep>-*. idris2's default lib dir (~/.idris2)
+    -- then SHADOWS the pack store, so the numerator pack-wrapper build resolves the
+    -- fork-built TTCs → "installed with an older compiler version".
+    --   FIX: remove the fork-polluted ~/.idris2/<dep>-* dirs before the build. The
+    -- pack STORE still holds the correct pack-built copies, and the wrapper's
+    -- IDRIS2_PACKAGE_PATH (= `pack package-path`) points there — so with ~/.idris2
+    -- clean, the build resolves the pack-built deps. (pack install does NOT
+    -- repopulate ~/.idris2 and is a no-op once its store DB says installed, so the
+    -- rm is the operative step; the pack install below only matters on a clean tree
+    -- where the store itself lacks a dep.) Verified: fork-pollute ~/.idris2 then rm
+    -- → WASM build reaches "Build complete".
+    putStrLn $ "    [dep-install] evicting fork-built deps from ~/.idris2 + pack install: " ++ show deps
+    _ <- system $ "rm -rf "
+                ++ unwords (map (\d => "\"$HOME/.idris2/idris2-0.8.0/" ++ d ++ "-\"*") deps)
+    let installLog = "/tmp/dfxcov-dep-install.log"
+    rc <- system $ "cd \"" ++ projectDir ++ "\""
+                ++ " && env -u IDRIS2_BIN -u IDRIS2_PACKAGE_PATH pack install "
+                ++ unwords deps ++ " > " ++ installLog ++ " 2>&1"
+    putStrLn $ "    [dep-install] pack install exit=" ++ show rc ++ " (log: " ++ installLog ++ ")"
+    pure ()
+  where
+    -- stdlib / always-available packages need no install
+    isCustomDep : String -> Bool
+    isCustomDep d = not (elem d ["base", "contrib", "prelude", "network", "linear", "test"])
+    readDependsLine : String -> IO (List String)
+    readDependsLine path = do
+      Right content <- readFile path
+        | Left _ => pure []
+      -- `depends` can span MULTIPLE lines (ipkg continuation style):
+      --   depends = base, idris2-test-suite
+      --           , idris2-cdk
+      --           , icp-indexer
+      -- Collect the `depends =` line AND its leading-comma continuation lines.
+      let depBlock = collectDependsBlock (lines content) False
+      pure $ concatMap parseDeps depBlock
+      where
+        parseDeps : String -> List String
+        parseDeps l =
+          let afterEq = case break (== '=') (unpack l) of
+                          (_, rest) => pack (drop 1 rest)  -- strip up to and incl '='
+              -- continuation lines have no '=', so afterEq drops nothing → keep whole
+              src = if isInfixOf "=" l then afterEq else l
+              parts = map trim (forget (split (== ',') src))
+          in filter (\p => not (null p)) parts
+        -- Gather the depends line and subsequent continuation lines (start with ',').
+        collectDependsBlock : List String -> Bool -> List String
+        collectDependsBlock [] _ = []
+        collectDependsBlock (l :: ls) inBlock =
+          let t = trim l in
+          if not inBlock
+            then if isInfixOf "depends" l && isInfixOf "=" l
+                   then l :: collectDependsBlock ls True
+                   else collectDependsBlock ls False
+            else if isPrefixOf "," t
+                   then l :: collectDependsBlock ls True
+                   else collectDependsBlock ls False  -- block ended; keep scanning for other ipkg sections
+
 probeExecutable : List String -> IO (Maybe String)
 probeExecutable [] = pure Nothing
 probeExecutable (candidate :: rest) =
@@ -353,28 +432,52 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
   case mIcWasm of
     Nothing => pure (Left "Unable to locate idris2-icwasm executable")
     Just icwasmBin => do
-      mPackagePath <- getEnv "IDRIS2_PACKAGE_PATH"
-      discoveredPackagePath <- discoverPackagePath
+      -- NOTE: we intentionally no longer reconstruct IDRIS2_PACKAGE_PATH (the old
+      -- mPackagePath/discoverPackagePath path). The pack wrapper `idris2` computes
+      -- the correct package path via `pack package-path`; pre-setting it broke
+      -- `-p idris2-icwasm` resolution. See the env block below.
       mCPath <- getEnv "CPATH"
       mGmpInclude <- resolveGmpIncludePath opts.projectDir
-      let packagePathValue =
-            case mPackagePath of
-              Just old => Just old
-              Nothing =>
-                if null discoveredPackagePath
-                   then Nothing
-                   else Just discoveredPackagePath
       let cpathValue =
             case mGmpInclude of
               Nothing => mCPath
               Just inc => Just $ case mCPath of
                                    Nothing => inc
                                    Just old => inc ++ ":" ++ old
-      let envVars =
-            catMaybes
-              [ map (\v => "IDRIS2_PACKAGE_PATH=" ++ shellQuote v) packagePathValue
-              , map (\v => "CPATH=" ++ shellQuote v) cpathValue
-              ]
+      -- The numerator WASM build must use the PACK-MANAGED idris2, NOT the forked
+      -- compiler that the coverage run sets via IDRIS2_BIN for the dumppaths
+      -- denominator (the fork's package path lacks the idris2-icwasm library).
+      --
+      -- ROOT CAUSE + FIX (2026-06-22): `~/.local/bin/idris2` is a PACK WRAPPER that
+      -- does `export IDRIS2_PACKAGE_PATH="$(pack package-path)"` — i.e. it computes
+      -- the CORRECT per-dep versioned package path itself. The old code instead
+      -- PRE-SET IDRIS2_PACKAGE_PATH to a reconstructed value (discoverPackagePath)
+      -- that does NOT match pack's structure, so `-p idris2-icwasm` failed with
+      -- "Package idris2-icwasm is not built or installed". The fix is to UNSET both
+      -- IDRIS2_BIN (so idris2-icwasm's resolveIdris2Bin falls back to the wrapper
+      -- `idris2`) and IDRIS2_PACKAGE_PATH (so the wrapper runs `pack package-path`).
+      -- CRITICAL: must UNSET via `env -u`, not set EMPTY (`VAR=`): empty
+      -- IDRIS2_PACKAGE_PATH is honoured as "no search path" and still breaks
+      -- `-p idris2-icwasm`, whereas `env -u IDRIS2_PACKAGE_PATH` lets the wrapper
+      -- recompute it. Verified: `env -u IDRIS2_PACKAGE_PATH IDRIS2_BIN= idris2 --check
+      -- -p idris2-icwasm` resolves; `IDRIS2_PACKAGE_PATH= ...` does NOT. CPATH (GMP
+      -- include) is still threaded as a normal assignment.
+      let unsetPrefix = ["env", "-u", "IDRIS2_BIN", "-u", "IDRIS2_PACKAGE_PATH"]
+      let cpathAssign = maybe [] (\v => ["CPATH=" ++ shellQuote v]) cpathValue
+      -- ISOLATE the numerator build from the denominator's ~/.idris2 pollution.
+      -- The denominator (chunked dumppaths) step's installNeededDepsIntoFork builds
+      -- the canister deps (idris2-icwasm, ...) into the SHARED ~/.idris2/idris2-0.8.0
+      -- against the FORKED compiler; the pack-wrapper numerator build would then
+      -- resolve those fork-built TTCs → "installed with an older compiler version".
+      -- Pointing IDRIS2_PREFIX at a CLEAN temp dir makes idris2 ignore the polluted
+      -- ~/.idris2 lib path entirely, while the pack wrapper still supplies the
+      -- pack-built deps via `pack package-path` (IDRIS2_PACKAGE_PATH, independent of
+      -- PREFIX). Verified: with ~/.idris2 fork-polluted, a clean IDRIS2_PREFIX build
+      -- still reaches "Build complete".
+      t <- time
+      let cleanPrefix = "/tmp/idris2-dfxcov-prefix-" ++ show t
+      _ <- system $ "mkdir -p " ++ shellQuote (cleanPrefix ++ "/idris2-0.8.0")
+      let prefixAssign = ["IDRIS2_PREFIX=" ++ shellQuote cleanPrefix]
       let baseArgs =
             [ "build"
             , "--project=" ++ opts.projectDir
@@ -388,7 +491,7 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
                then "--for-test-build" ::
                     maybe [] (\path => ["--test-module=" ++ path]) testModPath
                else []
-      let cmd = unwords (envVars ++ (icwasmBin :: baseArgs ++ probeArgs ++ testArgs))
+      let cmd = unwords (unsetPrefix ++ prefixAssign ++ cpathAssign ++ (icwasmBin :: baseArgs ++ probeArgs ++ testArgs))
       (exitCode, stdout, stderr) <- executeCommand cmd
       if exitCode /= 0
          then pure (Left (if null stderr then stdout else stderr))
@@ -510,6 +613,7 @@ public export
 ensureDeployed : DeployOptions -> IO (Either String String)
 ensureDeployed opts = do
   ensureProjectIc0Support opts.projectDir
+  installCanisterDepsViaPack opts.projectDir
   -- Step 1: Build WASM (always rebuild to avoid cache bugs)
   -- forTestBuild generates temp Main.idr in /tmp importing Tests.AllTests (atomic)
   -- First, find test module if forTestBuild is enabled

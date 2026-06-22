@@ -11,6 +11,7 @@ import EvmCoverage.Exclusions
 import Coverage.Core.DumppathsJson
 import public Coverage.Core.PathCoverage
 import public Coverage.Core.RuntimeHit
+import Coverage.Standardization.Types
 
 %default covering
 
@@ -43,6 +44,15 @@ isNonProductEvmFunction name =
   || isInfixOf "Test." name
   || isInfixOf ".Storages." name
   || isInfixOf ".Schema" name
+
+||| Standard-library / prelude functions are outside the product coverage model
+||| (same policy as core's isStandardLibraryName). Excluding them is legitimate,
+||| not silent truncation — they are reported as excluded-with-reason.
+isStandardLibraryEvmFunction : String -> Bool
+isStandardLibraryEvmFunction name =
+  any (\p => isPrefixOf p name)
+    [ "Prelude.", "Builtin.", "PrimIO.", "Data.", "System."
+    , "Control.", "Decidable.", "Language.", "Debug." ]
 
 isUninstrumentedStraightLinePath : PathObligation -> Bool
 isUninstrumentedStraightLinePath path =
@@ -113,10 +123,62 @@ shouldExcludePath patterns path =
   || isKnownConstantUnreachableEvmPath path
   || isKnownYulBranchLabelMismatch path
 
+||| Classify an EVM exclusion into the shared ObligationClass taxonomy WITH a
+||| recorded reason, instead of silently deleting the path from the denominator.
+||| This is the anti-"hallucinated perfection" rule: every source path stays in
+||| the set with an honest classification (so denominator + excluded + unknown
+||| == total source paths), rather than vanishing and inflating coverage %.
+|||   - non-product (test/schema/storage), generated record projection,
+|||     uninstrumented straight-line, known Yul branch-label collapse
+|||       → CompilerInsertedArtifact (genuinely outside the product coverage model)
+|||   - known constant-false guard → LogicallyUnreachable
+||| Returns the target class + a human reason, or Nothing if the path is a
+||| normal product obligation (left as-is).
+export
+classifyEvmExclusion : List ExclPattern -> PathObligation -> Maybe (ObligationClass, String)
+classifyEvmExclusion patterns path =
+  if isExcluded path.functionName patterns
+    then Just (CompilerInsertedArtifact, "config/dependency exclusion")
+  else if isNonProductEvmFunction path.functionName
+    then Just (CompilerInsertedArtifact, "non-product function (test/schema/storage/wrapper)")
+  else if isStandardLibraryEvmFunction path.functionName
+    then Just (CompilerInsertedArtifact, "standard library / prelude")
+  else if isKnownConstantUnreachableEvmPath path
+    then Just (LogicallyUnreachable, "constant-false guard (logically unreachable)")
+  else if isGeneratedRecordProjectionPath path
+    then Just (CompilerInsertedArtifact, "generated record projection")
+  else if isKnownYulBranchLabelMismatch path
+    then Just (CompilerInsertedArtifact, "Yul branch-label collapse (compiler artifact)")
+  else if isUninstrumentedStraightLinePath path
+    then Just (CompilerInsertedArtifact, "straight-line clause, no branch obligation")
+  else Nothing
+
 export
 defaultPathExclusions : List ExclPattern
 defaultPathExclusions = evmFullExclusions
 
+||| Reclassify (NOT delete) excluded paths. Each path stays in the list; an
+||| excluded path's `classification` is overridden with the target class so the
+||| shared coverage measurement counts it as excluded-with-reason instead of
+||| dropping it. IDEMPOTENCY GUARD: only override when the incoming class is
+||| ReachableObligation, so a re-parse of already-classified content (Main.idr's
+||| observability classifier round-trip) never resets a non-Reachable class back
+||| to Reachable.
+export
+reclassifyPathObligations : List ExclPattern -> List PathObligation -> List PathObligation
+reclassifyPathObligations patterns = map reclassify
+  where
+    reclassify : PathObligation -> PathObligation
+    reclassify path =
+      case path.classification of
+        ReachableObligation =>
+          case classifyEvmExclusion patterns path of
+            Just (cls, _) => { classification := cls } path
+            Nothing       => path
+        _ => path
+
+||| Deprecated delete-filter; kept for callers that explicitly want the pruned
+||| list. The coverage path uses reclassifyPathObligations (no silent deletion).
 export
 filterPathObligations : List ExclPattern -> List PathObligation -> List PathObligation
 filterPathObligations patterns =
@@ -126,7 +188,7 @@ export
 parseProjectDumppathsJson : List ExclPattern -> String -> Either String (List PathObligation)
 parseProjectDumppathsJson patterns content = do
   paths <- parseDumppathsJson content
-  pure $ filterPathObligations patterns paths
+  pure $ reclassifyPathObligations patterns paths
 
 export
 loadProjectDumppathsJson : String -> List ExclPattern -> IO (Either String (List PathObligation))

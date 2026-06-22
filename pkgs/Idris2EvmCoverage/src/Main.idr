@@ -424,16 +424,52 @@ observableBranchIdsFromLabels labels =
         Runtime.LKBranch => label.branchId
         _ => Nothing
 
-filterDumppathsToObservableBranches : String -> String -> IO (Either String String)
-filterDumppathsToObservableBranches dumppathsContent labelPath = do
+||| Classify each source path by EVM observability WITHOUT shrinking the
+||| denominator (the previous filterDumppathsToObservableBranches silently
+||| dropped non-observable paths → false 100%). Every source path is kept; a
+||| product (ReachableObligation) path is reclassified three ways:
+|||   - terminal branch materialized in the instrumented bytecode (∈ labels)
+|||       → ReachableObligation (a genuine obligation; covered iff hit at runtime)
+|||   - terminal branch resolvable but NOT materialized (Yul/solc optimized it away)
+|||       → CompilerInsertedArtifact (provably not an EVM-observable obligation)
+|||   - terminal branch unresolvable (cause undetermined)
+|||       → UnknownClassification (honesty backstop: flips claim_admissible False
+|||         under BlockCoverageClaim, surfacing the mapping gap instead of hiding it)
+||| `observableBranchIdsFromLabels` reads ALL LKBranch labels the instrumentor
+||| materialized (hit or not), so "∈ labels" means "materialized", distinct from
+||| "hit at runtime" (the numerator). The returned JSON carries the full path set
+||| with honest per-path classification for the shared coverage measurement.
+classifyDumppathsByObservability : String -> String -> IO (Either String String)
+classifyDumppathsByObservability dumppathsContent labelPath = do
   Right labels <- Runtime.loadLabels labelPath
     | Left err => pure $ Left err
   case parseProjectDumppathsJson defaultPathExclusions dumppathsContent of
     Left err => pure $ Left err
     Right paths =>
       let observableIds = observableBranchIdsFromLabels labels
-          observablePaths = filter (pathCoveredByBranchIds observableIds) paths
-      in pure $ Right $ pathObligationsToDumppathsJson observablePaths
+          classified = map (classifyByObservability observableIds) paths
+      in pure $ Right $ pathObligationsToDumppathsJson classified
+  where
+    classifyByObservability : List String -> PathObligation -> PathObligation
+    classifyByObservability observableIds path =
+      case path.classification of
+        -- Only product obligations are subject to observability reclassification.
+        -- Exclusion-reclassified paths (CompilerInsertedArtifact / etc.) are kept.
+        ReachableObligation =>
+          if pathCoveredByBranchIds observableIds path
+            then path  -- materialized as a distinct EVM branch: genuine obligation
+            else
+              -- A product source path that the EVM/Yul/solc pipeline did NOT
+              -- materialize as a distinct branch (inlined/merged/optimized). We
+              -- CANNOT prove from the trace whether it executed, so honesty
+              -- requires UnknownClassification (NOT CompilerInsertedArtifact):
+              -- it is excluded from the denominator but flips claim_admissible
+              -- False under BlockCoverageClaim, truthfully signalling that EVM
+              -- bytecode-level coverage cannot make a complete source-path claim.
+              -- (Genuinely-dead/stdlib/test paths are already CompilerInsertedArtifact
+              -- via classifyEvmExclusion before this point.)
+              { classification := UnknownClassification } path
+        _ => path
 
 coverageMeasurementToJson : CoverageMeasurement -> String
 coverageMeasurementToJson m = unlines
@@ -491,10 +527,13 @@ runPathFullPipelineArtifacts opts = do
           let traceOutput = outputDir ++ "/coverage-trace.csv"
           Right tracePath <- YulInstr.runIdrisEvmTest binPath traceOutput
             | Left err => pure $ Left $ "Execution failed: " ++ err
-          Right observableContent <- filterDumppathsToObservableBranches dumppathsContent labelPath
-            | Left err => pure $ Left $ "Observable path filtering failed: " ++ err
-          hitsResult <- analyzePathHitsFromTraceAndLabelsContent observableContent tracePath labelPath
-          pure $ map (\hits => (observableContent, hits)) hitsResult
+          -- Denominator = FULL source path set with honest observability
+          -- classification (no silent shrink). Numerator = observable trace hits
+          -- (the EVM trace can only see materialized branches; that is correct).
+          Right classifiedContent <- classifyDumppathsByObservability dumppathsContent labelPath
+            | Left err => pure $ Left $ "Observability classification failed: " ++ err
+          hitsResult <- analyzePathHitsFromTraceAndLabelsContent classifiedContent tracePath labelPath
+          pure $ map (\hits => (classifiedContent, hits)) hitsResult
 
 runPaths : Options -> IO ()
 runPaths opts = do

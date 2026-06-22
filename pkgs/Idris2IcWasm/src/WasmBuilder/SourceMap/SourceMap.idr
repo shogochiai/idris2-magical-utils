@@ -198,14 +198,24 @@ cNameToIdris cName =
 parseFunctionDef : String -> Nat -> Maybe CFunctionInfo
 parseFunctionDef line lineNum =
   let trimmed = ltrim line
-  in if isPrefixOf "Value *" trimmed
-     then let afterValue = substr 7 (strLen trimmed) trimmed
-              -- Extract function name (until '(' or newline)
+      -- Newer RefC (forked idris2 / 0.8.0) emits `Idris2_Value *Foo(...)` headers;
+      -- older RefC used bare `Value *Foo`. Match BOTH so function-def detection (and
+      -- thus branch-probe site gathering) works across compiler versions. Without
+      -- this, parseFunctionDefs returns [] on current RefC → zero branch sites →
+      -- empty idris2-branch-probes.csv → no numerator hits.
+      mAfter = if isPrefixOf "Idris2_Value *" trimmed
+                  then Just (substr 14 (strLen trimmed) trimmed)
+               else if isPrefixOf "Value *" trimmed
+                  then Just (substr 7 (strLen trimmed) trimmed)
+               else Nothing
+  in case mAfter of
+       Nothing => Nothing
+       Just afterValue =>
+          let -- Extract function name (until '(' or newline)
               funcName = takeWhile (\c => c /= '(' && c /= ' ' && c /= '\n') afterValue
           in if null funcName || isPrefixOf "(" funcName
              then Nothing
              else Just $ MkCFunctionInfo funcName (cNameToIdris funcName) lineNum
-     else Nothing
   where
     takeWhile : (Char -> Bool) -> String -> String
     takeWhile pred s = pack $ takeWhile' pred (unpack s)
