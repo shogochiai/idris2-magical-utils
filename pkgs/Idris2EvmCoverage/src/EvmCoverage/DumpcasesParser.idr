@@ -245,15 +245,56 @@ countCaseBranches line =
       constCases = countOccurrences "%constcase" line
   in max 1 (conCases + constCases)  -- At least 1 branch
 
+||| Extract the ordered branch labels from a case line, in source order, so each
+||| ClassifiedBranch carries its REAL constructor/literal label instead of the
+||| placeholder "case branch N". This lets the downstream Yul materializability
+||| check (isMaterializableBranch / tagForBranch, which inspect the label) see the
+||| actual constructor (True/False, _builtin.JUST/NOTHING, Outcome.Ok/Fail, ...)
+||| rather than a debug string. Labels are taken from each `%concase [tag] Name`
+||| (the constructor name token after the bracketed tag) and each `%constcase LIT`
+||| (the literal). Unparsed/ambiguous arms fall back to "case branch N".
+|||
+||| Token grammar handled:
+|||   %concase [cons] _builtin.CONS Just 1 [..]   -> "_builtin.CONS"
+|||   %constcase 1 (..)                            -> "1"
+|||   %constcase 0 (..)                            -> "0"
+extractBranchLabels : String -> List String
+extractBranchLabels line = go (words line) []
+  where
+    -- the token immediately AFTER the "[tag]" bracket of a %concase is the
+    -- constructor name; for %constcase the next token is the literal.
+    dropTillAfterBracket : List String -> List String
+    dropTillAfterBracket [] = []
+    dropTillAfterBracket (w :: ws) =
+      if isPrefixOf "[" w then ws else dropTillAfterBracket ws
+
+    go : List String -> List String -> List String
+    go [] acc = reverse acc
+    go (w :: ws) acc =
+      if w == "%concase"
+         then case dropTillAfterBracket ws of
+                (ctor :: _) => go ws (trim ctor :: acc)
+                []          => go ws acc
+      else if w == "%constcase"
+         then case ws of
+                (lit :: _) => go ws (trim lit :: acc)
+                []         => go ws acc
+      else go ws acc
+
 -- =============================================================================
 -- Main Parser
 -- =============================================================================
 
-||| Make a canonical branch
-makeBranch : String -> Nat -> Nat -> ClassifiedBranch
-makeBranch fName baseIdx i =
+||| Make a canonical branch carrying its real constructor/literal label (so the
+||| Yul materializability check can recognise it). Falls back to the legacy
+||| placeholder when the label could not be extracted.
+makeBranchLabelled : String -> Nat -> Nat -> Maybe String -> ClassifiedBranch
+makeBranchLabelled fName baseIdx i mLabel =
   let bid = mkLegacyBranchId "" fName (baseIdx + i)
-  in MkClassifiedBranch bid BCCanonical ("case branch " ++ show i)
+      pat = case mLabel of
+              Just lbl => if lbl == "" then "case branch " ++ show i else lbl
+              Nothing  => "case branch " ++ show i
+  in MkClassifiedBranch bid BCCanonical pat
 
 ||| Parse branches from function body lines
 parseBranches : String -> List String -> Nat -> List ClassifiedBranch
@@ -266,10 +307,18 @@ parseBranches fName (l :: ls) idx =
          in branch :: parseBranches fName ls (S idx)
     else if isCaseLine l
       then let numBranches = countCaseBranches l
+               labels = extractBranchLabels l
                indices = take numBranches [0..]
-               newBranches = map (makeBranch fName idx) indices
+               -- pair each branch index with its extracted label (Nothing if the
+               -- label list is shorter than the branch count, e.g. nested cases).
+               newBranches = map (\i => makeBranchLabelled fName idx i (getAt i labels)) indices
            in newBranches ++ parseBranches fName ls (idx + numBranches)
       else parseBranches fName ls idx
+  where
+    getAt : Nat -> List String -> Maybe String
+    getAt _ [] = Nothing
+    getAt Z (x :: _) = Just x
+    getAt (S k) (_ :: xs) = getAt k xs
 
 ||| Parse a single function from dumpcases output
 ||| Note: In dumpcases output, each function definition is a single line
@@ -281,9 +330,15 @@ parseFunction funcLine bodyLines =
       let fullName = if null modName then fName else modName ++ "." ++ fName
           -- Count case branches in the function line itself (not bodyLines)
           numBranches = countCaseBranches funcLine
+          labels = extractBranchLabels funcLine
           indices = take numBranches [0..]
-          branches = map (makeBranch fullName 0) indices
+          branches = map (\i => makeBranchLabelled fullName 0 i (getAt i labels)) indices
       in (fullName, branches)
+  where
+    getAt : Nat -> List String -> Maybe String
+    getAt _ [] = Nothing
+    getAt Z (x :: _) = Just x
+    getAt (S k) (_ :: xs) = getAt k xs
 
 ||| Parse function list helper
 parseFunctions : List String -> List ClassifiedBranch -> List ClassifiedBranch

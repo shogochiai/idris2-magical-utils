@@ -314,32 +314,54 @@ branchPatternLabel pattern =
       beforeOrigin = fst (break (== '[') beforeSpan)
   in trim beforeOrigin
 
+||| The "1"/truthy arm of a 2-constructor sum maps to Yul `case 1`.
+||| Recognised GENERICALLY (not by hardcoded namespace) so any project's sum types
+||| (TextDAO.*.Outcome.Ok/Fail, app Either/Maybe, ...) materialise correctly.
+isCase1Label : String -> Bool
+isCase1Label label =
+     label == "1" || label == "True"
+  || label == "_builtin.JUST" || label == "_builtin.CONS"
+  || endsWithDot ".Right" label || endsWithDot ".Just" label
+  || endsWithDot ".Fail" label  || endsWithDot ".Cons" label
+  || label == "Just" || label == "Right" || label == "Fail"
+  where
+    endsWithDot : String -> String -> Bool
+    endsWithDot suffix s = isSuffixOf suffix s
+
+isCase0Label : String -> Bool
+isCase0Label label =
+     label == "0" || label == "False"
+  || label == "_builtin.NOTHING" || label == "_builtin.NIL"
+  || endsWithDot ".Left" label || endsWithDot ".Nothing" label
+  || endsWithDot ".Ok" label    || endsWithDot ".Nil" label
+  || label == "Nothing" || label == "Left" || label == "Ok" || label == "Nil"
+  where
+    endsWithDot : String -> String -> Bool
+    endsWithDot suffix s = isSuffixOf suffix s
+
 tagFromBranchLabel : String -> BranchTag
 tagFromBranchLabel raw =
   let label = trim raw in
-  if label == "1" || label == "True"
-     then BTCase1
-  else if label == "0" || label == "False"
-     then BTCase0
-  else if label == "default"
+  if label == "default"
      then BTDefault
-  else if label == "_builtin.JUST" || label == "_builtin.CONS"
-       || label == "Prelude.Types.Right"
-       || label == "Subcontract.Core.Outcome.Fail"
+  else if isCase1Label label
      then BTCase1
-  else if label == "_builtin.NOTHING" || label == "_builtin.NIL"
-       || label == "Prelude.Types.Left"
-       || label == "Subcontract.Core.Outcome.Ok"
+  else if isCase0Label label
      then BTCase0
   else BTUnknown
 
 tagForBranch : ClassifiedBranch -> BranchTag
 tagForBranch branch = tagFromBranchLabel (branchPatternLabel branch.pattern)
 
+||| A branch materialises as a distinct Yul case iff its label is a recognised
+||| 2-way constructor/literal arm. Made CONSISTENT with tagFromBranchLabel (any
+||| non-BTUnknown tag). Widening this is SAFE for honesty: if the branch truly
+||| materialises it becomes observable (covered iff hit at runtime); if it does
+||| NOT, its counter never fires and it shows as Missing — never false coverage.
 isMaterializableBranchLabel : String -> Bool
 isMaterializableBranchLabel raw =
   let label = trim raw in
-  label == "1" || label == "0" || label == "default" || label == "True" || label == "False"
+  label == "default" || isCase1Label label || isCase0Label label
 
 isMaterializableBranch : ClassifiedBranch -> Bool
 isMaterializableBranch branch = isMaterializableBranchLabel (branchPatternLabel branch.pattern)
