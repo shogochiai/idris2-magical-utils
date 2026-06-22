@@ -2,6 +2,7 @@
 module DfxCoverage.PathRuntime
 
 import Data.List
+import Data.List1
 import Data.Maybe
 import Data.String
 import Data.SortedMap
@@ -124,6 +125,93 @@ getBranchProbeIndices mProjectDir canisterRef network = do
              pure $ Left $ "Failed to read branch probe output: " ++ show err
        _ <- system $ "rm -f " ++ branchProbeDidPath ++ " " ++ outPath
        pure $ Right $ nub (parseBranchProbeIndices content)
+
+-- ============================================================================
+-- Canonical path-id hits (`--path-hits` / `__get_path_hits`) — IDENTITY JOIN
+-- ============================================================================
+-- The forked compiler's --dumppathshits pass injects prim__recordPathHit
+-- "<fn>#p<n>" at every CaseTree leaf; RefC lowers it to idris2_recordPathHit
+-- (pathcov.c) which records the canonical path-id string. The canister query
+-- __get_path_hits replies the comma-separated recorded ids. Those ids are the
+-- SAME strings as dumppaths path_id, so the numerator is an exact set
+-- intersection — no source-map, ordinal, or span heuristic.
+
+pathHitsDidPath : String
+pathHitsDidPath = "/tmp/dfx_path_hits.did"
+
+pathHitsOutPath : String -> String
+pathHitsOutPath canisterRef = "/tmp/dfx_path_hits_" ++ canisterRef ++ ".txt"
+
+||| Strip dfx candid text wrapping: an outer `( ... )` and the surrounding
+||| double-quotes around the string body. Keeps inner content verbatim.
+stripCandidText : String -> String
+stripCandidText s =
+  let cs = unpack s
+      -- drop outer parens
+      noParen = case cs of
+                  ('(' :: rest) => case reverse rest of
+                                     (')' :: revBody) => reverse revBody
+                                     _ => rest
+                  _ => cs
+      t = trim (pack noParen)
+      -- drop surrounding double-quotes
+      tc = unpack t
+      noQuote = case tc of
+                  ('"' :: rest) => case reverse rest of
+                                     ('"' :: revBody) => reverse revBody
+                                     _ => rest
+                  _ => tc
+  in pack noQuote
+
+||| Split a comma-separated reply into trimmed, non-empty path-id tokens.
+parsePathIdList : String -> List String
+parsePathIdList s =
+  let raw = forget (split (== ',') s)
+  in filter (/= "") (map trim raw)
+
+||| Query the live canister's __get_path_hits and return the recorded canonical
+||| path-ids. A trailing "__TRUNCATED__" token (pathcov saturation marker) is
+||| dropped but logged by the caller via `pathHitsSaturated`.
+export
+getPathHitIds : Maybe String -> String -> String -> IO (Either String (List String))
+getPathHitIds mProjectDir canisterRef network = do
+  Right () <- writeFile pathHitsDidPath "service : { __get_path_hits : () -> (text) query; }\n"
+    | Left err => pure $ Left $ "Failed to write path hits did: " ++ show err
+  let outPath = pathHitsOutPath canisterRef
+  exitCode <- system $
+    branchProbePrefix mProjectDir ++
+    "dfx canister call " ++ canisterRef ++
+    " __get_path_hits --query --candid " ++ pathHitsDidPath ++
+    " --network " ++ network ++
+    " > " ++ outPath ++ " 2>&1"
+  if exitCode /= 0
+     then do
+       errText <- readFile outPath
+       _ <- system $ "rm -f " ++ pathHitsDidPath ++ " " ++ outPath
+       case errText of
+         Right content => pure $ Left $ "__get_path_hits call failed: " ++ trim content
+         Left _ => pure $ Left "__get_path_hits call failed"
+     else do
+       Right content <- readFile outPath
+         | Left err => do
+             _ <- system $ "rm -f " ++ pathHitsDidPath ++ " " ++ outPath
+             pure $ Left $ "Failed to read path hits output: " ++ show err
+       _ <- system $ "rm -f " ++ pathHitsDidPath ++ " " ++ outPath
+       -- dfx wraps the text reply as `("a,b,c")` (possibly multi-line). Strip the
+       -- candid wrapping (outer parens + the surrounding double-quotes) before
+       -- splitting so the first/last ids aren't contaminated with punctuation.
+       let body = stripCandidText (trim content)
+       pure $ Right $ nub (parsePathIdList body)
+
+||| IDENTITY JOIN: a path obligation is covered iff its path_id was recorded.
+||| (The recorded ids may include dfx-reply punctuation tokens; we intersect
+||| against the actual dumppaths path_ids so only real obligations count.)
+export
+analyzePathHitsFromPathIds : String -> List String -> Either String (List PathRuntimeHit)
+analyzePathHitsFromPathIds dumppathsContent recordedIds = do
+  paths <- parseDumppathsJson dumppathsContent
+  let covered = filter (\p => elem p.pathId recordedIds) paths
+  pure (map (\p => MkPathRuntimeHit p.pathId 1) covered)
 
 terminalBranchId : PathObligation -> Maybe String
 terminalBranchId path =

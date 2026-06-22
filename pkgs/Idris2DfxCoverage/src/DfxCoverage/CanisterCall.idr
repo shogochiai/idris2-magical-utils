@@ -181,6 +181,7 @@ record DeployOptions where
   dfxPath : String
   projectDir : String
   instrumentBranchProbes : Bool
+  instrumentPathHits : Bool  -- Compiler-injected canonical path-id hits (--path-hits)
   forTestBuild : Bool      -- Build with src/Main_test.idr for coverage
 
 public export
@@ -191,6 +192,7 @@ defaultDeployOptions = MkDeployOptions
   , dfxPath = "dfx"
   , projectDir = "."
   , instrumentBranchProbes = False
+  , instrumentPathHits = False
   , forTestBuild = False
   }
 
@@ -494,12 +496,14 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
             ]
       let probeArgs =
             if opts.instrumentBranchProbes then ["--branch-probes"] else []
+      let pathHitsArgs =
+            if opts.instrumentPathHits then ["--path-hits"] else []
       let testArgs =
             if opts.forTestBuild
                then "--for-test-build" ::
                     maybe [] (\path => ["--test-module=" ++ path]) testModPath
                else []
-      let cmd = unwords (unsetPrefix ++ cpathAssign ++ (icwasmBin :: baseArgs ++ probeArgs ++ testArgs))
+      let cmd = unwords (unsetPrefix ++ cpathAssign ++ (icwasmBin :: baseArgs ++ probeArgs ++ pathHitsArgs ++ testArgs))
       putStrLn $ "    [numerator] WASM build via " ++ icwasmBin
       (exitCode, stdout, stderr) <- executeCommand cmd
       if exitCode /= 0

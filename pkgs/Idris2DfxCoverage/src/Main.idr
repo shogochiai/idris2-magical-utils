@@ -838,6 +838,49 @@ resolveIpkgForPaths opts =
                  Nothing => pure $ Left $ "No .ipkg file found in " ++ cleanTarget
                  Just ipkg => pure $ Right ipkg
 
+||| Universe-aligned denominator (Case B). The numerator instruments the
+||| forTestBuild WASM (a generated `module Main; import TestHarness` that drives
+||| Tests.AllTests), so the recorded canonical path-ids live in the TEST
+||| execution universe. For the identity join to be meaningful, the dumppaths
+||| denominator must be the SAME universe — NOT the canister Main universe that
+||| prepareDumppathsIpkg produces (it strips Tests and forces CanisterMain).
+|||
+||| We generate a temp ipkg whose `main` is the test entry module (Tests.AllTests,
+||| or whatever findTestModulePath resolves) and which keeps the Tests modules,
+||| so `idris2 --dumppaths-json` over it yields obligations for exactly the
+||| functions the instrumented WASM can record. Returns the original ipkg path
+||| unchanged if no Tests/AllTests module is found (falls back to canister prep).
+prepareTestUniverseDumppathsIpkg : String -> IO String
+prepareTestUniverseDumppathsIpkg ipkgPath = do
+  Right content <- readFile ipkgPath
+    | Left _ => pure ipkgPath
+  t <- time
+  let (projectDir, _) = splitPath ipkgPath
+  -- Confirm a test entry exists; otherwise this preparer is inapplicable.
+  let testMainPath = projectDir ++ "/src/Tests/AllTests.idr"
+  hasTestMain <- do
+    Right _ <- readFile testMainPath
+      | Left _ => pure False
+    pure True
+  if not hasTestMain
+     then pure ipkgPath
+     else do
+       let tempPath = projectDir ++ "/canister-dfxprepared-" ++ show t ++ ".ipkg"
+       -- Keep ALL modules (including Tests.*); just point main/executable at the
+       -- test entry so the dumppaths universe == the forTestBuild WASM universe.
+       let rewriteMainLine : String -> String
+           rewriteMainLine line =
+             let trimmed = trim line
+             in if isPrefixOf "main " trimmed || isPrefixOf "main=" trimmed
+                   then "main = Tests.AllTests"
+                else if isPrefixOf "executable " trimmed || isPrefixOf "executable=" trimmed
+                   then "executable = run-tests"
+                else line
+       let sanitized = unlines (map rewriteMainLine (lines content))
+       Right () <- writeFile tempPath sanitized
+         | Left _ => pure ipkgPath
+       pure tempPath
+
 prepareDumppathsIpkg : String -> IO String
 prepareDumppathsIpkg ipkgPath = do
   Right content <- readFile ipkgPath
@@ -1028,7 +1071,7 @@ runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPa
             , network := opts.network
             , dfxPath := "dfx"
             , projectDir := projectDir
-            , instrumentBranchProbes := True
+            , instrumentPathHits := True
             , forTestBuild := True
             } defaultDeployOptions
       deployResult' <- the (IO (Either String String)) (ensureDeployed deployOpts)
@@ -1044,10 +1087,19 @@ runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPa
               pure $ Left err
             Right _ => do
               _ <- runProjectProbeCalls projectDir canister opts.network
-              let branchProbeMapPath = projectDir ++ "/build/idris2-branch-probes.csv"
-              hitsResult <- analyzePathHitsFromBranchProbeFiles
-                             dumppathsContent staticAnalysis branchProbeMapPath
-                             (Just projectDir) canister opts.network
+              -- NUMERATOR (identity join): query the canister's recorded canonical
+              -- path-ids (__get_path_hits, from compiler-injected idris2_recordPathHit)
+              -- and intersect with dumppaths path_ids. No source-map / ordinal / span.
+              pathIdsResult <- getPathHitIds (Just projectDir) canister opts.network
+              hitsResult <- the (IO (Either String (List PathRuntimeHit))) $ case pathIdsResult of
+                Left err => do
+                  putStrLn $ "    [numerator] getPathHitIds FAILED: " ++ err
+                  pure $ Left err
+                Right recordedIds => do
+                  let res = analyzePathHitsFromPathIds dumppathsContent recordedIds
+                  putStrLn $ "    [numerator] recordedPathIds=" ++ show (length recordedIds)
+                          ++ " -> identity-joined hits=" ++ show (either (const 0) length res)
+                  pure res
               cleanupGeneratedDumppathsIpkg staticIpkgPath
               case hitsResult of
                 Left err => pure $ Left err
@@ -1142,7 +1194,15 @@ runPathFullPipelineArtifacts opts = do
     Left err => pure $ Left err
     Right ipkgPath => do
       let (projectDir, originalIpkgName) = splitPath ipkgPath
-      staticIpkgPath <- prepareDumppathsIpkg ipkgPath
+      -- Case-B universe alignment: the numerator instruments the forTestBuild WASM
+      -- (Tests.AllTests universe), so the denominator must dump paths over the SAME
+      -- universe for the identity join to match. Prefer the test-universe preparer;
+      -- it returns the input unchanged when there is no Tests/AllTests entry, in
+      -- which case we fall back to the canister-Main preparer.
+      testUnivIpkg <- prepareTestUniverseDumppathsIpkg ipkgPath
+      staticIpkgPath <- if testUnivIpkg /= ipkgPath
+                           then pure testUnivIpkg
+                           else prepareDumppathsIpkg ipkgPath
       let (staticProjectDir, staticIpkgName) = splitPath staticIpkgPath
       dumppathsResult <- the (IO (Either String String)) $
         case opts.dumppathsJson of
