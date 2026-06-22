@@ -25,6 +25,7 @@ record Options where
   packages : List String
   generateSourceMap : Bool
   instrumentBranchProbes : Bool
+  instrumentPathHits : Bool
   forTestBuild : Bool
   testModulePath : Maybe String
   showHelp : Bool
@@ -37,6 +38,7 @@ defaultOptions = MkOptions
   , packages = ["contrib"]
   , generateSourceMap = True
   , instrumentBranchProbes = False
+  , instrumentPathHits = False
   , forTestBuild = False
   , testModulePath = Nothing
   , showHelp = False
@@ -71,6 +73,7 @@ parseArgs args = go defaultOptions args
         Just ("--source-map", _) => go ({ generateSourceMap := True } opts) rest
         Just ("--no-source-map", _) => go ({ generateSourceMap := False } opts) rest
         Just ("--branch-probes", _) => go ({ instrumentBranchProbes := True } opts) rest
+        Just ("--path-hits", _) => go ({ instrumentPathHits := True } opts) rest
         Just ("--for-test-build", _) => go ({ forTestBuild := True } opts) rest
         _ =>
           if arg == "--source-map"
@@ -79,6 +82,8 @@ parseArgs args = go defaultOptions args
              then go ({ generateSourceMap := False } opts) rest
           else if arg == "--branch-probes"
              then go ({ instrumentBranchProbes := True } opts) rest
+          else if arg == "--path-hits"
+             then go ({ instrumentPathHits := True } opts) rest
           else if arg == "--for-test-build"
              then go ({ forTestBuild := True } opts) rest
           else go opts rest  -- Skip unknown args
@@ -107,6 +112,7 @@ Build Options:
   --source-map      Generate Idris→WASM source map (default)
   --no-source-map   Skip Idris→WASM source map generation
   --branch-probes   Insert branch probe hooks for coverage collection
+  --path-hits       Compiler-injected canonical path-id hits (--dumppathshits + __get_path_hits)
   --for-test-build  Generate test Main from Tests/AllTests
   --test-module=REL Override test module path relative to project root
   --help, -h        Show this help
@@ -457,6 +463,7 @@ main = do
                     opts.packages
                     opts.generateSourceMap
                     opts.instrumentBranchProbes
+                    opts.instrumentPathHits
                     opts.forTestBuild
                     opts.testModulePath
               result <- buildCanisterAuto buildOpts

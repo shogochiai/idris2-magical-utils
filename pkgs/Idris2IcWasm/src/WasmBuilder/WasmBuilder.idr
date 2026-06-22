@@ -34,6 +34,7 @@ record BuildOptions where
   packages : List String   -- Additional packages (-p flags)
   generateSourceMap : Bool -- Generate Idris→WASM source map
   instrumentBranchProbes : Bool -- Insert C-level branch probes for runtime coverage
+  instrumentPathHits : Bool -- Compiler-injected prim__recordPathHit (canonical path-ids)
   forTestBuild : Bool      -- Generate test Main in /tmp (requires Tests/AllTests.idr)
   testModulePath : Maybe String  -- Custom test module path (default: src/Tests/AllTests.idr)
 
@@ -47,6 +48,7 @@ defaultBuildOptions = MkBuildOptions
   , packages = ["contrib"]
   , generateSourceMap = True
   , instrumentBranchProbes = False
+  , instrumentPathHits = False
   , forTestBuild = False
   , testModulePath = Nothing
   }
@@ -616,8 +618,8 @@ generateFuncEntry modulePrefix cArities ef didMethods typeDefs =
 ||| @exports List of exported functions from Idris
 ||| @didMethods Parsed .did methods for Candid-aware reply generation
 ||| @typeDefs Parsed .did type definitions for dynamic Candid encoding
-generateCanisterEntryC : String -> List (String, RefCArity) -> List ExportedFunc -> List DidMethod -> List TypeDef -> Bool -> String
-generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrumentBranchProbes =
+generateCanisterEntryC : String -> List (String, RefCArity) -> List ExportedFunc -> List DidMethod -> List TypeDef -> Bool -> Bool -> String
+generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrumentBranchProbes instrumentPathHits =
   let funcEntries = fastConcat $ map (\ef => generateFuncEntry modulePrefix cArities ef didMethods typeDefs) exports
       header = canisterEntryHeader
       branchProbeExterns =
@@ -626,6 +628,18 @@ generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrum
              [ "extern const char* __dfxcov_format_hits(void);"
              , "extern uint32_t __dfxcov_probe_total(void);"
              , "extern void __dfxcov_reset_hits(void);"
+             ]
+           else ""
+      -- Path-coverage runtime (pathcov.c): canonical-path-id hits recorded by
+      -- compiler-injected idris2_recordPathHit. __get_path_hits replies the
+      -- comma-separated recorded path-ids (identity join with dumppaths path_id).
+      pathHitsExterns =
+        if instrumentPathHits
+           then unlines
+             [ "extern const char* __dfxcov_format_path_hits(void);"
+             , "extern uint32_t __dfxcov_path_hit_count(void);"
+             , "extern uint32_t __dfxcov_path_hit_saturated(void);"
+             , "extern void __dfxcov_reset_path_hits(void);"
              ]
            else ""
       -- Generate extern declarations only for actual Idris functions (not .did stubs)
@@ -643,7 +657,19 @@ generateCanisterEntryC modulePrefix cArities exports didMethods typeDefs instrum
              , "}"
              ]
            else ""
-  in header ++ "\n/* Idris Function Externs */\n" ++ branchProbeExterns ++ funcExterns ++ "\n" ++ branchProbeEntry ++ funcEntries
+      pathHitsEntry =
+        if instrumentPathHits
+           then unlines
+             [ ""
+             , "__attribute__((export_name(\"canister_query __get_path_hits\")))"
+             , "void canister_query___get_path_hits(void) {"
+             , "    debug_log(\"__get_path_hits called\");"
+             , "    ensure_idris2_init();"
+             , "    reply_text(__dfxcov_format_path_hits());"
+             , "}"
+             ]
+           else ""
+  in header ++ "\n/* Idris Function Externs */\n" ++ branchProbeExterns ++ pathHitsExterns ++ funcExterns ++ "\n" ++ branchProbeEntry ++ pathHitsEntry ++ funcEntries
   where
     mkExtern : ExportedFunc -> String
     mkExtern ef =
@@ -1084,9 +1110,20 @@ compileToRefC opts buildDir = do
     compileDirectly opts' buildDir' = do
       idris2Bin <- resolveIdris2Bin
       let pkgFlags = unwords $ map (\p => "-p " ++ p) opts'.packages
+      -- Path-coverage instrumentation: `--dumppathshits <file>` enables the
+      -- CompileExpr pass that injects prim__recordPathHit "<fn>#p<n>" at every
+      -- canonical CaseTree leaf (lowered by RefC to idris2_recordPathHit). The
+      -- file arg is required by the flag but its CONTENT is irrelevant for WASM —
+      -- recording happens in-memory via pathcov.c and is read back through the
+      -- __get_path_hits canister query, not from this file.
+      let pathHitsFlag =
+            if opts'.instrumentPathHits
+               then "--dumppathshits " ++ buildDir' ++ "/.pathhits-enable "
+               else ""
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
                 "mkdir -p " ++ buildDir' ++ " && " ++
                 idris2Bin ++ " --codegen refc " ++
+                pathHitsFlag ++
                 "--build-dir " ++ buildDir' ++ " " ++
                 pkgFlags ++ " " ++
                 "--source-dir src " ++
@@ -1289,9 +1326,12 @@ compileToWasm cFile refcSrc miniGmp ic0Support outputWasm = do
   putStrLn "      Step 3: C → WASM (Emscripten)"
 
   -- RefC source files (minimal set for canister)
+  -- pathcov.c provides idris2_recordPathHit (path-coverage runtime). Linking it
+  -- unconditionally is harmless for non-instrumented builds (the symbol is simply
+  -- never called); instrumented builds (--dumppathshits) need it to resolve.
   let refcCFiles = unwords $ map (\f => refcSrc ++ "/" ++ f)
         ["runtime.c", "memoryManagement.c", "stringOps.c",
-         "mathFunctions.c", "casts.c", "prim.c", "refc_util.c"]
+         "mathFunctions.c", "casts.c", "prim.c", "refc_util.c", "pathcov.c"]
 
   -- Check for ic_ffi_bridge.c (generic FFI bridge)
   Right _ <- readFile (ic0Support ++ "/ic_ffi_bridge.c")
@@ -1398,9 +1438,12 @@ compileToWasmWithEntry : String -> String -> String -> String -> String -> Strin
 compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath outputWasm extraCSources = do
   putStrLn "      Step 3: C → WASM (Emscripten)"
 
+  -- pathcov.c provides idris2_recordPathHit (path-coverage runtime). Linking it
+  -- unconditionally is harmless for non-instrumented builds (the symbol is simply
+  -- never called); instrumented builds (--dumppathshits) need it to resolve.
   let refcCFiles = unwords $ map (\f => refcSrc ++ "/" ++ f)
         ["runtime.c", "memoryManagement.c", "stringOps.c",
-         "mathFunctions.c", "casts.c", "prim.c", "refc_util.c"]
+         "mathFunctions.c", "casts.c", "prim.c", "refc_util.c", "pathcov.c"]
 
   -- Find project-specific FFI headers
   ffiHeaders <- findFfiHeaders ic0Support
@@ -1704,7 +1747,7 @@ generateCanisterEntry opts cFile ic0Support = do
       then pure $ Left $ "Failed to infer RefC arity for one or more exports"
     else do
       -- Generate dynamic canister_entry.c with Candid-aware stubs
-      let entryC = generateCanisterEntryC modulePrefix cArities normalizedExports didMethods typeDefs opts.instrumentBranchProbes
+      let entryC = generateCanisterEntryC modulePrefix cArities normalizedExports didMethods typeDefs opts.instrumentBranchProbes opts.instrumentPathHits
       let tempEntryPath = "/tmp/canister_entry_generated.c"
       Right () <- writeFile tempEntryPath entryC
         | Left err => pure $ Left $ "Failed to write canister_entry.c: " ++ show err
