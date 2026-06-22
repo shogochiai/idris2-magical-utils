@@ -849,17 +849,32 @@ generateYul ipkgPath outputDir = do
   paths <- discoverPackagePaths
   let pkgPath = joinBy ":" paths
   cleanupYulArtifacts outputDir
-  -- Set IDRIS2_PACKAGE_PATH and call idris2-yul
+  -- OPT-IN source-level path-coverage mode. When EVM_PATHCOV_YUL points at the
+  -- FORK-built idris2-yul (which lowers prim__recordPathHit to log1(0,0,FNV(pid))),
+  -- we drive codegen with it + --dumppathshits so the emitted Yul carries
+  -- canonical path-id LOG markers. EVM_PATHCOV_PREFIX (the fork build-prefix) is
+  -- exported as IDRIS2_PREFIX so the fork-yul resolves its fork-built libs. When
+  -- the env is unset, behaviour is IDENTICAL to before (released idris2-yul, no
+  -- --dumppathshits) — zero regression risk for the default pipeline.
+  mPathcovYul <- getEnv "EVM_PATHCOV_YUL"
+  mPathcovPrefix <- getEnv "EVM_PATHCOV_PREFIX"
+  let yulBin = fromMaybe "idris2-yul" (map trim mPathcovYul)
+  let pathHitsFlag = if isJust mPathcovYul then "--dumppathshits " ++ outputDir ++ "/.pathhits-enable " else ""
+  let prefixAssign = case map trim mPathcovPrefix of
+                       Just p => "IDRIS2_PREFIX=\"" ++ p ++ "\" "
+                       Nothing => ""
+  -- Set IDRIS2_PACKAGE_PATH and call idris2-yul. In pathcov mode the fork-yul
+  -- resolves libs from IDRIS2_PREFIX (its fork-built store), so we must NOT also
+  -- set the pack-store IDRIS2_PACKAGE_PATH (released TTCs → version mismatch).
   let buildLog = outputDir ++ "/idris2-yul-build.log"
-  let cmd = if null pkgPath
-              then "mkdir -p " ++ outputDir
-                   ++ " && cd " ++ projectDir
-                   ++ " && idris2-yul --codegen yul --output-dir " ++ outputDirForBuild ++ " --build " ++ buildIpkg
-                   ++ " > " ++ buildLog ++ " 2>&1"
-              else "mkdir -p " ++ outputDir
-                   ++ " && cd " ++ projectDir
-                   ++ " && IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" idris2-yul --codegen yul --output-dir " ++ outputDirForBuild ++ " --build " ++ buildIpkg
-                   ++ " > " ++ buildLog ++ " 2>&1"
+  let pkgPathAssign = if isJust mPathcovPrefix || null pkgPath
+                         then ""
+                         else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
+  let cmd = "mkdir -p " ++ outputDir
+              ++ " && cd " ++ projectDir
+              ++ " && " ++ pkgPathAssign ++ prefixAssign ++ yulBin
+              ++ " --codegen yul " ++ pathHitsFlag ++ "--output-dir " ++ outputDirForBuild ++ " --build " ++ buildIpkg
+              ++ " > " ++ buildLog ++ " 2>&1"
   exitCode <- system cmd
   if exitCode == 0
     then do
