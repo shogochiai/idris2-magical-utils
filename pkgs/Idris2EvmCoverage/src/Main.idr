@@ -584,6 +584,12 @@ runPaths opts = do
               putStrLn $ pathMeasurementSummary result.measurement
               putStrLn $ "Missing paths: " ++ show (length result.missingPaths)
               traverse_ (\p => putStrLn $ "- " ++ p.pathId ++ " :: " ++ pathSummary p) result.missingPaths
+              -- List UnknownClassification paths too (they flip claim_admissible
+              -- False under the BlockCoverageClaim policy). Listing them avoids
+              -- silent truncation and makes them inspectable for classification.
+              let unknownPaths = filter (\p => p.classification == UnknownClassification) result.allPaths
+              putStrLn $ "Unknown paths: " ++ show (length unknownPaths)
+              traverse_ (\p => putStrLn $ "? " ++ p.pathId ++ " :: " ++ pathSummary p) unknownPaths
 
 -- =============================================================================
 -- Benchmark Mode
