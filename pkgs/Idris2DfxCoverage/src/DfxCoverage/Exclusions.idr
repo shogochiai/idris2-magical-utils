@@ -83,6 +83,13 @@ icpDefaultExclusions =
 	  , exactPattern "CanisterMain.main" "ICP canister entry point"
 	  , prefixPattern "Main_forceRetain" "Idris2 linker retention"
 	  , exactPattern "Main_runTests" "Test runner itself"
+    -- Test harness/spec code is NOT product coverage (same policy as evm
+    -- isNonProductEvmFunction). The dfx denominator is the forTestBuild test
+    -- universe, so the Tests.* driver functions appear; they are the harness, not
+    -- the product logic under test, and must not be counted as product obligations.
+  , containsPattern ".Tests." "Test harness/spec module"
+  , prefixPattern "Tests." "Test harness/spec module"
+  , containsPattern "TestHarness" "Test harness shim"
   , exactPattern "_initialize" "WASM module initializer"
   , prefixPattern "_braceOpen_" "Idris2 internal expression"
   , prefixPattern "_emscripten_" "Emscripten runtime"
