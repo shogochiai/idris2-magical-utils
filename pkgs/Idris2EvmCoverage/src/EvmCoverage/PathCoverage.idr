@@ -73,6 +73,40 @@ lastBranchLabel path =
     Nothing => Nothing
     Just step => step.branchLabel
 
+||| A terminal whose label is a SINGLE-CONSTRUCTOR product/record destructure is
+||| irrefutable: the matched type has exactly one constructor, so the `%case` has
+||| exactly one `%concase` arm and emits NO EVM control-flow branch. Such a path
+||| is therefore provably a non-branch (CompilerInsertedArtifact), NOT an
+||| unobservable obligation. Proof basis (dumpcases): e.g.
+|||   accumulateVote = (%case x [(%concase [cons] _builtin.CONS ...)])   -- 1 arm
+|||   storeVote      = (%case x [(%concase [cons] _builtin.CONS ...)])   -- 1 arm
+||| The detectable labels are the canonical product constructors:
+|||   - tuple destructure: "MkPair"
+|||   - single-constructor records: "Mk<TypeName>" (the Idris record convention)
+|||   - curried-lambda artifact: "->" (a PI step, never a runtime branch)
+||| This is conservative: only labels that are structurally single-constructor by
+||| Idris's own naming are matched; genuine multi-way sums (Just/Nothing, Ok/Fail,
+||| True/False, Left/Right, Nil/(::)) are NOT matched and stay product obligations.
+isSingleConstructorDestructureLabel : String -> Bool
+isSingleConstructorDestructureLabel raw =
+  let label = trim raw in
+       label == "MkPair"     -- tuple (always single-constructor)
+    || label == "->"          -- curried PI/lambda artifact, not a branch
+    || ( startsWith isAsciiUpper label
+         && isPrefixOf "Mk" label
+         && not (elem label sumTypeConstructors) )
+  where
+    -- Idris/Prelude multi-constructor data whose ctors happen to start with "Mk"
+    -- must NOT be treated as single-constructor. (Currently none of the product
+    -- record ctors we exclude collide with these, but list defensively.)
+    sumTypeConstructors : List String
+    sumTypeConstructors = []
+
+isSingleConstructorDestructurePath : PathObligation -> Bool
+isSingleConstructorDestructurePath path =
+     path.terminalKind == "reached_clause"
+  && maybe False isSingleConstructorDestructureLabel (lastBranchLabel path)
+
 isKnownConstantUnreachableEvmPath : PathObligation -> Bool
 isKnownConstantUnreachableEvmPath path =
      isInfixOf "Tokenomics.IBCO.case block in calcTokensForEth" path.functionName
@@ -149,6 +183,8 @@ classifyEvmExclusion patterns path =
     then Just (CompilerInsertedArtifact, "generated record projection")
   else if isKnownYulBranchLabelMismatch path
     then Just (CompilerInsertedArtifact, "Yul branch-label collapse (compiler artifact)")
+  else if isSingleConstructorDestructurePath path
+    then Just (CompilerInsertedArtifact, "single-constructor destructure (irrefutable, not a branch)")
   else if isUninstrumentedStraightLinePath path
     then Just (CompilerInsertedArtifact, "straight-line clause, no branch obligation")
   else Nothing
