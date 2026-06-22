@@ -8,6 +8,9 @@ import Subcontract.Core.FR
 import Subcontract.Core.Evidence
 import Subcontract.Core.Outcome
 
+import Idris2.TestSuite
+import Idris2.TestSuite.Runner
+
 -- =============================================================================
 -- Conflict Equality Tests
 -- =============================================================================
@@ -397,7 +400,7 @@ test_requireJustFR_fail =
 -- Test Runner
 -- =============================================================================
 
-allTests : List (String, IO Bool)
+allTests : TestSuite
 allTests =
   [ ("REQ_CONF_001: Conflict Eq reflexive 1", test_conflict_eq_reflexive)
   , ("REQ_CONF_002: Conflict Eq reflexive 2", test_conflict_eq_reflexive2)
@@ -437,26 +440,10 @@ allTests =
   , ("REQ_FR_019: requireJustFR fail", test_requireJustFR_fail)
   ]
 
-runTest : (String, IO Bool) -> IO (String, Bool)
-runTest (name, test) = do
-  result <- test
-  putStrLn $ (if result then "[PASS] " else "[FAIL] ") ++ name
-  pure (name, result)
-
 ||| Run all tests - entry point for lazy test runner
 export
 runAllTests : IO ()
-runAllTests = do
-  putStrLn "Running Subcontract Core Tests..."
-  putStrLn ""
-  results <- traverse runTest allTests
-  let passed = filter snd results
-  let failed = filter (not . snd) results
-  putStrLn ""
-  putStrLn $ "Results: " ++ show (length passed) ++ "/" ++ show (length results) ++ " passed"
-  if length failed == 0
-     then putStrLn "ALL TESTS PASSED"
-     else putStrLn "SOME TESTS FAILED"
+runAllTests = runTestSuiteMain allTests
 
 export
 main : IO ()

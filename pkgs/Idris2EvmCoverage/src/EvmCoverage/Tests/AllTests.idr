@@ -9,6 +9,9 @@ import EvmCoverage.DumpcasesParser
 import EvmCoverage.PathRuntime
 import EvmCoverage.Types
 
+import Idris2.TestSuite
+import Idris2.TestSuite.Runner
+
 -- =============================================================================
 -- YulComment Parsing Tests
 -- =============================================================================
@@ -314,7 +317,7 @@ test_pathHitsFromCoveredBranchIds_terminal_mapping = do
 -- Test Runner
 -- =============================================================================
 
-allTests : List (String, IO Bool)
+allTests : TestSuite
 allTests =
   [ ("REQ_SRCMAP_001: finds comments", test_parseYulComments_finds_comments)
   , ("REQ_SRCMAP_002: extracts module name", test_parseYulComments_module_name)
@@ -342,27 +345,10 @@ allTests =
   , ("REQ_PATHRT_001: terminal branch ids map to path ids", test_pathHitsFromCoveredBranchIds_terminal_mapping)
   ]
 
-runTest : (String, IO Bool) -> IO (String, Bool)
-runTest (name, test) = do
-  result <- test
-  putStrLn $ (if result then "[PASS] " else "[FAIL] ") ++ name
-  pure (name, result)
-
 ||| Run all tests - entry point for lazy test runner
 export
 runAllTests : IO ()
-runAllTests = do
-  putStrLn "Running SourceMap Tests..."
-  putStrLn ""
-  results <- traverse runTest allTests
-  let passed = filter snd results
-  let failed = filter (not . snd) results
-  traverse_ (\(name, _) => putStrLn $ "  FAIL: " ++ name) failed
-  putStrLn ""
-  putStrLn $ "Results: " ++ show (length passed) ++ "/" ++ show (length results) ++ " passed"
-  if length failed == 0
-     then putStrLn "ALL TESTS PASSED"
-     else putStrLn "SOME TESTS FAILED"
+runAllTests = runTestSuiteMain allTests
 
 export
 main : IO ()

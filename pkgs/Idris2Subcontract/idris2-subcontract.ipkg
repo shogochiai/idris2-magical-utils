@@ -10,6 +10,7 @@ sourcedir = "src"
 depends = base
         , contrib
         , idris2-evm
+        , idris2-test-suite
 
 modules = Subcontract.Standards.ERC7546.Slots
         , Subcontract.Standards.ERC7546.Forward

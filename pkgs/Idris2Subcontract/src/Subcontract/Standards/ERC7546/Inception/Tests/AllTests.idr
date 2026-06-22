@@ -9,6 +9,9 @@ import Subcontract.Standards.ERC7546.Inception.Functions.Fork
 import Subcontract.Standards.ERC7546.Inception.Functions.Vote
 import Subcontract.Standards.ERC7546.Inception.Functions.Resolve
 
+import Idris2.TestSuite
+import Idris2.TestSuite.Runner
+
 %default covering
 
 -- =============================================================================
@@ -274,32 +277,33 @@ test_INTEGRATION_lifecycle =
 
 ||| All tests
 export
-allTests : List (String, Bool)
+allTests : TestSuite
 allTests =
-  [ ("INCEP-SPEC init", test_INCEP_SPEC_init)
-  , ("INTENT-ACK equality", test_INTENT_ACK_eq)
-  , ("PROP-STATUS show", test_PROP_STATUS_show)
-  , ("PROP-SUBMIT valid", test_PROP_SUBMIT_valid)
-  , ("PROP-SUBMIT invalid hash", test_PROP_SUBMIT_invalid_hash)
-  , ("PROP-SUBMIT short period", test_PROP_SUBMIT_short_period)
-  , ("FORK-CREATE valid", test_FORK_CREATE_valid)
-  , ("FORK-CREATE no parent", test_FORK_CREATE_no_parent)
-  , ("FORK-DEPTH", test_FORK_DEPTH)
-  , ("VOTE-CAST valid", test_VOTE_CAST_valid)
-  , ("VOTE-CAST double", test_VOTE_CAST_double)
-  , ("VOTE-CAST closed", test_VOTE_CAST_closed)
-  , ("RESOLVE-QUORUM", test_RESOLVE_QUORUM)
-  , ("RESOLVE-SUPER", test_RESOLVE_SUPER)
-  , ("RESOLVE still voting", test_RESOLVE_still_voting)
-  , ("DRIFT-VERDICT show", test_DRIFT_VERDICT_show)
-  , ("DRIFT-DETECT none", test_DRIFT_DETECT_none)
-  , ("INTEGRATION lifecycle", test_INTEGRATION_lifecycle)
+  [ pureCase "INCEP-SPEC init" test_INCEP_SPEC_init
+  , pureCase "INTENT-ACK equality" test_INTENT_ACK_eq
+  , pureCase "PROP-STATUS show" test_PROP_STATUS_show
+  , pureCase "PROP-SUBMIT valid" test_PROP_SUBMIT_valid
+  , pureCase "PROP-SUBMIT invalid hash" test_PROP_SUBMIT_invalid_hash
+  , pureCase "PROP-SUBMIT short period" test_PROP_SUBMIT_short_period
+  , pureCase "FORK-CREATE valid" test_FORK_CREATE_valid
+  , pureCase "FORK-CREATE no parent" test_FORK_CREATE_no_parent
+  , pureCase "FORK-DEPTH" test_FORK_DEPTH
+  , pureCase "VOTE-CAST valid" test_VOTE_CAST_valid
+  , pureCase "VOTE-CAST double" test_VOTE_CAST_double
+  , pureCase "VOTE-CAST closed" test_VOTE_CAST_closed
+  , pureCase "RESOLVE-QUORUM" test_RESOLVE_QUORUM
+  , pureCase "RESOLVE-SUPER" test_RESOLVE_SUPER
+  , pureCase "RESOLVE still voting" test_RESOLVE_still_voting
+  , pureCase "DRIFT-VERDICT show" test_DRIFT_VERDICT_show
+  , pureCase "DRIFT-DETECT none" test_DRIFT_DETECT_none
+  , pureCase "INTEGRATION lifecycle" test_INTEGRATION_lifecycle
   ]
 
-||| Run all tests and return pass count
-export
-runTests : (Nat, Nat)  -- (passed, total)
-runTests =
-  let results = map snd allTests
-      passed = length (filter id results)
-  in (passed, length results)
+||| Run all tests - entry point for lazy test runner
+export covering
+runAllTests : IO ()
+runAllTests = runTestSuiteMain allTests
+
+export covering
+main : IO ()
+main = runAllTests
