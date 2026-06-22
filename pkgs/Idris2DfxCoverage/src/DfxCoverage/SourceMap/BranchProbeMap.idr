@@ -25,6 +25,7 @@ record BranchProbeEntry where
   ordinalInFunc : Nat
   lineNumber : Nat
   kind : String
+  idrisSpan : String   -- "Module:line:col--line:col" by-id join key ("" if unknown)
 
 splitCsv : String -> List String
 splitCsv s = forget $ split (== ',') s
@@ -39,15 +40,22 @@ export
 parseEntry : String -> Maybe BranchProbeEntry
 parseEntry line =
   case splitCsv (trim line) of
+    -- 7-column (with idris_span, the by-id join key)
+    [probeIndexStr, probeName, idrisName, ordinalStr, lineStr, kind, idrisSpan] =>
+      case (parsePositive probeIndexStr, parsePositive ordinalStr, parsePositive lineStr) of
+        (Just probeIndex, Just ordinalInFunc, Just lineNumber) =>
+          Just $ MkBranchProbeEntry probeIndex probeName idrisName ordinalInFunc lineNumber kind idrisSpan
+        _ => Nothing
+    -- 6-column (legacy, no span)
     [probeIndexStr, probeName, idrisName, ordinalStr, lineStr, kind] =>
       case (parsePositive probeIndexStr, parsePositive ordinalStr, parsePositive lineStr) of
         (Just probeIndex, Just ordinalInFunc, Just lineNumber) =>
-          Just $ MkBranchProbeEntry probeIndex probeName idrisName ordinalInFunc lineNumber kind
+          Just $ MkBranchProbeEntry probeIndex probeName idrisName ordinalInFunc lineNumber kind ""
         _ => Nothing
     [probeName, idrisName, ordinalStr, lineStr, kind] =>
       case (parsePositive ordinalStr, parsePositive lineStr) of
         (Just ordinalInFunc, Just lineNumber) =>
-          Just $ MkBranchProbeEntry ordinalInFunc probeName idrisName ordinalInFunc lineNumber kind
+          Just $ MkBranchProbeEntry ordinalInFunc probeName idrisName ordinalInFunc lineNumber kind ""
         _ => Nothing
     _ => Nothing
 

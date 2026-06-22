@@ -172,13 +172,35 @@ hitProbeOrdinalsByFunction entries hitProbeIndices =
 pathsByFunction : List PathObligation -> String -> List PathObligation
 pathsByFunction paths fn = filter (\p => p.functionName == fn) paths
 
+||| A path "owns" a source span if any step's sourceSpan, or its sourceSpanUnion,
+||| equals it. This is the by-id join key (mangling-independent).
+pathHasSpan : String -> PathObligation -> Bool
+pathHasSpan span path =
+  span /= ""
+    && ( path.sourceSpanUnion == Just span
+      || any (\st => st.sourceSpan == Just span) path.steps )
+
+||| BY-ID span mapping (preferred): for each hit probe carrying an idrisSpan, every
+||| path obligation owning that exact source span is covered. Independent of RefC
+||| name mangling and ordinal alignment.
+hitsBySpan : List PathObligation -> List BranchProbeEntry -> List Nat -> List PathRuntimeHit
+hitsBySpan paths entries hitProbeIndices =
+  let hitSpans = nub (filter (/= "") (map (.idrisSpan)
+                       (filter (\e => elem e.probeIndex hitProbeIndices) entries)))
+  in [ MkPathRuntimeHit p.pathId 1
+     | p <- paths, span <- hitSpans, pathHasSpan span p ]
+
 export
 analyzePathHitsFromBranchProbeCoverageDirect : String -> List BranchProbeEntry -> List Nat -> Either String (List PathRuntimeHit)
 analyzePathHitsFromBranchProbeCoverageDirect dumppathsContent probeEntries hitProbeIndices = do
   paths <- parseDumppathsJson dumppathsContent
+  -- Prefer the by-id span mapping; if probes carry no spans (legacy CSV), fall
+  -- back to the function+ordinal alignment.
+  let spanHits = nub (hitsBySpan paths probeEntries hitProbeIndices)
   let hitByFn = hitProbeOrdinalsByFunction probeEntries hitProbeIndices
-  let hits = concatMap (mapFnHits paths) hitByFn
-  pure (nub hits)
+  let ordHits = nub (concatMap (mapFnHits paths) hitByFn)
+  -- Union both (span is precise; ordinal adds functions without spans).
+  pure (nub (spanHits ++ ordHits))
   where
     mapFnHits : List PathObligation -> (String, List Nat) -> List PathRuntimeHit
     mapFnHits paths (fn, ords) =

@@ -47,6 +47,8 @@ record BranchProbeSite where
   ordinalInFunc : Nat
   lineNumber : Nat
   kind : BranchSiteKind
+  idrisSpan : String   -- "Module:line:col--line:col" from RefC comment ("" if unknown);
+                       -- the by-id join key to dumppaths source_span (mangling-independent)
 
 trimPrefix : String -> String -> Bool
 trimPrefix pfx s = isPrefixOf pfx (trim s)
@@ -191,7 +193,7 @@ gatherProbeSites content =
       case (findFuncForLine lineNum funcs, detectBranchSiteKind line) of
         (Just fn, Just kind) =>
           let ordinal = countFuncSites fn.idrisName acc
-              site = MkBranchProbeSite nextIdx (mkProbeName nextIdx) fn.cName fn.idrisName ordinal lineNum kind
+              site = MkBranchProbeSite nextIdx (mkProbeName nextIdx) fn.cName fn.idrisName ordinal lineNum kind ""
           in go funcs rest (site :: acc) (S nextIdx)
         _ => go funcs rest acc nextIdx
 
@@ -275,10 +277,10 @@ generateProbeDecls sites =
 
 generateProbeCsv : List BranchProbeSite -> String
 generateProbeCsv sites =
-  let header = "probe_index,probe_name,idris_function,ordinal,line,kind"
+  let header = "probe_index,probe_name,idris_function,ordinal,line,kind,idris_span"
       rows =
         map (\s =>
-          show s.probeIndex ++ "," ++ s.probeName ++ "," ++ s.idrisName ++ "," ++ show s.ordinalInFunc ++ "," ++ show s.lineNumber ++ "," ++ show s.kind
+          show s.probeIndex ++ "," ++ s.probeName ++ "," ++ s.idrisName ++ "," ++ show s.ordinalInFunc ++ "," ++ show s.lineNumber ++ "," ++ show s.kind ++ "," ++ s.idrisSpan
         ) sites
   in unlines (header :: rows)
 
@@ -320,10 +322,13 @@ instrumentRefCCFile cFile buildDir projectDir = do
         Nothing => pure site
         Just loc => do
           mFullName <- inferTopLevelIdrisName projectDir loc
-          pure $
-            case mFullName of
-              Just fullName => { idrisName := fullName } site
-              Nothing =>
-                if isGeneratedCName site.idrisName
-                   then { idrisName := loc.file } site
-                   else site
+          -- Capture the Idris source span as the by-id join key to dumppaths
+          -- source_span ("Module:line:col--line:col"). This is mangling-independent,
+          -- unlike the (function-name, ordinal) key.
+          let span = loc.file ++ ":" ++ show loc.startLine ++ ":" ++ show loc.startCol
+                  ++ "--" ++ show loc.endLine ++ ":" ++ show loc.endCol
+          let newName : String
+              newName = case mFullName of
+                          Just fullName => fullName
+                          Nothing => if isGeneratedCName site.idrisName then loc.file else site.idrisName
+          pure ({ idrisName := newName, idrisSpan := span } site)
