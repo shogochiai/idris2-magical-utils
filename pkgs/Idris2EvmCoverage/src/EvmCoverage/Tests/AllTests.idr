@@ -317,6 +317,39 @@ test_pathHitsFromCoveredBranchIds_terminal_mapping = do
 -- Test Runner
 -- =============================================================================
 
+||| REQ_PATHRT_002: pathIdTopic is the FNV-1a-64 of the path-id, byte-identical to
+||| the idris2-yul Codegen.pathIdTopic (verified: Main.main#p0 → 11883577444374274984).
+||| This invariant is what makes the LOG-topic identity join correct.
+export
+test_pathIdTopic_matches_yul_codegen : IO Bool
+test_pathIdTopic_matches_yul_codegen =
+  pure $ pathIdTopic "Main.main#p0" == 11883577444374274984
+
+||| REQ_PATHRT_003: a dumppaths path is covered iff FNV(path_id) appears as a fired
+||| LOG topic in the revm trace; others are Missing. End-to-end identity join.
+export
+test_pathIdTopic_trace_join : IO Bool
+test_pathIdTopic_trace_join = do
+  let dp = "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"dumppaths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"Main.classify\",\"paths\":[{\"path_id\":\"Main.classify#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"terminal_origin\":\"user_clause\",\"path_length\":1,\"steps\":[],\"terminal_clause_id\":0},{\"path_id\":\"Main.classify#p1\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"terminal_origin\":\"user_clause\",\"path_length\":1,\"steps\":[],\"terminal_clause_id\":0}]}]}"
+  -- Topic for classify#p0 as a 32-byte hex word; classify#p1 not fired.
+  let topicHex = "0x" ++ padHex64 (pathIdTopic "Main.classify#p0")
+  let trace = "=== Logs (1 events) ===\nLog #0:\n  Topics: 1\n    [0] " ++ topicHex ++ "\n  Data: 0 bytes\n"
+  case analyzePathHitsFromPathIdTopics dp trace of
+    Right hits => pure $ map (.pathId) hits == ["Main.classify#p0"]
+    Left _ => pure False
+  where
+    -- left-pad the hex of an Integer to 64 chars (32 bytes)
+    padHex64 : Integer -> String
+    padHex64 n =
+      let h = if n <= 0 then "0" else toHex n
+          pad = max 0 (64 `minus` length h)
+      in pack (replicate pad '0') ++ h
+      where
+        toHexDigit : Integer -> Char
+        toHexDigit d = if d < 10 then chr (cast d + ord '0') else chr (cast d - 10 + ord 'a')
+        toHex : Integer -> String
+        toHex k = if k <= 0 then "" else toHex (k `div` 16) ++ pack [toHexDigit (k `mod` 16)]
+
 allTests : TestSuite
 allTests =
   [ ("REQ_SRCMAP_001: finds comments", test_parseYulComments_finds_comments)
@@ -343,6 +376,8 @@ allTests =
   , ("REQ_STRUCT_002: structured export maps origin tags", test_parseStructuredExport_origin_mapping)
   , ("REQ_STRUCT_003: static export autodetects structured JSON", test_parseStaticExport_autodetects_json)
   , ("REQ_PATHRT_001: terminal branch ids map to path ids", test_pathHitsFromCoveredBranchIds_terminal_mapping)
+  , ("REQ_PATHRT_002: pathIdTopic matches yul codegen", test_pathIdTopic_matches_yul_codegen)
+  , ("REQ_PATHRT_003: path-id topic trace identity join", test_pathIdTopic_trace_join)
   ]
 
 ||| Run all tests - entry point for lazy test runner

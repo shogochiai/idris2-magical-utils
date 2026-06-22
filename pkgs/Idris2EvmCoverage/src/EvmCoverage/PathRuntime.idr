@@ -25,6 +25,7 @@ import public Coverage.Core.RuntimeHit
 -- Compiler.EVM.Codegen.pathIdTopic.
 
 ||| FNV-1a 64-bit of the path-id — identical to idris2-yul Codegen.pathIdTopic.
+export
 pathIdTopic : String -> Integer
 pathIdTopic s = foldl step 14695981039346656037 (map (cast . ord) (unpack s))
   where
