@@ -589,7 +589,16 @@ runPaths opts = do
               -- silent truncation and makes them inspectable for classification.
               let unknownPaths = filter (\p => p.classification == UnknownClassification) result.allPaths
               putStrLn $ "Unknown paths: " ++ show (length unknownPaths)
-              traverse_ (\p => putStrLn $ "? " ++ p.pathId ++ " :: " ++ pathSummary p) unknownPaths
+              traverse_ (\p => putStrLn $ "? " ++ p.pathId
+                            ++ " [term=" ++ fromMaybe "-" (terminalBranchId p) ++ "]"
+                            ++ " :: " ++ pathSummary p) unknownPaths
+              -- NOTE: term= is the dumppaths terminal nodeId; cross-reference against
+              -- the *-labels.csv observable set. A term with NO matching label is an
+              -- inlined/non-materialised branch (e.g. Maybe-returning guards like
+              -- requireMemberProof that get inlined into callers) — genuinely
+              -- unobservable at EVM bytecode level. Closing those honestly needs
+              -- source-level path-id instrumentation (the dfx prim__recordPathHit
+              -- mechanism, applied to idris2-yul), not classification.
 
 -- =============================================================================
 -- Benchmark Mode
