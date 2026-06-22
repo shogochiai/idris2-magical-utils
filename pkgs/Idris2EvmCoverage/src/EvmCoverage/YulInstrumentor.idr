@@ -740,8 +740,12 @@ discoverPackagePaths = do
   case mBase of
     Just basePath => do
       let tmpFile = "/tmp/pack-pkg-paths.txt"
-      -- Find all package directories under pack install
-      let cmd = "find " ++ basePath ++ " -type d -name 'idris2-0.8.0' 2>/dev/null | head -20 > " ++ tmpFile
+      -- Find all package directories under pack install. NOTE: must NOT cap the
+      -- list — the pack store has ~40-50 package dirs, and a `head -20` truncation
+      -- silently drops custom local deps (e.g. idris2-subcontract), making Yul
+      -- generation fail with "idris2-subcontract not installed" depending on find
+      -- order. Include them all so the project's transitive deps always resolve.
+      let cmd = "find " ++ basePath ++ " -type d -name 'idris2-0.8.0' 2>/dev/null > " ++ tmpFile
       _ <- system cmd
       Right content <- readFile tmpFile
         | Left _ => fallbackDiscovery
