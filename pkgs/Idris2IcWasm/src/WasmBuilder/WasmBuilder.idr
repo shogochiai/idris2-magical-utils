@@ -1076,6 +1076,15 @@ compileToRefC opts buildDir = do
             if opts'.instrumentPathHits
                then "--dumppathshits " ++ tempDir ++ "/.pathhits-enable "
                else ""
+      -- CRITICAL for path-hits: --dumppathshits only instruments modules that get
+      -- RECOMPILED in this invocation. Stale TTCs (e.g. projectDir/build/ttc, or the
+      -- temp source's own build/ttc from a prior run) are reused as-is and stay
+      -- UN-instrumented, so only Main/TestHarness would record hits. Clear all TTC
+      -- caches so every module (Tests.AllTests + logic) rebuilds WITH the flag.
+      when opts'.instrumentPathHits $ do
+        _ <- system $ "rm -rf " ++ tempDir ++ "/build/ttc " ++ tempSrcDir ++ "/build/ttc "
+                    ++ opts'.projectDir ++ "/build/ttc 2>/dev/null || true"
+        pure ()
       let cmd = "cd " ++ opts'.projectDir ++ " && " ++
                 idris2Bin ++ " --codegen refc " ++
                 pathHitsFlag ++
