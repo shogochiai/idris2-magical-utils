@@ -155,11 +155,46 @@ pathHitsFromCoveredBranchIdsInContent coveredBranchIds dumppathsContent = do
   paths <- parseDumppathsJson dumppathsContent
   pure $ pathHitsFromCoveredBranchIds coveredBranchIds paths
 
+||| DIRECT probe→path mapping that bypasses the static-analysis branch-id bridge.
+||| The old path (coveredMaterializedBranchIds → reachableBranchIdsForFunction →
+||| branchMatchesNodeId) collapses 2775 hits → 0 because it joins through a THIRD
+||| derivation (dumpcases StaticBranchAnalysis) whose function-name and branch-id
+||| forms don't match the probe CSV / dumppaths nodeIds. Instead: probe entries
+||| (idrisName, ordinalInFunc) and path obligations (functionName) both derive from
+||| the SAME source, so within a function the N-th hit ordinal maps to the N-th
+||| path obligation. Group both by function name and align by ordinal.
+hitProbeOrdinalsByFunction : List BranchProbeEntry -> List Nat -> List (String, List Nat)
+hitProbeOrdinalsByFunction entries hitProbeIndices =
+  let hit = filter (\e => elem e.probeIndex hitProbeIndices) entries
+      fns = nub (map (.idrisName) hit)
+  in map (\fn => (fn, nub (map (.ordinalInFunc) (filter (\e => e.idrisName == fn) hit)))) fns
+
+pathsByFunction : List PathObligation -> String -> List PathObligation
+pathsByFunction paths fn = filter (\p => p.functionName == fn) paths
+
+export
+analyzePathHitsFromBranchProbeCoverageDirect : String -> List BranchProbeEntry -> List Nat -> Either String (List PathRuntimeHit)
+analyzePathHitsFromBranchProbeCoverageDirect dumppathsContent probeEntries hitProbeIndices = do
+  paths <- parseDumppathsJson dumppathsContent
+  let hitByFn = hitProbeOrdinalsByFunction probeEntries hitProbeIndices
+  let hits = concatMap (mapFnHits paths) hitByFn
+  pure (nub hits)
+  where
+    mapFnHits : List PathObligation -> (String, List Nat) -> List PathRuntimeHit
+    mapFnHits paths (fn, ords) =
+      let fnPaths = pathsByFunction paths fn
+      in mapMaybe (\ord => map (\p => MkPathRuntimeHit p.pathId 1) (indexOrd ord fnPaths)) ords
+
 export
 analyzePathHitsFromBranchProbeCoverage : String -> StaticBranchAnalysis -> List BranchProbeEntry -> List Nat -> Either String (List PathRuntimeHit)
 analyzePathHitsFromBranchProbeCoverage dumppathsContent staticAnalysis probeEntries hitProbeIndices =
-  let coveredBranchIds = coveredMaterializedBranchIds staticAnalysis probeEntries hitProbeIndices
-  in pathHitsFromCoveredBranchIdsInContent coveredBranchIds dumppathsContent
+  -- Prefer the DIRECT mapping; fall back to the legacy static-analysis bridge only
+  -- if the direct one yields nothing (e.g. no function-name overlap).
+  case analyzePathHitsFromBranchProbeCoverageDirect dumppathsContent probeEntries hitProbeIndices of
+    Right hits@(_ :: _) => Right hits
+    _ =>
+      let coveredBranchIds = coveredMaterializedBranchIds staticAnalysis probeEntries hitProbeIndices
+      in pathHitsFromCoveredBranchIdsInContent coveredBranchIds dumppathsContent
 
 export
 analyzePathHitsFromBranchProbeFiles : String -> StaticBranchAnalysis -> String -> Maybe String -> String -> String -> IO (Either String (List PathRuntimeHit))
@@ -170,8 +205,17 @@ analyzePathHitsFromBranchProbeFiles dumppathsContent staticAnalysis branchProbeM
     | Left err => do
         putStrLn $ "    [numerator] getBranchProbeIndices FAILED: " ++ err
         pure $ Left err
+  -- Breakdown of where the 2775 hits collapse: hitEntries (probes that fired) →
+  -- coveredBranchIds (mapped to static branch-ids by function+ordinal) → path hits.
+  let hitEntries = filter (\e => elem e.probeIndex hitProbeIndices) probeEntries
+  let fnsFound = length (filter (\nm => not (null (reachableBranchIdsForFunction staticAnalysis nm)))
+                           (nub (map (.idrisName) hitEntries)))
+  let coveredBranchIds = coveredMaterializedBranchIds staticAnalysis probeEntries hitProbeIndices
   let hits = analyzePathHitsFromBranchProbeCoverage dumppathsContent staticAnalysis probeEntries hitProbeIndices
   putStrLn $ "    [numerator] probeEntries=" ++ show (length probeEntries)
           ++ " hitProbeIndices=" ++ show (length hitProbeIndices)
+          ++ " hitEntries=" ++ show (length hitEntries)
+          ++ " hitEntries-with-fn=" ++ show fnsFound
+          ++ " coveredBranchIds=" ++ show (length coveredBranchIds)
           ++ " -> mapped hits=" ++ show (either (const 0) length hits)
   pure hits

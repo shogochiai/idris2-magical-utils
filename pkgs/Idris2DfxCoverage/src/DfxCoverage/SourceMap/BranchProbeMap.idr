@@ -29,6 +29,7 @@ record BranchProbeEntry where
 splitCsv : String -> List String
 splitCsv s = forget $ split (== ',') s
 
+export
 indexOrd : Nat -> List a -> Maybe a
 indexOrd _ [] = Nothing
 indexOrd Z (x :: _) = Just x
@@ -58,6 +59,7 @@ readBranchProbeMap path = do
   let entries = mapMaybe parseEntry (drop 1 (lines content))
   pure $ Right entries
 
+export
 reachableBranchIdsForFunction : StaticBranchAnalysis -> String -> List String
 reachableBranchIdsForFunction analysis idrisName =
   case Data.List.find sameName analysis.functions of
