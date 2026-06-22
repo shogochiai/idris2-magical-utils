@@ -1483,6 +1483,14 @@ intraSliceLimit = 100
 intraSliceMaxSlices : Nat
 intraSliceMaxSlices = 200
 
+||| Per-slice wall-clock timeout (seconds). A test that blocks in a syscall
+||| (e.g. an isolated Boundary.Sys runProc on a pipe that never returns) would
+||| otherwise hang the whole walk. On timeout the slice is killed (perl alarm),
+||| its partial write-on-first-hit hits are kept, and the walk advances to the
+||| next window. Generous so a slow-but-progressing instrumented slice finishes.
+intraSliceTimeoutSecs : Nat
+intraSliceTimeoutSecs = 150
+
 ||| Parse "Results: P passed, F failed" → (P, F). Nothing if absent. Pulls the
 ||| whitespace-separated tokens of the LAST Results line that parse as Nat.
 parseResultsPF : String -> Maybe (Nat, Nat)
@@ -1518,10 +1526,21 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
     go offset idx firstCount acc (S fuel) = do
       removeFileIfExists pathHitsPath
       let outPath = pathHitsPath ++ ".out"
-      _ <- system $ "cd " ++ projectDir
+      -- Per-slice timeout + stdin from /dev/null. A test in some window can block
+      -- the whole walk: either reading stdin (getLine → /dev/null gives EOF) or,
+      -- worse, blocking in a Boundary.Sys/runProc syscall on a pipe/process that
+      -- never returns when the test runs in isolation (observed: a slice sat in
+      -- state UN ~0% CPU indefinitely, 0 test lines, even with stdin redirected).
+      -- macOS has no `timeout`, so wrap in perl's alarm(): a hung slice is killed
+      -- after intraSliceTimeoutSecs and the walk continues with the hits recorded
+      -- so far (write-on-first-hit means partial hits are already on disk). Slow-
+      -- but-progressing slices finish well under the limit.
+      sliceExit <- system $ "cd " ++ projectDir
                  ++ " && IDRIS2COV_TEST_OFFSET=" ++ show offset
                  ++ " IDRIS2COV_TEST_LIMIT=" ++ show intraSliceLimit
-                 ++ " " ++ relExecPath ++ " > " ++ outPath ++ " 2>&1"
+                 ++ " perl -e 'alarm " ++ show intraSliceTimeoutSecs
+                 ++ "; exec @ARGV' " ++ relExecPath
+                 ++ " < /dev/null > " ++ outPath ++ " 2>&1"
       out <- readFile outPath
       removeFileIfExists outPath
       hitsContent <- readFile pathHitsPath
@@ -1537,10 +1556,16 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
                     Just (p, f) => p + f
                     Nothing     => 0
       let acc' = sliceHits ++ acc
-      -- empty slice → past the end → done
-      if count == 0
-        then pure acc'
-        else case firstCount of
+      -- A slice killed by the perl alarm (SIGALRM → exit 142) has NO "Results:"
+      -- line (count==0) but is NOT the end of the suite — a later window may still
+      -- have tests. Keep its partial hits and ADVANCE past it rather than
+      -- terminating. Bounded by fuel/intraSliceMaxSlices.
+      let timedOut = (sliceExit == 142 || sliceExit == 124) && isNothing pf
+      if timedOut
+        then go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+        else if count == 0
+          then pure acc'  -- empty slice → past the end → done
+          else case firstCount of
                Nothing =>
                  -- Slice 0. Distinguish env-AWARE from env-IGNORING by slice-0's
                  -- count: an env-aware exe returns exactly the window size
