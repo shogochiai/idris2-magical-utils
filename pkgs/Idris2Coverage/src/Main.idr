@@ -48,9 +48,10 @@ record Options where
   reportLeak   : Bool            -- --report-leak flag to contribute
   dumppathsJson : Maybe String   -- explicit --dumppaths-json input path
   pathHitsPath : Maybe String    -- optional runtime path-hit file
+  emitArtifacts : Maybe String   -- dir to write produced dumppaths.json + path-hits.txt
 
 defaultOptions : Options
-defaultOptions = MkOptions JSON Nothing Nothing (Just ".") [] False False Nothing False False 10 False Nothing Nothing
+defaultOptions = MkOptions JSON Nothing Nothing (Just ".") [] False False Nothing False False 10 False Nothing Nothing Nothing
 
 -- =============================================================================
 -- Argument Parsing
@@ -70,6 +71,8 @@ parseArgs ("--dumppaths-json" :: path :: rest) opts =
   parseArgs rest ({ dumppathsJson := Just path } opts)
 parseArgs ("--path-hits" :: path :: rest) opts =
   parseArgs rest ({ pathHitsPath := Just path } opts)
+parseArgs ("--emit-artifacts" :: dir :: rest) opts =
+  parseArgs rest ({ emitArtifacts := Just dir } opts)
 parseArgs ("--top" :: n :: rest) opts =
   let k : Nat = fromMaybe 10 (parsePositive n)
   in parseArgs rest ({ topK := k } opts)
@@ -134,6 +137,8 @@ OPTIONS:
   --json            Output JSON with high_impact_targets and reading_guide
   --dumppaths-json  Read path obligations from an existing dumppaths JSON file
   --path-hits       Optional newline or csv file of covered path ids
+  --emit-artifacts  Write produced dumppaths.json + path-hits.txt to <dir>
+                    (lets a caller re-run analysis in-process; build stays here)
   --top N           Number of high impact targets to include (default: 10)
   --report-leak     Found stdlib/compiler funcs in targets? Report them!
                     Creates a PR automatically. Your help keeps this fresh.
@@ -405,7 +410,20 @@ runPaths opts = do
                               pure $ map (\content => (content, explicitHits)) contentResult
       case artifactsResult of
         Left err => putStrLn $ "Error: " ++ err
-        Right (content, hits) =>
+        Right (content, hits) => do
+          -- Optionally emit the produced artifacts so a long-lived caller
+          -- (e.g. lazy) can run its own exclusion-aware analysis in-process
+          -- while the heavy build/run stays in this short-lived subprocess.
+          case opts.emitArtifacts of
+            Nothing => pure ()
+            Just dir => do
+              _ <- system $ "mkdir -p " ++ dir
+              Right () <- writeFile (dir ++ "/dumppaths.json") content
+                | Left werr => putStrLn $ "Warning: failed to write dumppaths.json: " ++ show werr
+              let hitLines = map (\h => h.pathId ++ "," ++ show h.hitCount) hits
+              Right () <- writeFile (dir ++ "/path-hits.txt") (unlines hitLines)
+                | Left werr => putStrLn $ "Warning: failed to write path-hits.txt: " ++ show werr
+              pure ()
           case analyzePathCoverageFromContent loadedExcl emptyExclusionConfig content hits of
             Left err => putStrLn $ "Error: " ++ err
             Right result =>

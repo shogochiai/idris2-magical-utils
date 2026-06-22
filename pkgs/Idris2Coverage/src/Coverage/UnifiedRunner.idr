@@ -278,12 +278,20 @@ absolutizePackPaths baseDir content = unlines (map rewriteLine (lines content))
 ||| resolve correctly from the package-dir temp pack.toml. Bounded walk.
 readProjectPackToml : String -> IO String
 readProjectPackToml projectDir = do
-  -- The package's own pack.toml: paths are already correct relative to it.
-  Right own <- readFile (projectDir ++ "/pack.toml")
-    | Left _ => do
-        absDir <- toAbsolutePath projectDir
-        inheritFrom (parentOf absDir) 8
-  pure own
+  absDir <- toAbsolutePath projectDir
+  -- The package's own pack.toml: paths are already correct relative to it. But a
+  -- monorepo sub-package's own pack.toml is often PARTIAL (e.g. just
+  -- `[custom.all.etherclaw]` self-registration) while the real local-dep
+  -- definitions (toml, lazyshared, idris2-test-suite, …) live in an ANCESTOR
+  -- pack.toml. Stopping at the partial own file made installNeededDepsIntoFork
+  -- find 0 local deps → the numerator build then failed "Module … not found".
+  -- So MERGE: own (verbatim) ++ nearest ancestor (paths absolutized). Later
+  -- duplicate [custom.all.X] blocks are harmless; localDepEntries dedups by name.
+  ownContent <- readFile (projectDir ++ "/pack.toml")
+  ancestor <- inheritFrom (parentOf absDir) 8
+  case ownContent of
+    Right own => pure $ if ancestor == "" then own else own ++ "\n\n" ++ ancestor
+    Left _    => pure ancestor
   where
     inheritFrom : String -> Nat -> IO String
     inheritFrom _ Z = pure ""
@@ -566,7 +574,11 @@ normIdent = pack . map toLower . filter isAlphaNum . unpack
 ||| The last path segment of a dir (its name).
 dirBaseName : String -> String
 dirBaseName dir =
-  case reverse (filter (/= "") (forget (split (== '/') dir))) of
+  -- Drop empty AND "." segments: toAbsolutePath "." yields ".../EtherClaw/."
+  -- whose naive last segment is "." → empty want → chooseMainIpkg name-match
+  -- fails → arbitrary ipkg (release-bundle, depends lack toml) → numerator
+  -- "Module Language.TOML not found". Filtering "." recovers "EtherClaw".
+  case reverse (filter (\s => s /= "" && s /= ".") (forget (split (== '/') dir))) of
     (s :: _) => s
     []       => dir
 
@@ -600,7 +612,14 @@ findIpkgContent projectDir = do
   Right entries <- listDir projectDir
     | Left _ => pure Nothing
   let ipkgFiles = filter (isSuffixOf ".ipkg") entries
-  case chooseMainIpkg projectDir ipkgFiles of
+  -- chooseMainIpkg matches an ipkg basename against the DIR NAME. A bare "."
+  -- projectDir (the common case when the target is a relative `foo.ipkg`) has
+  -- dirBaseName "." → empty want → the name-match fails and we'd pick an
+  -- arbitrary non-aux ipkg (e.g. release-bundle.ipkg, whose depends LACK toml →
+  -- numerator build "Module Language.TOML not found"). Absolutize first so
+  -- dirBaseName sees the real package dir name (EtherClaw → etherclaw.ipkg).
+  absDir <- toAbsolutePath projectDir
+  case chooseMainIpkg absDir ipkgFiles of
     Nothing => pure Nothing
     Just f => do
       Right content <- readFile (projectDir ++ "/" ++ f)
@@ -614,7 +633,9 @@ findProjectIpkgPath projectDir = do
   Right entries <- listDir projectDir
     | Left _ => pure Nothing
   let ipkgFiles = filter (isSuffixOf ".ipkg") entries
-  case chooseMainIpkg projectDir ipkgFiles of
+  -- Same absolutize-before-name-match fix as findIpkgContent (see note there).
+  absDir <- toAbsolutePath projectDir
+  case chooseMainIpkg absDir ipkgFiles of
     Nothing => pure Nothing
     Just f => pure (Just (projectDir ++ "/" ++ f))
 
@@ -1516,16 +1537,28 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
                     Just (p, f) => p + f
                     Nothing     => 0
       let acc' = sliceHits ++ acc
-      -- empty slice → done
+      -- empty slice → past the end → done
       if count == 0
         then pure acc'
         else case firstCount of
-               -- slice 0: record its count, advance
-               Nothing => go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
-               Just fc =>
-                 -- env-ignoring exe re-ran everything → stop with slice-0 hits only
-                 if idx == 1 && count == fc && offset >= intraSliceLimit
-                   then pure acc   -- discard this slice's dup hits; acc already has slice-0
+               Nothing =>
+                 -- Slice 0. Distinguish env-AWARE from env-IGNORING by slice-0's
+                 -- count: an env-aware exe returns exactly the window size
+                 -- (intraSliceLimit) when there are ≥ that many tests; an exe that
+                 -- ignores the window runs the WHOLE suite, so count > limit.
+                 -- (A suite SMALLER than one window gives count < limit and the
+                 --  next slice returns 0 → natural stop.)
+                 if count > intraSliceLimit
+                   then pure acc'  -- exe ignored window, ran everything: slice-0 IS the full set
+                   else go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
+               Just _ =>
+                 -- Env-aware: keep walking windows until an empty slice (count==0,
+                 -- handled above) or a short final slice (count < limit) ends it.
+                 -- Each full slice legitimately has count == intraSliceLimit, so we
+                 -- must NOT treat "count == firstCount" as the ignore signal (that
+                 -- false-positived and stopped after one window — undercounting).
+                 if count < intraSliceLimit
+                   then pure acc'  -- last (partial) window consumed → done
                    else go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
 
 ||| Test-module count above which the runtime path-coverage exe is built and run
@@ -1606,11 +1639,15 @@ runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chun
       cleanup
       pure []
     Right () => do
-      _ <- system $ "cd " ++ projectDir ++ " && " ++ relExecPath ++ " > /dev/null 2>&1"
-      hitsContent <- readFile pathHitsPath
-      let hits = case hitsContent of
-                   Left _ => []
-                   Right content => mapMaybe parsePathHitLineLocal (lines content)
+      -- Run the built exe in IDRIS2COV_TEST_OFFSET/_LIMIT slices (≈100 tests per
+      -- fresh process) instead of one whole-suite invocation. A single process
+      -- that runs ALL of EtherClaw's ~1100 tests under path instrumentation grows
+      -- unboundedly and gets SIGKILL'd (RUN_EXIT=137) before it can dump hits →
+      -- 0 covered. Slicing keeps each run's peak memory bounded and accumulates+
+      -- dedups hits across slices. Requires the test module to honour the env
+      -- window (runTestSuiteMain does); env-ignoring exes are handled by
+      -- runExeSlices' terminator (keeps slice-0 hits).
+      hits <- runExeSlices projectDir relExecPath pathHitsPath
       cleanupPackToml packTomlPath createdPackToml
       cleanup
       pure hits
