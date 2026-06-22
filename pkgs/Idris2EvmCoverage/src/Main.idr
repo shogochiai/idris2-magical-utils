@@ -519,21 +519,43 @@ runPathFullPipelineArtifacts opts = do
           Right dumppathsContent <- runDumppathsJsonInIsolatedCopy pathIpkg
             | Left err => pure $ Left err
           let canonicalBranches = filter (\b => isCanonical b.branchClass) branches
-          Right (instrPath, labelPath) <- YulInstr.generateAndInstrumentYul ipkgPath outputDir canonicalBranches
-            | Left err => pure $ Left $ "Instrumentation failed: " ++ err
-          Right _ <- YulInstr.compileYulToBytecode instrPath outputDir
-            | Left err => pure $ Left $ "Compilation failed: " ++ err
-          let binPath = instrPath ++ ".bin"
-          let traceOutput = outputDir ++ "/coverage-trace.csv"
-          Right tracePath <- YulInstr.runIdrisEvmTest binPath traceOutput
-            | Left err => pure $ Left $ "Execution failed: " ++ err
-          -- Denominator = FULL source path set with honest observability
-          -- classification (no silent shrink). Numerator = observable trace hits
-          -- (the EVM trace can only see materialized branches; that is correct).
-          Right classifiedContent <- classifyDumppathsByObservability dumppathsContent labelPath
-            | Left err => pure $ Left $ "Observability classification failed: " ++ err
-          hitsResult <- analyzePathHitsFromTraceAndLabelsContent classifiedContent tracePath labelPath
-          pure $ map (\hits => (classifiedContent, hits)) hitsResult
+          mPathcov <- getEnv "EVM_PATHCOV_YUL"
+          case mPathcov of
+            Just _ => do
+              -- SOURCE-LEVEL path coverage: generateYul (now passing --dumppathshits
+              -- via the fork-yul) emits the BASE yul with log1(0,0,FNV(path-id))
+              -- markers. We compile+run the BASE yul directly (the markers ARE the
+              -- numerator) — skipping the counter-instrumentation entirely. The
+              -- denominator is the FULL dumppaths (no observability shrink: every
+              -- source path is observable via its marker). Hits come from the trace
+              -- LOG topics (analyzePathHitsFromPathIdTopics, preferred in
+              -- analyzePathHitsFromTraceAndLabelsContent).
+              Right baseYul <- YulInstr.generateYul ipkgPath outputDir
+                | Left err => pure $ Left $ "Pathcov Yul generation failed: " ++ err
+              Right _ <- YulInstr.compileYulToBytecode baseYul outputDir
+                | Left err => pure $ Left $ "Pathcov compilation failed: " ++ err
+              let binPath = baseYul ++ ".bin"
+              let traceOutput = outputDir ++ "/coverage-trace.csv"
+              Right tracePath <- YulInstr.runIdrisEvmTest binPath traceOutput
+                | Left err => pure $ Left $ "Pathcov execution failed: " ++ err
+              hitsResult <- analyzePathHitsFromTraceAndLabelsContent dumppathsContent tracePath ""
+              pure $ map (\hits => (dumppathsContent, hits)) hitsResult
+            Nothing => do
+              Right (instrPath, labelPath) <- YulInstr.generateAndInstrumentYul ipkgPath outputDir canonicalBranches
+                | Left err => pure $ Left $ "Instrumentation failed: " ++ err
+              Right _ <- YulInstr.compileYulToBytecode instrPath outputDir
+                | Left err => pure $ Left $ "Compilation failed: " ++ err
+              let binPath = instrPath ++ ".bin"
+              let traceOutput = outputDir ++ "/coverage-trace.csv"
+              Right tracePath <- YulInstr.runIdrisEvmTest binPath traceOutput
+                | Left err => pure $ Left $ "Execution failed: " ++ err
+              -- Denominator = FULL source path set with honest observability
+              -- classification (no silent shrink). Numerator = observable trace hits
+              -- (the EVM trace can only see materialized branches; that is correct).
+              Right classifiedContent <- classifyDumppathsByObservability dumppathsContent labelPath
+                | Left err => pure $ Left $ "Observability classification failed: " ++ err
+              hitsResult <- analyzePathHitsFromTraceAndLabelsContent classifiedContent tracePath labelPath
+              pure $ map (\hits => (classifiedContent, hits)) hitsResult
 
 runPaths : Options -> IO ()
 runPaths opts = do
