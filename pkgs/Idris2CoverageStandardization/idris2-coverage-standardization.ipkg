@@ -11,3 +11,4 @@ modules = Coverage.Standardization.Types
         , Coverage.Standardization.Model
         , Coverage.Standardization.Idris2Interface
         , Coverage.Standardization.Step4Contract
+        , Coverage.Standardization.InstrumentationSafety

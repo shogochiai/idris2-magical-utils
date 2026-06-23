@@ -8,3 +8,4 @@ depends = base
 sourcedir = "src"
 
 modules = Idris2.DeliveryKind
+        , Idris2.CoverageFamily
