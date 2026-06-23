@@ -3,6 +3,7 @@ module WasmBuilder.Tests.AllTests
 
 import WasmBuilder.WasmBuilder
 import IcWasm.StableStorage
+import Data.List
 
 %default total
 
@@ -85,11 +86,20 @@ allTests =
   , test "STABLE_SQL_002" "StableConfig zero version" test_STABLE_002
   ]
 
-||| Run all tests
+||| Run an indexed slice of tests (for chunked IC coverage probes). Slicing the
+||| `allTests` spine via take/drop and running only that range keeps each IC
+||| update call small (avoids IC0502 stack overflow). The generated PureRunAll
+||| harness's `runBatch start count` calls this.
 export
-runAllTests : (Nat, Nat)
-runAllTests =
-  let results = map (\t => t.run ()) allTests
+runTestRange : Nat -> Nat -> (Nat, Nat)
+runTestRange start count =
+  let slice = take count (drop start allTests)
+      results = map (\t => t.run ()) slice
       passed = length $ filter id results
       failed = length $ filter not results
   in (passed, failed)
+
+||| Run all tests
+export
+runAllTests : (Nat, Nat)
+runAllTests = runTestRange 0 (length allTests)

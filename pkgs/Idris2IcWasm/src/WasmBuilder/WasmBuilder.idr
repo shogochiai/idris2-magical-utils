@@ -341,17 +341,22 @@ generateTestHarnessShimContent PureRunAllHarness testModuleName _ =
      , "  let (passed, failed) = TestModule.runAllTests"
      , "  in pure (cast passed, cast failed)"
      , ""
+     -- runBatch slices via TestModule.runTestRange so a single IC update call
+     -- only evaluates `count` tests (lazy-thunk list), avoiding the IC0502
+     -- stack overflow that running all tests in one call triggers.
      , "export"
      , "runBatch : Nat -> Nat -> IO (Int, Int)"
-     , "runBatch _ _ = runTests"
+     , "runBatch start count ="
+     , "  let (passed, failed) = TestModule.runTestRange start count"
+     , "  in pure (cast passed, cast failed)"
      , ""
      , "export"
      , "runMinimalTests : IO (Int, Int)"
-     , "runMinimalTests = runTests"
+     , "runMinimalTests = runBatch 0 8"
     , ""
     , "export"
     , "runTrivialTest : IO (Int, Int)"
-    , "runTrivialTest = runTests"
+    , "runTrivialTest = runBatch 0 1"
     ]
 generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
   unlines
@@ -371,17 +376,23 @@ generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
     , "  let (passed, failed) = TestModule.runAllTests"
     , "  pure (cast passed, cast failed)"
     , ""
+    -- runBatch slices via TestModule.runTestRange so a single IC update call
+    -- only evaluates `count` tests (lazy-thunk list), avoiding the IC0502
+    -- stack overflow that running all tests in one call triggers. It does NOT
+    -- invoke the IO () runner (TestModule.runTests) so each chunk stays small.
     , "export"
     , "runBatch : Nat -> Nat -> IO (Int, Int)"
-    , "runBatch _ _ = runTests"
+    , "runBatch start count ="
+    , "  let (passed, failed) = TestModule.runTestRange start count"
+    , "  in pure (cast passed, cast failed)"
     , ""
     , "export"
     , "runMinimalTests : IO (Int, Int)"
-    , "runMinimalTests = runTests"
+    , "runMinimalTests = runBatch 0 8"
     , ""
     , "export"
     , "runTrivialTest : IO (Int, Int)"
-    , "runTrivialTest = runTests"
+    , "runTrivialTest = runBatch 0 1"
     ]
 
 ||| Generate test Main.idr content that imports the standardized shim module
