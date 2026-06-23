@@ -72,6 +72,13 @@ struct Args {
     /// not the empty-calldata test-IO closure). Empty/None => empty calldata
     /// (legacy behaviour, byte-identical).
     calldata: Option<String>,
+    /// File of hex calldata, ONE PER LINE, executed SEQUENTIALLY against a SINGLE
+    /// persistent EVM/DB. State written by an earlier call (e.g. addMember) is
+    /// visible to a later call (e.g. isMember/vote/tally), so handlers progress
+    /// past their empty-state early reverts and reach their branch decision
+    /// points. All LOG markers across the whole sequence are captured. This is
+    /// how deep branch paths (loop bodies, rep checks, tally scoring) get hit.
+    calls_file: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -80,6 +87,7 @@ fn parse_args() -> Args {
         bytecode_inline: None,
         gas_limit: 100_000_000,
         calldata: None,
+        calls_file: None,
     };
     let mut it = env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -96,6 +104,9 @@ fn parse_args() -> Args {
             }
             "--calldata" => {
                 a.calldata = it.next();
+            }
+            "--calls-file" => {
+                a.calls_file = it.next();
             }
             // a bare token is the bytecode file; ignore other valueless flags
             other => {
@@ -125,6 +136,28 @@ fn load_calldata(args: &Args) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Parse the sequence of calldata from --calls-file (one hex line each).
+/// Blank lines and `#` comments are skipped. Returns Ok(None) when no file.
+fn load_calls(args: &Args) -> Result<Option<Vec<Vec<u8>>>, String> {
+    let path = match &args.calls_file {
+        None => return Ok(None),
+        Some(p) => p,
+    };
+    let content =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read calls file: {e}"))?;
+    let mut calls = Vec::new();
+    for line in content.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let stripped = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
+        let bytes = hex::decode(stripped).map_err(|e| format!("Invalid calls hex '{t}': {e}"))?;
+        calls.push(bytes);
+    }
+    Ok(Some(calls))
+}
+
 fn load_bytecode(args: &Args) -> Result<Vec<u8>, String> {
     let raw = if let Some(inline) = &args.bytecode_inline {
         inline.clone()
@@ -152,6 +185,14 @@ fn main() {
     };
 
     let calldata = match load_calldata(&args) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    };
+
+    let calls = match load_calls(&args) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -204,23 +245,45 @@ fn main() {
         })
         .build();
 
-    let result = match evm.transact() {
-        Ok(r) => r.result,
-        Err(e) => {
-            // Execution-environment error (not a normal revert). Print whatever
-            // markers fired before the error so coverage is not silently zeroed.
+    match calls {
+        // SEQUENCE mode: run each calldata against a SINGLE persistent DB so
+        // state from earlier calls (e.g. addMember) is visible to later ones
+        // (e.g. isMember/vote/tally). transact_commit persists each call's state
+        // changes. The inspector accumulates LOG markers across the whole
+        // sequence; we print the aggregate at the end.
+        Some(seq) => {
+            let mut last: Option<ExecutionResult> = None;
+            for data in &seq {
+                evm.tx_mut().data = Bytes::from(data.clone());
+                match evm.transact_commit() {
+                    Ok(r) => last = Some(r),
+                    Err(_e) => {
+                        // Environment error on one call: keep going; markers from
+                        // earlier calls are still captured.
+                    }
+                }
+            }
             let captured = evm.context.external.logs.clone();
-            print_trace_with_logs(None, &captured);
-            println!("Result: ERROR ({e})");
-            return;
+            print_trace_with_logs(last.as_ref(), &captured);
         }
-    };
-
-    // Prefer the inspector-captured logs (these survive reverts), which is the
-    // honest "path reached" signal for coverage. They are a superset of
-    // result.logs() (committed logs) and identical on success.
-    let captured = evm.context.external.logs.clone();
-    print_trace_with_logs(Some(&result), &captured);
+        // SINGLE mode (legacy + --calldata): one transaction, do not commit.
+        None => {
+            let result = match evm.transact() {
+                Ok(r) => r.result,
+                Err(e) => {
+                    let captured = evm.context.external.logs.clone();
+                    print_trace_with_logs(None, &captured);
+                    println!("Result: ERROR ({e})");
+                    return;
+                }
+            };
+            // Prefer the inspector-captured logs (these survive reverts) — the
+            // honest "path reached" signal. Superset of result.logs(), identical
+            // on success.
+            let captured = evm.context.external.logs.clone();
+            print_trace_with_logs(Some(&result), &captured);
+        }
+    }
 }
 
 fn print_trace_with_logs(result: Option<&ExecutionResult>, logs: &[Log]) {
