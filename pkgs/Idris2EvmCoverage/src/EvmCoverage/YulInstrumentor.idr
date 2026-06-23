@@ -781,6 +781,23 @@ findLatestTempIpkg projectDir = do
     then pure Nothing
     else pure $ Just path
 
+||| Find the production selector-dispatch ipkg, if the project ships one
+||| (`*-dispatch.ipkg` whose `main` is the contract's selector dispatcher rather
+||| than a test harness). When present, path coverage is measured against the
+||| REAL contract dispatch universe (the honest EVM coverage target) instead of
+||| the test-IO closure that never executes on-chain.
+export
+findDispatchIpkg : String -> IO (Maybe String)
+findDispatchIpkg projectDir = do
+  let tmpFile = "/tmp/dispatch-ipkg.txt"
+  let cmd = "ls -t " ++ projectDir ++ "/*-dispatch.ipkg 2>/dev/null"
+         ++ " | grep -v -- '-yul-' | head -1 > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure Nothing
+  let path = trim content
+  if null path then pure Nothing else pure $ Just path
+
 sanitizeIpkgForYul : String -> IO (Either String String)
 sanitizeIpkgForYul ipkgPath = do
   Right content <- readFile ipkgPath
@@ -870,6 +887,13 @@ generateYul ipkgPath outputDir = do
   let pkgPathAssign = if isJust mPathcovPrefix || null pkgPath
                          then ""
                          else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
+  -- In pathcov mode, path-hit instrumentation is inserted DURING typecheck. A
+  -- cached TTC from an earlier (un-instrumented) build would be reused and the
+  -- markers would never be emitted. Wipe the build TTC so the fork-yul re-checks
+  -- with --dumppathshits active. (No-op for the default released pipeline.)
+  _ <- if isJust mPathcovYul
+          then system ("rm -rf " ++ projectDir ++ "/build/ttc")
+          else pure 0
   let cmd = "mkdir -p " ++ outputDir
               ++ " && cd " ++ projectDir
               ++ " && " ++ pkgPathAssign ++ prefixAssign ++ yulBin
@@ -1027,6 +1051,71 @@ runIdrisEvmTest binPath traceOutput = do
              then pure $ Left (runner ++ " timed out after " ++ timeoutSecs ++ "s with no trace")
              else pure $ Right traceOutput
      else pure $ Right traceOutput
+
+-- =============================================================================
+-- Phase 2.5: REAL contract-dispatch execution (production path coverage)
+-- =============================================================================
+
+||| Discover the 4-byte selectors a contract dispatches on, by scanning the
+||| project source for `MkSel 0x<hex>`. These are the production entry points;
+||| sending each one as selector-bearing calldata drives the matching handler so
+||| its source-level path markers fire (vs. empty calldata, which runs nothing
+||| because `main : IO ()` is an unapplied closure).
+export
+discoverSelectors : String -> IO (List String)
+discoverSelectors projectDir = do
+  let tmpFile = "/tmp/textdao-selectors.txt"
+  -- `MkSel 0x67890123` → `67890123`. Lowercase, dedup, drop the literal prefix.
+  let cmd = "grep -rhoE 'MkSel 0x[0-9a-fA-F]+' " ++ projectDir ++ "/src 2>/dev/null"
+         ++ " | sed -E 's/.*0x//' | tr 'A-F' 'a-f' | sort -u > " ++ tmpFile
+  _ <- system cmd
+  Right content <- readFile tmpFile
+    | Left _ => pure []
+  pure $ filter (not . null) (map trim (lines content))
+
+||| Run the deployed runtime once per selector and AGGREGATE every fired LOG
+||| topic into a single trace file. Each handler reverts on empty state, but the
+||| revm inspector captures the markers that fired before the revert (a path is
+||| reached iff its marker opcode executed). A handler reached only via dispatch
+||| therefore contributes its path-ids to the numerator. Padding: selector + 8
+||| zero words covers the widest ABI arg list among the handlers.
+export
+runDispatchSelectors : String -> String -> List String -> IO (Either String String)
+runDispatchSelectors binPath traceOutput selectors = do
+  Right content <- readFile binPath
+    | Left _ => pure $ Left "Cannot read bytecode file"
+  let runtimeHex = extractRuntimeBytecode content
+  let runtimePath = "/tmp/runtime-dispatch.bin"
+  Right () <- writeFile runtimePath runtimeHex
+    | Left _ => pure $ Left "Cannot write runtime bytecode"
+  runner <- resolveEvmRunner
+  -- 8 zero words of ABI args (256 hex chars). Covers vote(uint256 x7) etc.
+  let argPad = pack (replicate 256 '0')
+  -- One revm-run per selector, appended to the aggregate trace. `>` for the
+  -- first selector (truncate), `>>` thereafter (append).
+  let runOne : (Bool, String) -> IO ()
+      runOne (isFirst, sel) = do
+        let redir = if isFirst then " > " else " >> "
+        let cmd = runner ++ " --calldata " ++ sel ++ argPad
+               ++ " --gas 100000000 " ++ runtimePath
+               ++ redir ++ traceOutput ++ " 2>/dev/null"
+        _ <- system cmd
+        pure ()
+  let flagged : List (Bool, String)
+      flagged = case selectors of
+                  [] => []
+                  (s :: rest) => (True, s) :: map (\x => (False, x)) rest
+  -- If there are no selectors, run once with empty calldata so the trace is
+  -- non-empty and the pipeline does not crash.
+  case flagged of
+    [] => do
+      let cmd = runner ++ " --gas 100000000 " ++ runtimePath ++ " > " ++ traceOutput ++ " 2>/dev/null"
+      _ <- system cmd
+      pure ()
+    _ => for_ flagged runOne
+  Right _ <- readFile traceOutput
+    | Left _ => pure $ Left "Cannot read aggregated dispatch trace"
+  pure $ Right traceOutput
 
 -- =============================================================================
 -- Phase 3: Coverage Analysis Result

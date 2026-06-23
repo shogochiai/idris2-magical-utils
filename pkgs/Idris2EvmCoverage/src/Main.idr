@@ -522,24 +522,46 @@ runPathFullPipelineArtifacts opts = do
           mPathcov <- getEnv "EVM_PATHCOV_YUL"
           case mPathcov of
             Just _ => do
-              -- SOURCE-LEVEL path coverage: generateYul (now passing --dumppathshits
-              -- via the fork-yul) emits the BASE yul with log1(0,0,FNV(path-id))
-              -- markers. We compile+run the BASE yul directly (the markers ARE the
-              -- numerator) — skipping the counter-instrumentation entirely. The
-              -- denominator is the FULL dumppaths (no observability shrink: every
-              -- source path is observable via its marker). Hits come from the trace
-              -- LOG topics (analyzePathHitsFromPathIdTopics, preferred in
-              -- analyzePathHitsFromTraceAndLabelsContent).
-              Right baseYul <- YulInstr.generateYul ipkgPath outputDir
+              -- SOURCE-LEVEL path coverage, driven by REAL contract dispatch.
+              --
+              -- A deployed EVM contract is pure selector dispatch, not a test-IO
+              -- program; idris2-yul compiles `main : IO ()` to an unapplied
+              -- closure that never runs. So when the project ships a production
+              -- dispatch ipkg (`*-dispatch.ipkg`, whose `main` is `dispatch
+              -- [entries]`), we measure coverage against THAT universe:
+              --   * denominator = dumppaths of the dispatch ipkg (production
+              --     reachable paths), test modules excluded by construction.
+              --   * numerator   = path markers fired by sending each production
+              --     selector as calldata (runDispatchSelectors), captured by the
+              --     revm inspector even across handler reverts.
+              -- The fork-yul (--dumppathshits) emits log1(0,0,FNV(path-id)) and
+              -- the entry now APPLIES the IO closure, so the handlers actually
+              -- execute. If no dispatch ipkg exists we fall back to the previous
+              -- single-run-of-the-executable behaviour (zero regression).
+              mDispatchIpkg <- YulInstr.findDispatchIpkg targetDir
+              let buildIpkg = fromMaybe ipkgPath mDispatchIpkg
+              -- Denominator universe: dispatch ipkg if present, else test ipkg.
+              denomContent <- case mDispatchIpkg of
+                                Just di => do
+                                  Right c <- runDumppathsJsonInIsolatedCopy di
+                                    | Left _ => pure dumppathsContent
+                                  pure c
+                                Nothing => pure dumppathsContent
+              Right baseYul <- YulInstr.generateYul buildIpkg outputDir
                 | Left err => pure $ Left $ "Pathcov Yul generation failed: " ++ err
               Right _ <- YulInstr.compileYulToBytecode baseYul outputDir
                 | Left err => pure $ Left $ "Pathcov compilation failed: " ++ err
               let binPath = baseYul ++ ".bin"
               let traceOutput = outputDir ++ "/coverage-trace.csv"
-              Right tracePath <- YulInstr.runIdrisEvmTest binPath traceOutput
+              tracePathResult <- the (IO (Either String String)) $ case mDispatchIpkg of
+                Just _ => do
+                  selectors <- YulInstr.discoverSelectors targetDir
+                  YulInstr.runDispatchSelectors binPath traceOutput selectors
+                Nothing => YulInstr.runIdrisEvmTest binPath traceOutput
+              Right tracePath <- pure tracePathResult
                 | Left err => pure $ Left $ "Pathcov execution failed: " ++ err
-              hitsResult <- analyzePathHitsFromTraceAndLabelsContent dumppathsContent tracePath ""
-              pure $ map (\hits => (dumppathsContent, hits)) hitsResult
+              hitsResult <- analyzePathHitsFromTraceAndLabelsContent denomContent tracePath ""
+              pure $ map (\hits => (denomContent, hits)) hitsResult
             Nothing => do
               Right (instrPath, labelPath) <- YulInstr.generateAndInstrumentYul ipkgPath outputDir canonicalBranches
                 | Left err => pure $ Left $ "Instrumentation failed: " ++ err
