@@ -15,6 +15,7 @@ modules = Coverage.Core.Types
         , Coverage.Core.DumpcasesRunner
         , Coverage.Core.DumppathsJson
         , Coverage.Core.PathCoverage
+        , Coverage.Core.Backend
         , Coverage.Core.RuntimeHit
         , Coverage.Core.ObligationMap
         , Coverage.Core.HighImpact

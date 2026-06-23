@@ -7,6 +7,8 @@ import Data.List
 
 import Coverage.Core.DumppathsJson
 import Coverage.Core.PathCoverage
+import Coverage.Core.Backend
+import Coverage.Core.Exclusions
 import Coverage.Core.Types
 import Coverage.Core.Result
 import Coverage.Core.RuntimeHit
@@ -437,6 +439,63 @@ test_PATH_004 () =
      && obligation.summary == "Main.safe :: True => reached_clause"
 
 -- =============================================================================
+-- Backend Tests (the unified path-coverage abstraction)
+-- =============================================================================
+
+-- functionName = pathId minus the trailing "#pN" (good enough for these tests; the
+-- exclusion + projection predicates key on functionName, so it must be realistic).
+fnOf : String -> String
+fnOf pid = pack (takeWhile (/= '#') (unpack pid))
+
+mkOb : String -> ObligationClass -> List PathStep -> Maybe String -> PathObligation
+mkOb pid cls steps spanU =
+  MkPathObligation pid (fnOf pid) "M" cls "reached_clause" Nothing steps spanU
+                   (length steps)
+
+-- coveredByKey with the STRING-identity key (web/dfx/core/android join).
+test_BACKEND_001 : () -> Bool
+test_BACKEND_001 () =
+  let a = mkOb "M.f#p0" ReachableObligation [] Nothing
+      b = mkOb "M.f#p1" ReachableObligation [] Nothing
+      covered = coveredByKey (.pathId) ["M.f#p0"] [a, b]
+  in map (.pathId) covered == ["M.f#p0"]
+
+-- coveredByKey with an INTEGER key (the evm FNV-hash join shape: a non-(.pathId)
+-- key function). Proves the polymorphic join works for k /= String.
+test_BACKEND_002 : () -> Bool
+test_BACKEND_002 () =
+  let a = mkOb "M.f#p0" ReachableObligation [] Nothing   -- length 0
+      b = mkOb "M.g#p1" ReachableObligation
+            [MkPathStep "n" 0 "u" Nothing Nothing Nothing] Nothing   -- length 1
+      keyByLen : PathObligation -> Integer
+      keyByLen p = cast p.pathLength
+      covered = coveredByKey keyByLen [1] [a, b]   -- only the length-1 obligation
+  in map (.pathId) covered == ["M.g#p1"]
+
+-- reclassifyArtifacts demotes a generated record projection (bare form: no steps,
+-- no span, Record.field name) to CompilerInsertedArtifact so countsAsDenominator
+-- drops it — WITHOUT deleting it (it stays, reclassified).
+test_BACKEND_003 : () -> Bool
+test_BACKEND_003 () =
+  let proj = mkOb "M.Rec.field#p0" ReachableObligation [] Nothing
+      real = mkOb "M.update#p0" ReachableObligation
+               [MkPathStep "n" 0 "u" Nothing Nothing Nothing] (Just "M:1:1--3:5")
+      out = reclassifyArtifacts [] [proj, real]
+      projOut = filter (\p => p.pathId == "M.Rec.field#p0") out
+      realOut = filter (\p => p.pathId == "M.update#p0") out
+  in length out == 2   -- nothing deleted
+     && all (\p => p.classification == CompilerInsertedArtifact) projOut
+     && all (\p => p.classification == ReachableObligation) realOut
+
+-- reclassifyArtifacts with a test-harness ExclPattern demotes a matching path.
+test_BACKEND_004 : () -> Bool
+test_BACKEND_004 () =
+  let harness = mkOb "M.Tests.AllTests.run#p0" ReachableObligation
+                  [MkPathStep "n" 0 "u" Nothing Nothing Nothing] (Just "M:1:1--2:2")
+      out = reclassifyArtifacts [containsPattern ".Tests." "test harness"] [harness]
+  in all (\p => p.classification == CompilerInsertedArtifact) out
+
+-- =============================================================================
 -- All Tests
 -- =============================================================================
 
@@ -505,6 +564,11 @@ allTests =
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003
   , test "PATH_004" "path obligations use path granularity" test_PATH_004
+  -- Backend (unified abstraction)
+  , test "BACKEND_001" "coveredByKey string-identity join" test_BACKEND_001
+  , test "BACKEND_002" "coveredByKey integer (hash-shape) join" test_BACKEND_002
+  , test "BACKEND_003" "reclassifyArtifacts demotes projection, keeps real" test_BACKEND_003
+  , test "BACKEND_004" "reclassifyArtifacts demotes test-harness path" test_BACKEND_004
   ]
 
 ||| Run all tests - pure version
