@@ -106,6 +106,64 @@ unreachablePaths =
       "EtherClawAndroid.Parse.6844:2451:go#p5"
       CompilerInsertedArtifact
       "go's depth-2 list match: branch_label 'default' on a List (only :: and Nil exist, both enumerated as #1:0/#1:1); compiler-synthesised default, no reachable input."
+
+    -- ----- EtherClawAndroid.View ------------------------------------------
+    -- taskTreeCard and afterMarker and fmtDate are DEAD private helpers: they
+    -- have ZERO call sites in the module (postBubble renders a TaskTree as the
+    -- canister-backed builderQueueCard, NOT inline taskTreeCard; fmtDate was
+    -- superseded by fmtDateTime). The sole module export is `view`, and no path
+    -- from `view` reaches them, so every leaf of taskTreeCard/fmtDate has NO
+    -- reachable input. (Verified: `grep taskTreeCard|afterMarker|fmtDate ` in
+    -- View.idr shows only their own definitions, no callers.)
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in taskTreeCard#p0"
+      LogicallyUnreachable
+      "taskTreeCard is a DEAD private helper (0 call sites in View.idr; postBubble renders TaskTrees as builderQueueCard, not inline). Unreachable from the sole export `view`."
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in taskTreeCard#p1"
+      LogicallyUnreachable
+      "taskTreeCard is a DEAD private helper (0 call sites in View.idr). Unreachable from the sole export `view`."
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in fmtDate#p0"
+      LogicallyUnreachable
+      "fmtDate is a DEAD private helper (0 call sites in View.idr; superseded by fmtDateTime, which IS called). Unreachable from the sole export `view`."
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in fmtDate#p1"
+      LogicallyUnreachable
+      "fmtDate is a DEAD private helper (0 call sites in View.idr). Unreachable from the sole export `view`."
+
+    -- composer.closedLabel: `case statusBadge st of Just (lbl,_) => lbl; Nothing
+    -- => st`. statusBadge (Model.idr) has a TOTAL catch-all `statusBadge _ = Just
+    -- (...)` — it returns `Just` for EVERY input and NEVER `Nothing`. So the
+    -- `Nothing => st` arm has no reachable input. Type-level unreachable.
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in composer,closedLabel#p1"
+      LogicallyUnreachable
+      "closedLabel matches `case statusBadge st of ... Nothing => st`; statusBadge has a total catch-all `statusBadge _ = Just (...)` and never returns Nothing, so the Nothing arm is unreachable."
+
+    -- statusChip: `case (status=="plan_proposed", proposalActionBadge p) of
+    -- (True, Just lc) => lc; _ => ...`. The two USER arms ((True,Just) and the
+    -- wildcard) are both covered; #p3's branch_label is the compiler-synthesised
+    -- `default` (branch_index 1) of the tuple/Maybe match — no value reaches a
+    -- third arm of an already-exhaustive (Bool, Maybe) match.
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in statusChip#p3"
+      CompilerInsertedArtifact
+      "statusChip's (Bool, Maybe) tuple match: branch_label 'default' (branch_index 1) is the compiler-synthesised arm of an already-exhaustive match (the (True,Just) and wildcard user arms are both covered); no reachable input."
+
+    -- diffScreen.fileBody: `case (m.diffBaseContent, m.diffHeadContent) of
+    -- (Just b, Just h) => ...; _ => ...`. The (Just,Just) and wildcard user arms
+    -- are covered (diffFileBoth / diffFileHalf). #p2 and #p3 are the compiler-
+    -- synthesised `default` arms of the nested Maybe-pair match (no value reaches
+    -- a default beyond the two enumerated Maybe constructors per side).
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in diffScreen,fileBody#p2"
+      CompilerInsertedArtifact
+      "fileBody's (Maybe, Maybe) match: an MkPair then a compiler-synthesised 'default' branch (branch_index 1); both user arms ((Just,Just) + wildcard) are covered, so the default has no reachable input."
+  , MkUnreachablePath
+      "EtherClawAndroid.View.case block in diffScreen,fileBody#p3"
+      CompilerInsertedArtifact
+      "fileBody's (Maybe, Maybe) match: compiler-synthesised 'default' branch (branch_index 1); both user arms are covered, so the default has no reachable Maybe-pair input."
   ]
 
 ||| The path-id-keyed classifier: `Just (class, reason)` for a proven-unreachable

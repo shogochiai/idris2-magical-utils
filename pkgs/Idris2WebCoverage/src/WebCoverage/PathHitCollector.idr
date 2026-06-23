@@ -54,6 +54,15 @@ webPathExclusions =
   , prefixPattern "test_" "Test helper function"
   , exactPattern "Main.main" "Test runner entry point"
   , exactPattern "Main_runTests" "Test runner itself"
+  -- Native boundaries: %foreign "react-native" decls with NO node/javascript
+  -- backend (node codegen hard-errors if they enter the build). These are the
+  -- effect/bridge layers around the native edge, not pure node-runnable logic, so
+  -- they are reason-tagged out HERE (visible) rather than silently ipkg-omitted.
+  -- The denominator is the pure node-buildable app logic (Model/Msg/Update/View/
+  -- Parse). The EtherClawAndroid.* qualifier keeps this app-scoped.
+  , containsPattern "EtherClawAndroid.Canister" "Native react-native FFI bridge to the IC canister (34 %foreign, no node backend)"
+  , containsPattern "EtherClawAndroid.Display" "Effect layer: loaders reference RN.Identity/RN.Runtime/Canister react-native %foreign (no node backend)"
+  , containsPattern "EtherClawAndroid.Main" "Native app bootstrap (main : IO () + RN.Runtime runMVUc)"
   ]
 
 -- The generated-record-projection predicates (bare `Record.field` + dotted
