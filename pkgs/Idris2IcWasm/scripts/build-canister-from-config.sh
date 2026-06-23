@@ -313,16 +313,20 @@ load_config() {
             echo "Error: gen_entry.sql_vfs_memory_id requires paths.icwasm_sqlite_support" >&2
             exit 1
         fi
-        # VFS implementation selection. The append-only sqlite_vfs_bridge.c is the
-        # default; setting BULLETPROOF_VFS=1 swaps in bulletproof_vfs.c (the in-place
-        # vertex-BC VFS that borrows atomicity from IC message atomicity, bounding
-        # stable allocation at ~M). Both provide the SAME FFI boundary and
-        # sqlite3_os_init, so exactly one must be linked.
-        VFS_IMPL_C="$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.c"
-        if [[ "${BULLETPROOF_VFS:-0}" == "1" ]]; then
-            VFS_IMPL_C="$ICWASM_SQLITE_SUPPORT/bulletproof_vfs.c"
-            echo "[vfs] BulletproofVFS selected (in-place, message-atomic; stable bounded at ~M)"
-        fi
+        # VFS implementation: BulletproofVFS (bulletproof_vfs.c) is the ONLY VFS now.
+        # The append-only sqlite_vfs_bridge.c is GONE — it was a build-time selector
+        # (BULLETPROOF_VFS=1) that had to be remembered manually, and forgetting it
+        # built a wasm whose stable layout was INCOMPATIBLE with a mainnet canister
+        # already on BulletproofVFS: the standard VFS read the bulletproof pages as
+        # empty and post_upgrade DDL partially overwrote them, an irreversible
+        # data-loss footgun (2026-06-23 incident). A deployed SQLite canister's stable
+        # format is load-bearing, so the VFS must NOT be a flag you can forget. The
+        # in-place, message-atomic VFS (stable bounded at ~M) is the canonical one and
+        # is what every GlobalRegistry deploy already runs. (Note: bulletproof_vfs.c
+        # still keeps its own -DUSE_BULLETPROOF_VFS compile guard for its native unit
+        # test; only this build-time CHOICE is removed.)
+        VFS_IMPL_C="$ICWASM_SQLITE_SUPPORT/bulletproof_vfs.c"
+        echo "[vfs] BulletproofVFS (in-place, message-atomic; stable bounded at ~M; the only VFS)"
         for required in \
             "$ICWASM_SQLITE_SUPPORT/sqlite_bridge.h" \
             "$ICWASM_SQLITE_SUPPORT/sqlite_vfs_bridge.h" \
