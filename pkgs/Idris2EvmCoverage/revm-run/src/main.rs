@@ -30,19 +30,48 @@ use std::process;
 
 use revm::{
     db::{CacheDB, EmptyDB},
+    inspector_handle_register,
+    interpreter::Interpreter,
     primitives::{
-        AccountInfo, Address, Bytecode, Bytes, ExecutionResult, Output, TxKind, U256,
+        AccountInfo, Address, Bytecode, Bytes, ExecutionResult, Log, Output, TxKind, U256,
     },
-    Evm,
+    Database, EvmContext, Evm, Inspector,
 };
 
 const CALLEE: [u8; 20] = [0x10; 20];
 const CALLER: [u8; 20] = [0x20; 20];
 
+/// Captures every LOG event AS IT EXECUTES, before any revert rolls it back.
+///
+/// Path-coverage markers are emitted by the contract via `log1(0,0,<path-id>)`.
+/// A deployed contract is pure dispatch: the handler runs and fires its markers,
+/// but if that handler then reverts (e.g. `vote` on empty state) the EVM rolls
+/// back ExecutionResult::logs() per spec — so the markers would be lost. The
+/// inspector's `log` hook fires at opcode-execution time, capturing the markers
+/// regardless of the eventual revert. This is exactly the right semantics for
+/// coverage: a path was REACHED iff its marker opcode executed, independent of
+/// whether the surrounding call later reverted.
+#[derive(Default)]
+struct LogCapture {
+    logs: Vec<Log>,
+}
+
+impl<DB: Database> Inspector<DB> for LogCapture {
+    fn log(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>, log: &Log) {
+        self.logs.push(log.clone());
+    }
+}
+
 struct Args {
     bytecode_file: Option<String>,
     bytecode_inline: Option<String>,
     gas_limit: u64,
+    /// Hex calldata (with or without 0x). When set, the deployed runtime is
+    /// invoked WITH this calldata so a real selector-bearing contract dispatch
+    /// runs the matching handler (path-coverage numerator = production dispatch,
+    /// not the empty-calldata test-IO closure). Empty/None => empty calldata
+    /// (legacy behaviour, byte-identical).
+    calldata: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -50,6 +79,7 @@ fn parse_args() -> Args {
         bytecode_file: None,
         bytecode_inline: None,
         gas_limit: 100_000_000,
+        calldata: None,
     };
     let mut it = env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -64,6 +94,9 @@ fn parse_args() -> Args {
             "--bytecode" => {
                 a.bytecode_inline = it.next();
             }
+            "--calldata" => {
+                a.calldata = it.next();
+            }
             // a bare token is the bytecode file; ignore other valueless flags
             other => {
                 if !other.starts_with('-') && a.bytecode_file.is_none() {
@@ -73,6 +106,23 @@ fn parse_args() -> Args {
         }
     }
     a
+}
+
+fn load_calldata(args: &Args) -> Result<Vec<u8>, String> {
+    match &args.calldata {
+        None => Ok(Vec::new()),
+        Some(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Ok(Vec::new());
+            }
+            let stripped = trimmed
+                .strip_prefix("0x")
+                .or_else(|| trimmed.strip_prefix("0X"))
+                .unwrap_or(trimmed);
+            hex::decode(stripped).map_err(|e| format!("Invalid calldata hex: {e}"))
+        }
+    }
 }
 
 fn load_bytecode(args: &Args) -> Result<Vec<u8>, String> {
@@ -94,6 +144,14 @@ fn load_bytecode(args: &Args) -> Result<Vec<u8>, String> {
 fn main() {
     let args = parse_args();
     let code = match load_bytecode(&args) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    };
+
+    let calldata = match load_calldata(&args) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error: {e}");
@@ -129,10 +187,12 @@ fn main() {
 
     let mut evm = Evm::builder()
         .with_db(db)
+        .with_external_context(LogCapture::default())
+        .append_handler_register(inspector_handle_register)
         .modify_tx_env(|tx| {
             tx.caller = caller;
             tx.transact_to = TxKind::Call(callee);
-            tx.data = Bytes::new();
+            tx.data = Bytes::from(calldata.clone());
             tx.value = U256::ZERO;
             tx.gas_limit = args.gas_limit;
             tx.gas_price = U256::ZERO;
@@ -147,20 +207,23 @@ fn main() {
     let result = match evm.transact() {
         Ok(r) => r.result,
         Err(e) => {
-            // Execution-environment error (not a normal revert). Print no logs and
-            // a non-SUCCESS result line so the parser yields zero counters rather
-            // than crashing.
+            // Execution-environment error (not a normal revert). Print whatever
+            // markers fired before the error so coverage is not silently zeroed.
+            let captured = evm.context.external.logs.clone();
+            print_trace_with_logs(None, &captured);
             println!("Result: ERROR ({e})");
             return;
         }
     };
 
-    print_trace(&result);
+    // Prefer the inspector-captured logs (these survive reverts), which is the
+    // honest "path reached" signal for coverage. They are a superset of
+    // result.logs() (committed logs) and identical on success.
+    let captured = evm.context.external.logs.clone();
+    print_trace_with_logs(Some(&result), &captured);
 }
 
-fn print_trace(result: &ExecutionResult) {
-    let logs = result.logs();
-
+fn print_trace_with_logs(result: Option<&ExecutionResult>, logs: &[Log]) {
     if !logs.is_empty() {
         println!("\n=== Logs ({} events) ===", logs.len());
         for (i, log) in logs.iter().enumerate() {
@@ -179,20 +242,22 @@ fn print_trace(result: &ExecutionResult) {
     }
 
     match result {
-        ExecutionResult::Success { gas_used, output, .. } => {
+        None => {}
+        Some(ExecutionResult::Success { gas_used, output, .. }) => {
             println!("Result: SUCCESS (gas used: {gas_used})");
             if let Output::Call(bytes) = output {
                 // coverage parser ignores return data; omitting keeps parity
                 let _ = bytes;
             }
         }
-        ExecutionResult::Revert { gas_used, .. } => {
-            // On a real EVM revert, logs roll back. The instrumentor inserts a
-            // ProfileFlush BEFORE revert/return so pre-revert counters still emit;
-            // revm's logs() reflects the same EIP semantics as idris2-evm-run.
+        Some(ExecutionResult::Revert { gas_used, .. }) => {
+            // On a real EVM revert, committed logs roll back. For path coverage we
+            // print the inspector-captured logs above (markers that fired BEFORE
+            // the revert), which is the correct "path reached" signal. The result
+            // line still reports REVERT for honest execution status.
             println!("Result: REVERT (gas used: {gas_used})");
         }
-        ExecutionResult::Halt { reason, gas_used } => {
+        Some(ExecutionResult::Halt { reason, gas_used }) => {
             println!("Result: HALT {reason:?} (gas used: {gas_used})");
         }
     }

@@ -12,6 +12,7 @@ modules = WebCoverage.Types
         , WebCoverage.SourceMapper
         , WebCoverage.JSFunctionParser
         , WebCoverage.UnifiedRunner
+        , WebCoverage.Exclusions
         , WebCoverage.PathHitCollector
         , WebCoverage.PathRunner
 

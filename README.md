@@ -101,6 +101,118 @@ The current model in this repo distinguishes:
 
 That last distinction is surfaced as `claim_admissible`.
 
+## Why Idris2, Not Lean
+
+This is a common question, because Lean 4 is the more famous dependently-typed
+system and has a larger proof ecosystem. The short answer is **not** that Lean
+is less capable. It is that Lean and Idris2 optimized for different goals, and
+the work in this repo has the shape Idris2 optimized for.
+
+> Idris2 trims its dependent types toward *bringing proofs into programs*.
+> Lean trims its dependent types toward *bringing programs into proofs*.
+> A path-obligation coverage toolchain that compiles, runs, and measures real
+> backends is the former shape, so Idris2 fits with less friction. That is a
+> difference of aim, not a deficiency in Lean.
+
+### The workflow this repo actually runs
+
+Abstracted, the daily loop is:
+
+1. add a constructor to a sum type (e.g. a new backend family)
+2. let the totality/coverage checker enumerate every non-exhaustive site
+3. close genuinely-unreachable cases with `impossible`
+4. require `total` so the compiler is the witness of exhaustiveness
+5. **execute** the program and collect `--dumppaths-json` path coverage
+
+The decisive property is that steps 2-4 (type-level exhaustiveness and
+termination) and step 5 (real execution, measured) live in **one** working loop.
+This repo treats dependent types as an everyday *programming* tool whose programs
+are also shipped and instrumented — exactly Edwin Brady's *Type-Driven
+Development* framing. The four design divergences below explain why that loop is
+smooth in Idris2 and taxed in Lean.
+
+### 1. `impossible` is a first-class programming word
+
+Idris2 has the `impossible` keyword, so "this pattern is unreachable at the type
+level" is written directly in ordinary code:
+
+```idris
+noNat : (1 = 2) -> Void
+noNat Refl impossible
+```
+
+Lean has no such keyword. The equivalent is done with proof tactics / terms
+(`nomatch`, `Empty.elim`, `absurd`, an empty `cases`). Lean is not weaker here —
+for large proofs it is often smoother. The difference is directness: writing one
+word `impossible` in a program branch and having downstream exhaustiveness close
+is *programming vocabulary* in Idris2 and a *proof tactic* in Lean.
+
+### 2. Totality is a dial you can run with, not a gate you must clear
+
+This is the largest divergence.
+
+- **Idris2**: `%default total` makes "not total ⇒ compile error" a project-wide
+  policy, while `partial` definitions still type-check and still run. Totality
+  is a practical on/off dial, which enables *gradual rigor*: write `partial`,
+  run it, tighten to `total` later.
+- **Lean 4**: every definition the kernel accepts must be total (for soundness).
+  You either discharge termination (`termination_by` / `decreasing_by`) or write
+  `partial def` — but a `partial def` carries no defining equations or `simp`
+  lemmas, so it is effectively opaque inside proofs.
+
+| | A `partial` function can be… |
+| --- | --- |
+| Idris2 | executed, and type-checked (only `covering` is required); merely awkward to reason about |
+| Lean 4 | executed, but largely severed from the proof world (opaque) |
+
+So "prototype partial, then tighten" is low-friction in Idris2 and high-friction
+in Lean.
+
+### 3. Execution is a first-class target — the soil `dumppaths` grows in
+
+The coverage pipeline assumes you **write a program in Idris2, run it, and
+observe its execution paths** (`--dumppaths-json` / `--dumppathshits`, forked
+compiler). That assumption pays off because Idris2 treats multiple execution
+backends (Chez, RefC→C, JS, and external codegen such as `Idris2Evm` /
+`Idris2IcWasm`) as primary deliverables. Lean 4 can compile and `#eval` too, but
+its ecosystem's center of gravity is Mathlib — formalized proof, not shipped-and-
+profiled applications. Growing a `--dumppaths-json` flag and using it as a
+coverage denominator is a natural move when *the executed program is the object
+of measurement*. This is an ecosystem-weight difference more than a raw-
+capability one.
+
+### 4. Idris2 leans computational; Lean carries proof-grade machinery
+
+For sound mathematics Lean adopts definitional proof irrelevance, quotient types
+as kernel primitives, and classical logic with choice. These are decisive for
+formalizing mathematics, but they add friction to the *computational content* of
+programs (universe `Prop`/`Type` separation, `Decidable`-mediated `if`, etc.).
+Idris2 leans constructive/computational, so "case-split a `Type` value and close
+with `impossible`" stays lightweight. Idris2 also carries a different weapon Lean
+lacks — Quantitative Type Theory (0/1/ω multiplicities) for resource/linearity
+typing.
+
+### Where Lean is the better choice
+
+Stated plainly, so this section is a comparison and not a pitch:
+
+- **Proof scale and automation**: `simp`, `omega`, `decide`, `aesop`, and the
+  Mathlib corpus make large-scale proving Lean's domain.
+- **Metaprogramming**: Lean 4's `macro` / `elab` / `MetaM` (Lean is written in
+  Lean) is more unified than Idris2 Elaborator Reflection.
+- **Kernel trust**: a small checked kernel plus proof irrelevance gives Lean the
+  stronger story as a *proof system*.
+- **Mathematical community**: Mathlib is the largest asset in the dependently-
+  typed world.
+
+### One-line summary
+
+If your loop is *prove-heavy*, reach for Lean. If your loop is
+*enumerate-with-the-typechecker, close-with-`impossible`, require-`total`, then
+execute-and-measure* — the loop this repo is built around — Idris2 is the better
+fit, and that is a deliberate difference in optimization target, not a gap in
+Lean.
+
 ## Build Notes
 
 Different packages target different backends.

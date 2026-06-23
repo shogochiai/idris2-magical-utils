@@ -26,6 +26,7 @@ import Coverage.Core.Types
 import Coverage.Core.Exclusions
 import Coverage.Core.Backend
 import Coverage.Standardization.InstrumentationSafety
+import WebCoverage.Exclusions
 import public Coverage.Core.RuntimeHit
 
 %default covering
@@ -74,7 +75,13 @@ webCoverageImpl = MkCoverageImpl
   (ForkedIpkg "")                       -- buildDenominator: filled per run
   (.pathId)                             -- joinKey: string identity
   (PureKeys [])                         -- gatherEvidence: filled per run (recorded ids)
-  (reclassifyArtifacts webPathExclusions)   -- EXCLUSIONS: shared reclassifier
+  -- EXCLUSIONS: (1) the shared function-name reclassifier (test harness + generated
+  -- record projections -> CompilerInsertedArtifact), THEN (2) the path-id-keyed
+  -- proven-unreachable reclassifier (defensive total-function arms with a written
+  -- proof -> LogicallyUnreachable / CompilerInsertedArtifact). Both leave every path
+  -- in the set with an honest class (no silent denominator shrink); see
+  -- WebCoverage.Exclusions for the per-path proofs.
+  (reclassifyUnreachableWebPaths . reclassifyArtifacts webPathExclusions)
   (NoOpWithoutHook "globalThis.__idris2_recordPathHit is undefined in prod; the emitted call is a no-op unless the harness installs the hook")
 
 ||| Split a harness output file into trimmed, non-empty path-id tokens.
