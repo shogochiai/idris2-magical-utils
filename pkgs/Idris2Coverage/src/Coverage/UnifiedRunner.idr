@@ -1525,6 +1525,17 @@ runExeSlices : (projectDir : String) -> (relExecPath : String) -> (pathHitsPath 
             -> IO (List PathRuntimeHit)
 runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceMaxSlices
   where
+    -- Env-gated per-slice trace. Set IDRIS2COV_SLICE_DEBUG=1 to diagnose a
+    -- non-deterministic numerator: prints offset, exit code, parsed (passed,
+    -- failed), this slice's hit count, accumulated hit count, and which
+    -- termination branch the walk took. Off by default (no output pollution).
+    sliceDebug : String -> IO ()
+    sliceDebug msg = do
+      dbg <- getEnv "IDRIS2COV_SLICE_DEBUG"
+      case dbg of
+        Just v => if trim v == "" || trim v == "0" then pure () else putStrLn ("    [slice] " ++ msg)
+        Nothing => pure ()
+
     -- offset, sliceIdx, firstCount (passed+failed of slice 0), accHits, fuel
     go : Nat -> Nat -> Maybe Nat -> List PathRuntimeHit -> Nat -> IO (List PathRuntimeHit)
     go _ _ _ acc Z = pure acc
@@ -1575,10 +1586,19 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
       -- partial hits already written (write-on-first-hit) and ADVANCE. Only a
       -- CLEAN exit (0) with count==0 means we have genuinely walked off the end.
       let crashedMidSlice = (sliceExit /= 0) && isNothing pf && not timedOut
+      sliceDebug $ "offset=" ++ show offset ++ " idx=" ++ show idx
+                ++ " exit=" ++ show sliceExit
+                ++ " pf=" ++ show pf ++ " count=" ++ show count
+                ++ " sliceHits=" ++ show (length sliceHits)
+                ++ " accHits=" ++ show (length acc')
+                ++ " firstCount=" ++ show firstCount
+                ++ " timedOut=" ++ show timedOut
+                ++ " crashedMidSlice=" ++ show crashedMidSlice
       if timedOut || crashedMidSlice
-        then go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+        then do sliceDebug "branch=ADVANCE(timeout/crash)"
+                go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
         else if count == 0
-          then pure acc'  -- clean empty slice → past the end → done
+          then do sliceDebug "branch=STOP(clean-empty past-the-end)"; pure acc'  -- clean empty slice → past the end → done
           else case firstCount of
                Nothing =>
                  -- Slice 0. Distinguish env-AWARE from env-IGNORING by slice-0's
@@ -1588,8 +1608,9 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
                  -- (A suite SMALLER than one window gives count < limit and the
                  --  next slice returns 0 → natural stop.)
                  if count > intraSliceLimit
-                   then pure acc'  -- exe ignored window, ran everything: slice-0 IS the full set
-                   else go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
+                   then do sliceDebug "branch=STOP(slice0 count>limit env-ignored)"; pure acc'  -- exe ignored window, ran everything: slice-0 IS the full set
+                   else do sliceDebug "branch=ADVANCE(slice0 env-aware)"
+                           go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
                Just _ =>
                  -- Env-aware: keep walking windows until an empty slice (count==0,
                  -- handled above) or a short final slice (count < limit) ends it.
@@ -1597,8 +1618,9 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
                  -- must NOT treat "count == firstCount" as the ignore signal (that
                  -- false-positived and stopped after one window — undercounting).
                  if count < intraSliceLimit
-                   then pure acc'  -- last (partial) window consumed → done
-                   else go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+                   then do sliceDebug "branch=STOP(short final window)"; pure acc'  -- last (partial) window consumed → done
+                   else do sliceDebug "branch=ADVANCE(env-aware full window)"
+                           go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
 
 ||| Test-module count above which the runtime path-coverage exe is built and run
 ||| in sequential chunks instead of one whole-suite process. A single exe that
