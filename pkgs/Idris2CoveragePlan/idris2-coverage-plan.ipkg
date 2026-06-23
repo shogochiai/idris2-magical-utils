@@ -1,0 +1,10 @@
+package idris2-coverage-plan
+version = 0.1.0
+authors = "EtherClaw"
+brief = "Coverage family registry — the totality anchor that forces every CoverageFamily to declare a coverage story (Denominator/Numerator/Chunk/Exclusions or a written declared-unimplemented)"
+
+sourcedir = "src"
+
+depends = base, contrib, idris2-delivery-kind, idris2-coverage-core, idris2-coverage-standardization
+
+modules = Coverage.Plan.Registry

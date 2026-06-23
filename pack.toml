@@ -68,6 +68,16 @@ type = "local"
 path = "pkgs/Idris2WebCoverage"
 ipkg = "idris2-web-coverage.ipkg"
 
+[custom.all.idris2-delivery-kind]
+type = "local"
+path = "pkgs/Idris2DeliveryKind"
+ipkg = "idris2-delivery-kind.ipkg"
+
+[custom.all.idris2-coverage-plan]
+type = "local"
+path = "pkgs/Idris2CoveragePlan"
+ipkg = "idris2-coverage-plan.ipkg"
+
 [custom.all.idris2-cdk]
 type = "local"
 path = "pkgs/Idris2Cdk"
