@@ -397,9 +397,15 @@ generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
 
 ||| Generate test Main.idr content that imports the standardized shim module
 ||| This is written to /tmp, never touches the original Main.idr
+||| One canister export `runTestBatchN` is generated per index; each runs an
+||| 8-test slice (start = idx*8). Cover enough indices that the batches span the
+||| whole pure-test list (0..15 -> up to 128 tests) so chunked probing records
+||| hits for every test without a single all-tests call (which can overflow the
+||| IC native stack / crash the replica). Must stay in sync with the dfx-cov
+||| probe's batchProbeIndexes.
 testBatchIndexes : List Int
 testBatchIndexes =
-  [0, 1, 2]
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 generateTestBatchExport : Int -> List String
 generateTestBatchExport idx =
@@ -453,10 +459,10 @@ generateTestMainContent =
     , "      _ <- Main.runTests"
     , "      _ <- Main.runMinimalTests"
     , "      _ <- Main.runTrivialTest"
-    , "      _ <- Main.runTestBatch0"
-    , "      _ <- Main.runTestBatch1"
-    , "      _ <- Main.runTestBatch2"
-    , "      pure ()"
+    ]
+    ++ map (\idx => "      _ <- Main.runTestBatch" ++ show idx) testBatchIndexes
+    ++
+    [ "      pure ()"
     , "    else pure ()"
     , ""
     , "main : IO ()"
