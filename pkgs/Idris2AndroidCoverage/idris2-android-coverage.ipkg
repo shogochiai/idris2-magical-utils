@@ -2,10 +2,11 @@ package idris2-android-coverage
 version = "0.1.0"
 authors = "EtherClaw"
 sourcedir = "src"
-depends = base, contrib, idris2-react-native-lib
+depends = base, contrib, idris2-react-native-lib, idris2-coverage-core, idris2-coverage-standardization
 
 modules = Android.Coverage.DeviceProbe
         , Android.Coverage.PathCoverage
+        , Android.Coverage.Backend
         , Android.Coverage.PathCovMain
 main = Android.Coverage.PathCovMain
 executable = device-pathcov
