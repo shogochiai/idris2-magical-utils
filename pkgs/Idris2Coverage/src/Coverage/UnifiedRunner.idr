@@ -276,6 +276,7 @@ absolutizePackPaths baseDir content = unlines (map rewriteLine (lines content))
 ||| sub-packages fail with "no matching version is installed". Inherited
 ||| relative `path =` entries are absolutized against the ancestor dir so they
 ||| resolve correctly from the package-dir temp pack.toml. Bounded walk.
+export
 readProjectPackToml : String -> IO String
 readProjectPackToml projectDir = do
   absDir <- toAbsolutePath projectDir
@@ -324,6 +325,7 @@ tomlStringField key line =
 ||| absolutizePackPaths). Used to install local deps into the FORKED compiler's
 ||| package path before a direct `idris2 --build` (which reads neither pack.toml
 ||| nor pack's store — only ~/.idris2 and ./depends).
+export
 localDepEntries : String -> List (String, String, String)
 localDepEntries content = go (lines content) Nothing Nothing Nothing Nothing []
   where
@@ -364,6 +366,7 @@ localDepEntries content = go (lines content) Nothing Nothing Nothing Nothing []
 
 ||| The coverage stack the temp ipkg always pulls in (generateTempIpkgWithOpts
 ||| hardcodes idris2-coverage; it depends on these). Always install these.
+export
 coverageStackDeps : List String
 coverageStackDeps =
   [ "idris2-coverage", "idris2-coverage-core", "idris2-coverage-standardization" ]
@@ -375,6 +378,7 @@ coverageStackDeps =
 ||| stack) so we don't build unrelated heavyweight monorepo packages (e.g. the
 ||| canister). Best-effort + multi-round for dep ordering. No-op when IDRIS2_BIN
 ||| is unset (pack resolves deps itself then).
+export
 installNeededDepsIntoFork : (projectDepends : List String) -> (packTomlContent : String) -> IO ()
 installNeededDepsIntoFork projectDepends packTomlContent = do
   Just idris2 <- getEnv "IDRIS2_BIN"
@@ -479,6 +483,7 @@ cleanupTempFiles tempIdr tempIpkg ssHtml profileHtml = do
 ||| Parse depends from ipkg content, handling multi-line continuation
 ||| Returns list of package names from "depends = pkg1, pkg2, ..." lines
 ||| Supports continuation lines starting with ',' or whitespace
+export
 parseIpkgDepends : String -> List String
 parseIpkgDepends content =
   let ls = lines content

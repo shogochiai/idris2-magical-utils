@@ -12,3 +12,9 @@ modules = WebCoverage.Types
         , WebCoverage.SourceMapper
         , WebCoverage.JSFunctionParser
         , WebCoverage.UnifiedRunner
+        , WebCoverage.PathHitCollector
+        , WebCoverage.PathRunner
+
+main = Main
+
+executable = idris2-web-cov
