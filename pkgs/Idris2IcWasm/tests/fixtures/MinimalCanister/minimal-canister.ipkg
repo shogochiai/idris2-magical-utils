@@ -1,0 +1,5 @@
+package minimal-canister
+version = 0.1.0
+sourcedir = "src"
+modules = Main
+        , Tests.AllTests
