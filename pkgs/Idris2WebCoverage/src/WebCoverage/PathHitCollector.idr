@@ -24,6 +24,8 @@ import Coverage.Core.DumppathsJson
 import Coverage.Core.PathCoverage
 import Coverage.Core.Types
 import Coverage.Core.Exclusions
+import Coverage.Core.Backend
+import Coverage.Standardization.InstrumentationSafety
 import public Coverage.Core.RuntimeHit
 
 %default covering
@@ -53,79 +55,27 @@ webPathExclusions =
   , exactPattern "Main_runTests" "Test runner itself"
   ]
 
-isAsciiUpper : Char -> Bool
-isAsciiUpper c = c >= 'A' && c <= 'Z'
+-- The generated-record-projection predicates (bare `Record.field` + dotted
+-- `Record.(.field)`) now live ONCE in Coverage.Core.Backend
+-- (isGeneratedRecordProjectionPath) and are shared by every family. The web
+-- denominator policy is "reclassify test-harness + generated projections to
+-- CompilerInsertedArtifact", which is exactly Backend.reclassifyArtifacts bound to
+-- webPathExclusions — no local delete-filter, no copied projection predicate.
 
-isAsciiLower : Char -> Bool
-isAsciiLower c = c >= 'a' && c <= 'z'
-
-startsWith : (Char -> Bool) -> String -> Bool
-startsWith predicate s =
-  case unpack s of
-    [] => False
-    c :: _ => predicate c
-
-||| The compiler emits record getters in TWO syntactic forms, both auto-generated
-||| total accessors (not MVU branches):
-|||   - bare  : `Record.field`           — terminal clause, no steps, no span
-|||   - paren : `Record.(.field)`         — the dotted-projection form, 1 record
-|||                                          pattern-match step, no span
-||| The bare form is the dfx isGeneratedRecordProjectionPath case; the paren form
-||| is web/RN-specific (the ES backend keeps the `.field` projection syntax).
-||| Both have an Uppercase record segment and a lowercase field, no source span,
-||| and are NOT `case block` lambdas — so neither is product logic under test.
-||| Name shape of a generated record getter `Record.field`: the second-to-last
-||| dot segment is the Uppercase record, the last is the lowercase field (no ':'
-||| span tokens, not a `case block` lambda). NOTE this NAME test alone is weak —
-||| almost any `Module.function` satisfies it — so it is ONLY ever applied
-||| together with the structural path constraints below (no steps, no source
-||| span), which is what actually distinguishes a 0-branch generated projection
-||| from a real function. The compiler renders the dotted-projection form
-||| `Record.(.field)` but the dumppaths functionName is the bare `Record.field`.
-isGeneratedRecordProjectionName : String -> Bool
-isGeneratedRecordProjectionName name =
-  case reverse (forget $ split (== '.') name) of
-    field :: recordName :: _ =>
-         startsWith isAsciiUpper recordName
-      && startsWith isAsciiLower field
-      && not (isInfixOf ":" field)
-      && not (isInfixOf "case block" name)
-    _ => False
-
-||| The dotted-projection getter form `Record.(.field)`. The compiler emits this
-||| as a 1-step obligation whose step carries the RECORD's decl span (the whole
-||| record block) but whose path has NO sourceSpanUnion — distinct from a real
-||| function whose path owns a union span. The `.(.…)` name marks it
-||| unambiguously as the auto-generated dotted accessor (a real function name
-||| never contains `.(.`).
-isDottedProjectionName : String -> Bool
-isDottedProjectionName name =
-  isInfixOf ".(." name && isSuffixOf ")" name && not (isInfixOf "case block" name)
-
-||| A generated record projection. TWO compiler-emitted forms, each requiring its
-||| NAME shape AND the structural shape that separates a 0-branch accessor from a
-||| real function (which always carries a path-level sourceSpanUnion):
-|||   - bare   `Record.field`     : no steps, no union span (dfx form)
-|||   - dotted  `Record.(.field)` : single step, no union span (ES/RN form)
-||| Real MVU functions (update/view/parsers) own a sourceSpanUnion, so they are
-||| never excluded even when a name shape coincides.
-isGeneratedRecordProjectionPath : PathObligation -> Bool
-isGeneratedRecordProjectionPath path =
-  path.terminalKind == "reached_clause"
-  && isNothing path.sourceSpanUnion
-  && ( (path.steps == [] && isGeneratedRecordProjectionName path.functionName)
-       || isDottedProjectionName path.functionName )
-
-shouldExcludePath : List ExclPattern -> PathObligation -> Bool
-shouldExcludePath patterns path =
-  isJust (isMethodExcluded patterns path.functionName)
-  || isGeneratedRecordProjectionPath path
-
-||| Filter the parsed obligations down to genuine product MVU paths.
+||| The web/android/ios MVU coverage backend: forked `--cg node --dumppaths-json`
+||| denominator, string-identity join on `.pathId`, the shared artifact reclassifier
+||| bound to the web test-harness patterns, and a no-op-without-hook production-safety
+||| witness (the ES `globalThis.__idris2_recordPathHit` call is inert in prod). The
+||| `buildDenominator`/`gatherEvidence` are filled per run by the runner.
 export
-filterProductPaths : List ExclPattern -> List PathObligation -> List PathObligation
-filterProductPaths patterns =
-  filter (\path => not (shouldExcludePath patterns path))
+webCoverageImpl : CoverageImpl String
+webCoverageImpl = MkCoverageImpl
+  (Just "node")                         -- cgFlag: ES/Node backend
+  (ForkedIpkg "")                       -- buildDenominator: filled per run
+  (.pathId)                             -- joinKey: string identity
+  (PureKeys [])                         -- gatherEvidence: filled per run (recorded ids)
+  (reclassifyArtifacts webPathExclusions)   -- EXCLUSIONS: shared reclassifier
+  (NoOpWithoutHook "globalThis.__idris2_recordPathHit is undefined in prod; the emitted call is a no-op unless the harness installs the hook")
 
 ||| Split a harness output file into trimmed, non-empty path-id tokens.
 ||| The harness writes one canonical path-id per line (newline-joined Set).
@@ -146,9 +96,9 @@ analyzeWebPathHits : (dumppathsContent : String) -> (recordedIds : List String)
                   -> Either String (List PathRuntimeHit)
 analyzeWebPathHits dumppathsContent recordedIds = do
   paths <- parseDumppathsJson dumppathsContent
-  let product = filterProductPaths webPathExclusions paths
-  let covered = filter (\p => elem p.pathId recordedIds) product
-  pure (map (\p => MkPathRuntimeHit p.pathId 1) covered)
+  -- reclassify (not delete) test-harness + generated projections, then identity-join
+  let reclassified = webCoverageImpl.reclassify paths
+  pure (hitsByKey webCoverageImpl.joinKey recordedIds reclassified)
 
 ||| File-driven variant: read the dumppaths JSON and the harness recorded-ids
 ||| file, then identity-join. Numerator = recorded ∩ dumppaths; the full
@@ -171,12 +121,10 @@ analyzeWebPathHitsFromFiles dumppathsPath recordedIdsPath = do
 export
 webPathCoverageResult : (dumppathsContent : String) -> (recordedIds : List String)
                      -> Either String PathCoverageResult
-webPathCoverageResult dumppathsContent recordedIds = do
-  paths <- parseDumppathsJson dumppathsContent
-  -- Denominator = product MVU paths only (test-harness + generated record
-  -- projections removed with reasons; same policy as dfx/evm). Numerator =
-  -- recorded ∩ product denominator (identity join).
-  let product = filterProductPaths webPathExclusions paths
-  let hits = map (\p => MkPathRuntimeHit p.pathId 1)
-                 (filter (\p => elem p.pathId recordedIds) product)
-  pure (buildPathCoverageResultFromHits product hits)
+webPathCoverageResult dumppathsContent recordedIds =
+  -- The ONE shared pipeline: reclassify (exclusions) → coveredByKey (numerator) →
+  -- buildPathCoverageResultFromHits. Denominator = obligations whose class still
+  -- countsAsDenominator after reclassifying test-harness + generated projections to
+  -- CompilerInsertedArtifact (same numbers as the old delete-filter, but honest:
+  -- excluded paths survive reclassified, not vanished). Same Step4 surface.
+  coverageResultFor webCoverageImpl dumppathsContent recordedIds
