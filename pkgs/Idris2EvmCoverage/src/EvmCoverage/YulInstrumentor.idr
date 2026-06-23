@@ -1113,6 +1113,73 @@ runDispatchSelectors binPath traceOutput selectors = do
       _ <- system cmd
       pure ()
     _ => for_ flagged runOne
+  -- STATEFUL DRIVING (covers the state/arg-dependent True/Ok sides that a fresh
+  -- all-zero single call can never reach, e.g. checkMember True, requireMemberProof
+  -- Just, propose Ok, vote Ok, finalTally). The per-selector runs above each start
+  -- from EMPTY state, so they only ever exercise the "not registered / nothing
+  -- exists yet" guard (False/Fail/Nothing). To reach the True side we run a SINGLE
+  -- persistent sequence (revm --calls-file uses transact_commit, so state from one
+  -- call is visible to the next):
+  --   * arg0 of every call is the revm CALLER address word (0x20*20). Any
+  --     `addMember(address,...)`-style registration thus registers the caller, and
+  --     every later member/owner-gated call made BY that caller then passes its
+  --     gate (the handler reads `caller`, which is the same 0x20*20 address).
+  --   * we run each selector with a few representative arg vectors (caller-addr in
+  --     arg0, then 0/1/2 small ids) so index/id-dependent branches (getMember(0),
+  --     tally(0), rcvPoints 0/1/2) are reached.
+  -- All markers fired across the whole sequence are appended to the aggregate trace.
+  let callerWord : String   -- 32-byte word: 12 zero bytes ++ the revm CALLER
+      -- address, which is the byte 0x20 repeated 20 times => hex "20" x 20.
+      -- (NOT 40 '2' chars — that would be 0x2222..22, a different address that no
+      -- handler's `caller` ever equals, so member/owner gates would never pass.)
+      callerWord = pack (replicate 24 '0') ++ concat (replicate 20 "20")
+  let zeroWord : String
+      zeroWord = pack (replicate 64 '0')
+  let smallWord : Char -> String
+      smallWord c = pack (replicate 63 '0') ++ pack [c]
+  let oneWord : String
+      oneWord = smallWord '1'
+  -- For each selector emit several stateful calldatas with distinct argument
+  -- vectors. The Decoder monad threads the offset, so multi-arg handlers now read
+  -- each word distinctly; giving them DISTINCT small ids (0/1/2/3) lets id- and
+  -- index-dependent branches (header/command ids in vote, getMember/tally indices,
+  -- rcvPoints 0/1/2) be reached. arg0 = caller addr word so membership/owner gates
+  -- pass once a registration selector has run earlier in the persistent sequence.
+  let argsFor : String -> List String
+      argsFor sel =
+        [ sel ++ callerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+        , sel ++ zeroWord    ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord
+        , sel ++ oneWord     ++ smallWord '1' ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+        ]
+  -- Build the calls-file. We do NOT know which selector is the registration
+  -- (addMember-style) one, and the selectors run in an arbitrary (sorted) order,
+  -- so a single pass may run a gated selector (propose/vote) BEFORE the
+  -- registration selector and miss the member-gated True side. To make ordering
+  -- irrelevant we run the whole selector set MULTIPLE times: by the 2nd/3rd pass
+  -- any registration call has already committed, so every later member-gated call
+  -- (made by the same caller) takes its True/Ok branch. Each pass also re-runs the
+  -- varied arg vectors so accumulated state (proposals/headers) deepens.
+  let callerVec : String -> String
+      callerVec sel = sel ++ callerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+  let onePass : List String
+      onePass = concatMap argsFor selectors
+  let allCalls : List String
+      allCalls =
+        -- Phase A: register membership up-front (every selector with caller arg0,
+        -- run twice so addMember(caller) definitely precedes the gated selectors).
+        map callerVec selectors ++ map callerVec selectors
+        -- Phase B: three full varied passes (state deepens; member-gated True sides
+        -- now reachable since the caller is registered).
+        ++ onePass ++ onePass ++ onePass
+  let callsFile = "/tmp/dispatch-stateful-calls.txt"
+  _ <- writeFile callsFile (unlines allCalls)
+  let seqTrace = "/tmp/dispatch-stateful-trace.csv"
+  let seqCmd = runner ++ " --calls-file " ++ callsFile
+            ++ " --gas 400000000 " ++ runtimePath
+            ++ " > " ++ seqTrace ++ " 2>/dev/null"
+  _ <- system seqCmd
+  -- Append the stateful trace to the aggregate so its markers join the numerator.
+  _ <- system ("cat " ++ seqTrace ++ " >> " ++ traceOutput ++ " 2>/dev/null")
   Right _ <- readFile traceOutput
     | Left _ => pure $ Left "Cannot read aggregated dispatch trace"
   pure $ Right traceOutput

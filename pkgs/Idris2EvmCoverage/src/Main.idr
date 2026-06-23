@@ -607,12 +607,20 @@ runPaths opts = do
                 (Nothing, Just _) => pure $ Left "--runtime-labels requires --runtime-trace for path mode"
                 (Nothing, Nothing) => pure $ Right []
           pure $ map (\hits => (content, hits)) hitsResult
+  -- HONEST DENOMINATOR: when the source was instrumented with the FORK-yul
+  -- (EVM_PATHCOV_YUL), every source CaseTree leaf carries a log1 marker and is
+  -- directly observable, so the released-yul "branch-label collapse" /
+  -- "constant-false" exclusions that previously hid real product branches
+  -- (Tally/Tokenomics/Members) MUST be suppressed — otherwise the denominator is
+  -- the narrow released-yul artifact, not the full source-branch set.
+  mHonest <- getEnv "EVM_PATHCOV_YUL"
+  let honestObservable = isJust mHonest
   case artifactsResult of
     Left err => do
       putStrLn $ "Error: " ++ err
       exitWith (ExitFailure 1)
     Right (content, hits) =>
-      case analyzePathCoverageFromContent defaultPathExclusions content hits of
+      case analyzePathCoverageFromContentMode honestObservable defaultPathExclusions content hits of
         Left err => do
           putStrLn $ "Error: " ++ err
           exitWith (ExitFailure 1)

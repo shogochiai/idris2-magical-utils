@@ -253,13 +253,46 @@ fn main() {
         // sequence; we print the aggregate at the end.
         Some(seq) => {
             let mut last: Option<ExecutionResult> = None;
-            for data in &seq {
+            for (ci, data) in seq.iter().enumerate() {
                 evm.tx_mut().data = Bytes::from(data.clone());
+                // Advance the caller nonce to match the committed account state,
+                // otherwise revm rejects every call after the first with a nonce
+                // mismatch (so addMember's sstore never commits and member-gated
+                // True branches stay unreachable).
+                evm.tx_mut().nonce = Some(ci as u64);
                 match evm.transact_commit() {
-                    Ok(r) => last = Some(r),
+                    Ok(r) => {
+                        if std::env::var("REVM_DEBUG").is_ok() {
+                            match &r {
+                                ExecutionResult::Success { output, .. } => {
+                                    let ob = match output { Output::Call(b) => b.as_ref(), Output::Create(b, _) => b.as_ref() };
+                                    eprintln!("[call {ci}] SUCCESS out=0x{}", hex::encode(ob));
+                                }
+                                ExecutionResult::Revert { output, .. } => eprintln!("[call {ci}] REVERT out=0x{}", hex::encode(output.as_ref())),
+                                ExecutionResult::Halt { reason, .. } => eprintln!("[call {ci}] HALT {reason:?}"),
+                            }
+                        }
+                        last = Some(r);
+                    }
                     Err(_e) => {
-                        // Environment error on one call: keep going; markers from
-                        // earlier calls are still captured.
+                        if std::env::var("REVM_DEBUG").is_ok() {
+                            eprintln!("[call {ci}] ENV-ERR {_e:?}");
+                        }
+                    }
+                }
+                if std::env::var("REVM_DUMP_STORAGE").is_ok() {
+                    let callee_addr = Address::from(CALLEE);
+                    if let Some(acc) = evm.context.evm.db.accounts.get(&callee_addr) {
+                        let mut n = 0;
+                        let mut slots: Vec<(U256, U256)> = acc.storage.iter().map(|(k, v)| (*k, *v)).collect();
+                        slots.sort_by_key(|(k, _)| *k);
+                        for (k, v) in &slots {
+                            if *v != U256::ZERO {
+                                n += 1;
+                                eprintln!("    slot 0x{k:x} = 0x{v:x}");
+                            }
+                        }
+                        eprintln!("[call {ci}] non-zero storage slots: {n}");
                     }
                 }
             }
