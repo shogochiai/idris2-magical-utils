@@ -52,10 +52,10 @@ reclassifyDeviceExclusions : List PathObligation -> List PathObligation
 reclassifyDeviceExclusions =
   reclassifyByClassifier classify
   where
-    classify : PathObligation -> Maybe (ObligationClass, String)
+    classify : PathObligation -> Maybe ExclusionReason
     classify p =
       if isExcludedFn p.functionName
-        then Just (CompilerInsertedArtifact, "device exclusion policy (lib/synthetic/accessor/test)")
+        then Just NonProductModule  -- lib/synthetic/accessor/test -> CompilerInsertedArtifact
         else Nothing
 
 ||| The android REAL-DEVICE coverage backend. PURE: PrebuiltIdFiles + PureKeys,

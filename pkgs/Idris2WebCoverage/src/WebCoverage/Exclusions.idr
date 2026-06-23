@@ -36,12 +36,19 @@ import Coverage.Standardization.Types
 %default covering
 
 ||| One proven-unreachable path obligation: its exact canonical path_id, the
-||| honest class it is reclassified to, and the PROOF of why no input reaches it.
+||| canonical `ExclusionReason` it is reclassified by (which fixes the resulting
+||| ObligationClass via `reasonClass`), and the PROOF of why no input reaches it.
+||| Using `ExclusionReason` (not a free `ObligationClass`) keeps web on the SAME
+||| Totality anchor as every other family: a 7th category cannot be smuggled in.
+|||   * a type-level-dead arm (provably no reachable input)  -> ConstantFalseGuard
+|||     (the only reason mapping to LogicallyUnreachable, preserving the class).
+|||   * a compiler-synthesised `default` arm (no user clause) -> StraightLineClause
+|||     (maps to CompilerInsertedArtifact, preserving the class).
 public export
 record UnreachablePath where
   constructor MkUnreachablePath
   pathId : String
-  reclassifiedTo : ObligationClass
+  reclassifiedTo : ExclusionReason
   reason : String
 
 ||| The proven-unreachable leaves of the EtherClawAndroid MVU app. Each `proof`
@@ -57,7 +64,7 @@ unreachablePaths =
     -- single segment [""], so last' = Just ""). Type-level unreachable.
     MkUnreachablePath
       "EtherClawAndroid.Parse.case block in renderDraftSpec,artifactBase#p0"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "last' (forget (split (=='/') p)) is Just for all p: split : List1 (never []), forget keeps it non-empty, so last' = Just; the Nothing arm is unreachable (refPath \"\" -> [\"\"] -> Just \"\")."
 
     -- artifactBase inner: `noext = forget (split (== '.') s)` then
@@ -65,7 +72,7 @@ unreachablePaths =
     -- is ALWAYS a non-empty list; the `[]` (Nil) arm has no input. Unreachable.
   , MkUnreachablePath
       "EtherClawAndroid.Parse.case block in case block in renderDraftSpec,artifactBase#p1"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "noext = forget (split (=='.') s) is non-empty for all s (split : List1), so the [] (Nil) arm is unreachable; even s == \"\" yields [\"\"]."
 
     -- afterDelim: rest = snd (break (\\c => c==':' || c=='=') raw); break = span (not.p),
@@ -81,11 +88,11 @@ unreachablePaths =
     --     => rest is non-empty => cs is non-empty => the [] arm is unreachable too.
   , MkUnreachablePath
       "EtherClawAndroid.Parse.case block in afterDelim#p2"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "cs = unpack (trim (snd (break delim raw))); break=span(not.delim) leaves rest empty or delimiter-headed, so a non-empty cs always heads ':' or '='; the 'other char' arm is unreachable."
   , MkUnreachablePath
       "EtherClawAndroid.Parse.case block in afterDelim#p3"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "afterDelim is un-exported; all three callers (classify Accept/Target, title line) guard with isPrefixOf on a ':'/'=' prefix, so raw always contains a delimiter, rest is non-empty, cs is non-empty; the empty/default arm is unreachable."
 
     -- b64Decode's `go : List Int -> List Char -> List Int`. The second arg is a
@@ -96,15 +103,15 @@ unreachablePaths =
     -- compiler-synthesised, not user clauses with reachable inputs.
   , MkUnreachablePath
       "EtherClawAndroid.Parse.6844:2451:go#p2"
-      CompilerInsertedArtifact
+      StraightLineClause
       "go's depth-4 list match: branch_label 'default' on a List (only :: and Nil exist, both already enumerated as #3:0/#3:1); the synthesised default has no reachable List value."
   , MkUnreachablePath
       "EtherClawAndroid.Parse.6844:2451:go#p4"
-      CompilerInsertedArtifact
+      StraightLineClause
       "go's depth-3 list match: branch_label 'default' on a List (only :: and Nil exist, both enumerated as #2:0/#2:1); compiler-synthesised default, no reachable input."
   , MkUnreachablePath
       "EtherClawAndroid.Parse.6844:2451:go#p5"
-      CompilerInsertedArtifact
+      StraightLineClause
       "go's depth-2 list match: branch_label 'default' on a List (only :: and Nil exist, both enumerated as #1:0/#1:1); compiler-synthesised default, no reachable input."
 
     -- ----- EtherClawAndroid.View ------------------------------------------
@@ -117,19 +124,19 @@ unreachablePaths =
     -- View.idr shows only their own definitions, no callers.)
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in taskTreeCard#p0"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "taskTreeCard is a DEAD private helper (0 call sites in View.idr; postBubble renders TaskTrees as builderQueueCard, not inline). Unreachable from the sole export `view`."
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in taskTreeCard#p1"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "taskTreeCard is a DEAD private helper (0 call sites in View.idr). Unreachable from the sole export `view`."
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in fmtDate#p0"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "fmtDate is a DEAD private helper (0 call sites in View.idr; superseded by fmtDateTime, which IS called). Unreachable from the sole export `view`."
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in fmtDate#p1"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "fmtDate is a DEAD private helper (0 call sites in View.idr). Unreachable from the sole export `view`."
 
     -- composer.closedLabel: `case statusBadge st of Just (lbl,_) => lbl; Nothing
@@ -138,7 +145,7 @@ unreachablePaths =
     -- `Nothing => st` arm has no reachable input. Type-level unreachable.
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in composer,closedLabel#p1"
-      LogicallyUnreachable
+      ConstantFalseGuard
       "closedLabel matches `case statusBadge st of ... Nothing => st`; statusBadge has a total catch-all `statusBadge _ = Just (...)` and never returns Nothing, so the Nothing arm is unreachable."
 
     -- statusChip: `case (status=="plan_proposed", proposalActionBadge p) of
@@ -148,7 +155,7 @@ unreachablePaths =
     -- third arm of an already-exhaustive (Bool, Maybe) match.
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in statusChip#p3"
-      CompilerInsertedArtifact
+      StraightLineClause
       "statusChip's (Bool, Maybe) tuple match: branch_label 'default' (branch_index 1) is the compiler-synthesised arm of an already-exhaustive match (the (True,Just) and wildcard user arms are both covered); no reachable input."
 
     -- diffScreen.fileBody: `case (m.diffBaseContent, m.diffHeadContent) of
@@ -158,23 +165,25 @@ unreachablePaths =
     -- a default beyond the two enumerated Maybe constructors per side).
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in diffScreen,fileBody#p2"
-      CompilerInsertedArtifact
+      StraightLineClause
       "fileBody's (Maybe, Maybe) match: an MkPair then a compiler-synthesised 'default' branch (branch_index 1); both user arms ((Just,Just) + wildcard) are covered, so the default has no reachable input."
   , MkUnreachablePath
       "EtherClawAndroid.View.case block in diffScreen,fileBody#p3"
-      CompilerInsertedArtifact
+      StraightLineClause
       "fileBody's (Maybe, Maybe) match: compiler-synthesised 'default' branch (branch_index 1); both user arms are covered, so the default has no reachable Maybe-pair input."
   ]
 
-||| The path-id-keyed classifier: `Just (class, reason)` for a proven-unreachable
-||| leaf, `Nothing` to leave the path as a normal product obligation. Surgical:
-||| matches the exact path_id only, so reachable siblings of the same function are
-||| untouched (they still demand a test).
+||| The path-id-keyed classifier: `Just reason` (a canonical `ExclusionReason`) for
+||| a proven-unreachable leaf, `Nothing` to leave the path as a normal product
+||| obligation. Surgical: matches the exact path_id only, so reachable siblings of
+||| the same function are untouched (they still demand a test). The detailed
+||| per-path proof lives in `UnreachablePath.reason`; the classification itself goes
+||| through the same enumerated `ExclusionReason` every family uses.
 public export
-classifyUnreachableWebPath : PathObligation -> Maybe (ObligationClass, String)
+classifyUnreachableWebPath : PathObligation -> Maybe ExclusionReason
 classifyUnreachableWebPath path =
   case find (\u => u.pathId == path.pathId) unreachablePaths of
-    Just u  => Just (u.reclassifiedTo, u.reason)
+    Just u  => Just u.reclassifiedTo
     Nothing => Nothing
 
 ||| Reclassify the proven-unreachable leaves on top of an already-(artifact)-

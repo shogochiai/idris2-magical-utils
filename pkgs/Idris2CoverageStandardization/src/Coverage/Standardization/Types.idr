@@ -42,6 +42,69 @@ Eq ObligationClass where
   UnknownClassification == UnknownClassification = True
   _ == _ = False
 
+-- =============================================================================
+-- Canonical, Totality-anchored exclusion reasons (the single source of truth for
+-- WHY a path leaves the coverage denominator). Each family classifier returns a
+-- `Maybe ExclusionReason` rather than an arbitrary (ObligationClass, String): the
+-- legitimate set is enumerated ONCE here, so no family can invent an ad-hoc
+-- exclusion category (e.g. evm's former "Yul branch-label collapse"). There is NO
+-- observability/medium-collapse ctor on purpose: under source-level path markers
+-- every product branch is observable, so a family that wants to drop an observable
+-- product branch simply CANNOT express it — the type has no constructor for it.
+-- =============================================================================
+public export
+data ExclusionReason
+  = NonProductModule       -- .Tests./.Storages./.Schema/wrapper       -> CompilerInsertedArtifact
+  | StandardLibrary        -- prelude/stdlib                           -> CompilerInsertedArtifact
+  | GeneratedProjection    -- record projection                       -> CompilerInsertedArtifact
+  | SingleCtorDestructure  -- irrefutable destructure (not a branch)   -> CompilerInsertedArtifact
+  | StraightLineClause     -- no branch obligation                    -> CompilerInsertedArtifact
+  | ConstantFalseGuard     -- literal-false guard, logically dead     -> LogicallyUnreachable
+
+public export
+Show ExclusionReason where
+  show NonProductModule      = "NonProductModule"
+  show StandardLibrary       = "StandardLibrary"
+  show GeneratedProjection   = "GeneratedProjection"
+  show SingleCtorDestructure = "SingleCtorDestructure"
+  show StraightLineClause    = "StraightLineClause"
+  show ConstantFalseGuard    = "ConstantFalseGuard"
+
+public export
+Eq ExclusionReason where
+  NonProductModule      == NonProductModule      = True
+  StandardLibrary       == StandardLibrary       = True
+  GeneratedProjection   == GeneratedProjection   = True
+  SingleCtorDestructure == SingleCtorDestructure = True
+  StraightLineClause    == StraightLineClause    = True
+  ConstantFalseGuard    == ConstantFalseGuard    = True
+  _ == _ = False
+
+||| Canonical, single-source-of-truth mapping from exclusion reason to the
+||| obligation class it lands in. Totality-checked: adding an ExclusionReason ctor
+||| forces this match (and every family classifier) to handle it — no catch-all, so
+||| a new category cannot silently shrink any denominator.
+public export
+reasonClass : ExclusionReason -> ObligationClass
+reasonClass NonProductModule      = CompilerInsertedArtifact
+reasonClass StandardLibrary       = CompilerInsertedArtifact
+reasonClass GeneratedProjection   = CompilerInsertedArtifact
+reasonClass SingleCtorDestructure = CompilerInsertedArtifact
+reasonClass StraightLineClause    = CompilerInsertedArtifact
+reasonClass ConstantFalseGuard    = LogicallyUnreachable
+
+||| Stable, ctor-derived human reason (no free-form per-call drift). Whatever
+||| detailed proof a family records elsewhere (e.g. WebCoverage.Exclusions.reason),
+||| the classification reason itself comes from this single table.
+public export
+reasonString : ExclusionReason -> String
+reasonString NonProductModule      = "non-product module (test/storage/schema/wrapper)"
+reasonString StandardLibrary       = "standard library / prelude"
+reasonString GeneratedProjection   = "generated record projection"
+reasonString SingleCtorDestructure = "single-constructor destructure (irrefutable, not a branch)"
+reasonString StraightLineClause    = "straight-line clause, no branch obligation"
+reasonString ConstantFalseGuard    = "constant-false guard (logically unreachable)"
+
 public export
 data ObligationGranularity
   = FunctionLevel
