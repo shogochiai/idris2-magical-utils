@@ -27,6 +27,8 @@
 ||| one-way on the etherclaw side), so coverage-standardization stays unaware of it.
 module Idris2.DeliveryKind
 
+import public Idris2.CoverageFamily
+
 %default total
 
 -- =============================================================================
@@ -91,22 +93,32 @@ Eq DeliveryKind where
 -- The wire/string projection — the ONE place delivery ⇄ string is defined
 -- =============================================================================
 
-||| The COVERAGE-family this delivery is measured under — the AXIS A → AXIS B map. A
-||| parity run keys on this: android & web both measure as "web" (MVU Msg-branch, no
-||| forked compiler), cli & core as "core". This is lossy by design (web could be Web
-||| or Android), which is why it is a SEPARATE function from the lossless deliveryTag.
-||| (Historically `familyName`.) `integration` is NOT producible here — it is a
-||| coverage unit with no delivery, handled on the parity side, not via a DeliveryKind.
+||| The COVERAGE family this delivery is measured under — the AXIS A → AXIS B map,
+||| now landing on the typed `CoverageFamily` (not a string), so a TOTAL dispatch
+||| over the result forces every family to declare its coverage story. A parity run
+||| keys on this: Android & iOS fold to `WebMVU` (the pure MVU layer, no forked
+||| compiler), CLI to `CoreLib`. Lossy by design (Web/Android/iOS → WebMVU), which is
+||| why it is SEPARATE from the lossless `deliveryTag`. The on-device `AndroidDevice`
+||| family is reached explicitly by the device runner, not via this default map (an
+||| Android delivery's DEFAULT measurement is the pure MVU layer). `integration` is
+||| NOT producible here — it is a coverage unit with no delivery.
 public export
-coverageFamilyOf : DeliveryKind -> String
-coverageFamilyOf EVM          = "evm"
-coverageFamilyOf (ICP _)      = "dfx"
-coverageFamilyOf CLI          = "core"
-coverageFamilyOf Web          = "web"
-coverageFamilyOf Android      = "web"       -- MVU dumppaths path coverage over the pure layer
-coverageFamilyOf IOS          = "web"       -- same MVU layer as Android/Web → same coverage
-coverageFamilyOf (Humanoid _) = "humanoid"
-coverageFamilyOf Core         = "core"
+coverageFamilyOf : DeliveryKind -> CoverageFamily
+coverageFamilyOf EVM          = EvmHash
+coverageFamilyOf (ICP _)      = DfxWasm
+coverageFamilyOf CLI          = CoreLib
+coverageFamilyOf Web          = WebMVU
+coverageFamilyOf Android      = WebMVU      -- MVU dumppaths path coverage over the pure layer
+coverageFamilyOf IOS          = WebMVU      -- same MVU layer as Android/Web → same coverage
+coverageFamilyOf (Humanoid _) = Humanoid
+coverageFamilyOf Core         = CoreLib
+
+||| The COVERAGE-family wire tag for a delivery (the string callers that historically
+||| used `coverageFamilyOf : … -> String` use this). Composes the typed map with the
+||| family's tag, so the "android→web / cli→core" folding lives in ONE place.
+public export
+coverageFamilyTagOf : DeliveryKind -> String
+coverageFamilyTagOf = coverageFamilyTag . coverageFamilyOf
 
 ||| The lossless DELIVERY tag (distinct from coverageFamilyOf where coverage collapses
 ||| layers). android/cli/humanoid keep their OWN tag even though coverage folds

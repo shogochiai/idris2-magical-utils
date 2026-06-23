@@ -11,13 +11,17 @@ tagRoundTrips =
   all (\d => deliveryKindFromString (deliveryTag d) == d) allDeliveryKinds
 
 -- coverage maps preserved (android→web, cli→core), delivery tags stay distinct.
+-- coverageFamilyOf now lands on the typed CoverageFamily; coverageFamilyTagOf is the
+-- string projection that the old callers used.
 coverageMapsPreserved : Bool
 coverageMapsPreserved =
-  coverageFamilyOf Android == "web"
-  && coverageFamilyOf CLI == "core"
+  coverageFamilyOf Android == WebMVU
+  && coverageFamilyOf CLI == CoreLib
+  && coverageFamilyTagOf Android == "web"
+  && coverageFamilyTagOf CLI == "core"
   && deliveryTag Android == "android"
   && deliveryTag CLI == "cli"
-  && coverageFamilyOf (Humanoid Nothing) == "humanoid"
+  && coverageFamilyOf (Humanoid Nothing) == Humanoid
 
 -- the embodiment extension axis.
 humanoidExtension : Bool
