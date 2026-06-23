@@ -62,5 +62,8 @@ void ic0_stable_write(uint32_t offset, const void* src, uint32_t size);
 /* Time */
 __attribute__((import_module("ic0"), import_name("time")))
 uint64_t ic0_time(void);
+/* Seconds clock: ic0_time()/1e9 as int64 (governance clock is seconds; raw-ns
+ * truncates to garbage through the RefC `Int` FFI). NOT a wasm import — local. */
+int64_t ic0_time_secs(void);
 
 #endif /* IC0_H */

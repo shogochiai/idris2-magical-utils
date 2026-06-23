@@ -166,6 +166,12 @@ int32_t ic0_canister_status(void) { return (int32_t)ic0_canister_status_impl(); 
 /* Time */
 uint64_t ic0_time(void) { return ic0_time_impl(); }
 
+/* Time in SECONDS. ic0_time() returns nanoseconds as uint64 (~1.78e18); received
+ * as RefC `Int` over the FFI, the raw-ns value truncated to a 32-bit-wrapped
+ * garbage Int, breaking every seconds-based governance comparison. Divide here so
+ * the value (~1.78e9) marshals cleanly. The C-entry wrappers already do this. */
+int64_t ic0_time_secs(void) { return (int64_t)(ic0_time_impl() / 1000000000ULL); }
+
 /* Stable memory */
 int32_t ic0_stable_size(void) { return (int32_t)ic0_stable_size_impl(); }
 int32_t ic0_stable_grow(int32_t new_pages) {
