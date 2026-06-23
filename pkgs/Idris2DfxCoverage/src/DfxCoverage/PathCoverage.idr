@@ -11,57 +11,32 @@ import DfxCoverage.Exclusions
 import Coverage.Core.DumppathsJson
 import public Coverage.Core.PathCoverage
 import public Coverage.Core.RuntimeHit
+import Coverage.Core.Backend   -- shared isGeneratedRecordProjectionPath + reclassifyArtifacts
 
 %default covering
-
-isAsciiUpper : Char -> Bool
-isAsciiUpper c = c >= 'A' && c <= 'Z'
-
-isAsciiLower : Char -> Bool
-isAsciiLower c = c >= 'a' && c <= 'z'
-
-startsWith : (Char -> Bool) -> String -> Bool
-startsWith predicate s =
-  case unpack s of
-    [] => False
-    c :: _ => predicate c
-
-isGeneratedRecordProjectionName : String -> Bool
-isGeneratedRecordProjectionName name =
-  case reverse (forget $ split (== '.') name) of
-    field :: recordName :: _ =>
-         startsWith isAsciiUpper recordName
-      && startsWith isAsciiLower field
-      && not (isInfixOf ":" field)
-      && not (isInfixOf "case block" name)
-    _ => False
-
-isGeneratedRecordProjectionPath : PathObligation -> Bool
-isGeneratedRecordProjectionPath path =
-     path.terminalKind == "reached_clause"
-  && path.steps == []
-  && isNothing path.sourceSpanUnion
-  && isGeneratedRecordProjectionName path.functionName
-
-shouldExcludePath : List ExclPattern -> PathObligation -> Bool
-shouldExcludePath patterns path =
-  isJust (isMethodExcluded patterns path.functionName) ||
-  isGeneratedRecordProjectionPath path
 
 export
 defaultPathExclusions : List ExclPattern
 defaultPathExclusions = icpFullExclusions
 
+||| Deprecated delete-filter (kept for callers that want the pruned list). Uses the
+||| BARE-only projection predicate (dfx historical form), now shared from Backend.
 export
 filterPathObligations : List ExclPattern -> List PathObligation -> List PathObligation
 filterPathObligations patterns =
-  filter (\path => not (shouldExcludePath patterns path))
+  filter (\path => not (isJust (isMethodExcluded patterns path.functionName)
+                        || isBareRecordProjectionPath path))
 
+||| Build the dfx denominator: reclassify (NOT delete) test-harness + generated
+||| projections to CompilerInsertedArtifact so the shared countsAsDenominator drops
+||| them — SAME numbers as the old delete-filter (reclassifyArtifactsBare uses the
+||| BARE-only projection predicate dfx historically matched, not the web dotted
+||| superset), honest (excluded paths survive reclassified, not vanished).
 export
 parseProjectDumppathsJson : List ExclPattern -> String -> Either String (List PathObligation)
 parseProjectDumppathsJson patterns content = do
   paths <- parseDumppathsJson content
-  pure $ filterPathObligations patterns paths
+  pure $ reclassifyArtifactsBare patterns paths
 
 export
 loadProjectDumppathsJson : String -> List ExclPattern -> IO (Either String (List PathObligation))

@@ -78,16 +78,30 @@ isDottedProjectionName : String -> Bool
 isDottedProjectionName name =
   isInfixOf ".(." name && isSuffixOf ")" name && not (isInfixOf "case block" name)
 
-||| A generated record projection (bare OR dotted). NAME shape AND the structural
-||| shape (a 0-branch accessor: no path-level sourceSpanUnion). Real MVU functions
-||| own a sourceSpanUnion, so they are never matched even if a name shape coincides.
+||| BARE-only generated projection: `Record.field` with no steps and no union span.
+||| This is the historical dfx/evm form (which never matched the dotted `.(.field)`
+||| name, because `split` shatters it). Families that must preserve their exact
+||| historical denominator (dfx/evm) use THIS, not the superset below.
+public export
+isBareRecordProjectionPath : PathObligation -> Bool
+isBareRecordProjectionPath path =
+     path.terminalKind == "reached_clause"
+  && path.steps == []
+  && isNothing path.sourceSpanUnion
+  && isGeneratedRecordProjectionName path.functionName
+
+||| A generated record projection (bare OR dotted) — the WEB superset. NAME shape AND
+||| the structural shape (a 0-branch accessor: no path-level sourceSpanUnion). The ES/
+||| RN backend renders the dotted `Record.(.field)` getter form (1 step, no union
+||| span) that the bare predicate misses; web/android-device use this superset, which
+||| is why web's denominator excludes the dotted accessors that dfx/evm leave in.
 public export
 isGeneratedRecordProjectionPath : PathObligation -> Bool
 isGeneratedRecordProjectionPath path =
-  path.terminalKind == "reached_clause"
-  && isNothing path.sourceSpanUnion
-  && ( (path.steps == [] && isGeneratedRecordProjectionName path.functionName)
-       || isDottedProjectionName path.functionName )
+  isBareRecordProjectionPath path
+  || ( path.terminalKind == "reached_clause"
+       && isNothing path.sourceSpanUnion
+       && isDottedProjectionName path.functionName )
 
 -- ============================================================================
 -- The shared artifact reclassifier (replaces per-family delete-filters)
@@ -115,28 +129,45 @@ reclassifyByClassifier classifier = map reclassify
             Nothing       => path
         _ => path
 
-||| The family-neutral artifact classifier: a path is a CompilerInsertedArtifact if
-||| it is a generated record projection OR matches the family's test-harness exclusion
-||| patterns. This is the shared subset dfx/web/core/android use; evm composes its
-||| richer classifier on top (Yul collapse, constant-false → LogicallyUnreachable).
+||| The artifact classifier, parameterized by the projection predicate so each
+||| family preserves its exact historical denominator: a path is a
+||| CompilerInsertedArtifact if it is a generated projection (per `projTest`) OR
+||| matches the family's test-harness exclusion patterns. evm composes its richer
+||| classifier on top (Yul collapse, constant-false → LogicallyUnreachable).
+||| `projTest` = `isBareRecordProjectionPath` (dfx/evm historical) or
+||| `isGeneratedRecordProjectionPath` (web superset, bare+dotted).
 public export
-artifactClassifier : (testHarness : List ExclPattern)
-                  -> PathObligation -> Maybe (ObligationClass, String)
-artifactClassifier testHarness path =
-  if isGeneratedRecordProjectionPath path
+artifactClassifierWith : (projTest : PathObligation -> Bool)
+                      -> (testHarness : List ExclPattern)
+                      -> PathObligation -> Maybe (ObligationClass, String)
+artifactClassifierWith projTest testHarness path =
+  if projTest path
     then Just (CompilerInsertedArtifact, "generated record projection")
   else case isMethodExcluded testHarness path.functionName of
          Just reason => Just (CompilerInsertedArtifact, reason)
          Nothing     => Nothing
 
-||| Convenience: reclassify with the shared artifactClassifier bound to a family's
-||| test-harness pattern list. This is the `reclassify` a string-identity family
-||| (web/dfx/core/android) puts in its CoverageImpl.
+||| The WEB-superset classifier (bare + dotted projections). Used by web/android.
+public export
+artifactClassifier : (testHarness : List ExclPattern)
+                  -> PathObligation -> Maybe (ObligationClass, String)
+artifactClassifier = artifactClassifierWith isGeneratedRecordProjectionPath
+
+||| Reclassify with the WEB-superset projection predicate (bare + dotted). This is
+||| the `reclassify` web/android-device put in their CoverageImpl.
 public export
 reclassifyArtifacts : (testHarness : List ExclPattern)
                    -> List PathObligation -> List PathObligation
 reclassifyArtifacts testHarness =
   reclassifyByClassifier (artifactClassifier testHarness)
+
+||| Reclassify with the BARE-only projection predicate (dfx/evm historical form, no
+||| dotted). Preserves the exact denominator dfx/evm measured before this refactor.
+public export
+reclassifyArtifactsBare : (testHarness : List ExclPattern)
+                       -> List PathObligation -> List PathObligation
+reclassifyArtifactsBare testHarness =
+  reclassifyByClassifier (artifactClassifierWith isBareRecordProjectionPath testHarness)
 
 -- ============================================================================
 -- The polymorphic numerator JOIN (subsumes identity AND hash)

@@ -11,6 +11,7 @@ import EvmCoverage.Exclusions
 import Coverage.Core.DumppathsJson
 import public Coverage.Core.PathCoverage
 import public Coverage.Core.RuntimeHit
+import Coverage.Core.Backend   -- shared isBareRecordProjectionPath (was duplicated here)
 import Coverage.Standardization.Types
 
 %default covering
@@ -18,24 +19,11 @@ import Coverage.Standardization.Types
 isAsciiUpper : Char -> Bool
 isAsciiUpper c = c >= 'A' && c <= 'Z'
 
-isAsciiLower : Char -> Bool
-isAsciiLower c = c >= 'a' && c <= 'z'
-
 startsWith : (Char -> Bool) -> String -> Bool
 startsWith predicate s =
   case unpack s of
     [] => False
     c :: _ => predicate c
-
-isGeneratedRecordProjectionName : String -> Bool
-isGeneratedRecordProjectionName name =
-  case reverse (forget $ split (== '.') name) of
-    field :: recordName :: _ =>
-         startsWith isAsciiUpper recordName
-      && startsWith isAsciiLower field
-      && not (isInfixOf ":" field)
-      && not (isInfixOf "case block" name)
-    _ => False
 
 isNonProductEvmFunction : String -> Bool
 isNonProductEvmFunction name =
@@ -60,12 +48,10 @@ isUninstrumentedStraightLinePath path =
   && path.steps == []
   && isNothing path.sourceSpanUnion
 
-isGeneratedRecordProjectionPath : PathObligation -> Bool
-isGeneratedRecordProjectionPath path =
-     path.terminalKind == "reached_clause"
-  && path.steps == []
-  && isNothing path.sourceSpanUnion
-  && isGeneratedRecordProjectionName path.functionName
+-- evm's historical generated-projection predicate is the BARE-only form (no
+-- dotted), now shared from Coverage.Core.Backend.isBareRecordProjectionPath.
+-- Call sites below reference it directly (no local alias, to avoid the
+-- ambiguity with Backend.isGeneratedRecordProjectionPath, the web superset).
 
 lastBranchLabel : PathObligation -> Maybe String
 lastBranchLabel path =
@@ -152,7 +138,7 @@ shouldExcludePath : List ExclPattern -> PathObligation -> Bool
 shouldExcludePath patterns path =
      isExcluded path.functionName patterns
   || isNonProductEvmFunction path.functionName
-  || isGeneratedRecordProjectionPath path
+  || isBareRecordProjectionPath path
   || isUninstrumentedStraightLinePath path
   || isKnownConstantUnreachableEvmPath path
   || isKnownYulBranchLabelMismatch path
@@ -179,7 +165,7 @@ classifyEvmExclusion patterns path =
     then Just (CompilerInsertedArtifact, "standard library / prelude")
   else if isKnownConstantUnreachableEvmPath path
     then Just (LogicallyUnreachable, "constant-false guard (logically unreachable)")
-  else if isGeneratedRecordProjectionPath path
+  else if isBareRecordProjectionPath path
     then Just (CompilerInsertedArtifact, "generated record projection")
   else if isKnownYulBranchLabelMismatch path
     then Just (CompilerInsertedArtifact, "Yul branch-label collapse (compiler artifact)")

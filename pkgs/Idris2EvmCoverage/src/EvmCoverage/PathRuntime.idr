@@ -10,6 +10,7 @@ import System.File
 import EvmCoverage.Runtime
 import Coverage.Core.DumppathsJson
 import Coverage.Core.PathCoverage
+import Coverage.Core.Backend   -- coveredByKey/hitsByKey (the shared polymorphic join)
 import Coverage.Core.Types
 import public Coverage.Core.RuntimeHit
 
@@ -68,14 +69,17 @@ firedTopicIntegers content =
           tok = case words afterTag of (w :: _) => w; [] => ""
       in parseHexInteger tok
 
-||| Identity join: a dumppaths path is covered iff FNV(path_id) was a fired topic.
+||| HASH join: a dumppaths path is covered iff FNV(path_id) was a fired topic. This
+||| is the shared polymorphic `coveredByKey` with k = Integer and the key function
+||| `pathIdTopic` (the non-invertible FNV hash) — the SAME join Core uses for web/dfx
+||| with k = String and key `(.pathId)`. One join, two key types, no tagged union.
 export
 analyzePathHitsFromPathIdTopics : String -> String -> Either String (List PathRuntimeHit)
 analyzePathHitsFromPathIdTopics dumppathsContent traceContent = do
   paths <- parseDumppathsJson dumppathsContent
   let fired = firedTopicIntegers traceContent
-  let covered = filter (\p => elem (pathIdTopic p.pathId) fired) paths
-  pure (map (\p => MkPathRuntimeHit p.pathId 1) covered)
+  -- key function PathObligation -> Integer = FNV hash of the path id
+  pure (hitsByKey (\p => pathIdTopic p.pathId) fired paths)
 
 legacyTerminalBranchId : PathObligation -> PathStep -> Maybe String
 legacyTerminalBranchId path step =
