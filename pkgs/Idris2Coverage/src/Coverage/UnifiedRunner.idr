@@ -1566,10 +1566,19 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
       -- have tests. Keep its partial hits and ADVANCE past it rather than
       -- terminating. Bounded by fuel/intraSliceMaxSlices.
       let timedOut = (sliceExit == 142 || sliceExit == 124) && isNothing pf
-      if timedOut
+      -- A slice that exited NON-ZERO with NO "Results:" line (e.g. SIGKILL/OOM
+      -- exit 137, a segfault, or any crash that aborts mid-suite) is ALSO not a
+      -- genuine past-the-end: terminating here would keep only this slice's
+      -- partial hits and silently drop every later window — the flaky-numerator
+      -- bug (covered measured as 4131 vs 507 across runs depended on whether
+      -- slice 0 happened to finish cleanly). Treat it like a timeout: keep the
+      -- partial hits already written (write-on-first-hit) and ADVANCE. Only a
+      -- CLEAN exit (0) with count==0 means we have genuinely walked off the end.
+      let crashedMidSlice = (sliceExit /= 0) && isNothing pf && not timedOut
+      if timedOut || crashedMidSlice
         then go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
         else if count == 0
-          then pure acc'  -- empty slice → past the end → done
+          then pure acc'  -- clean empty slice → past the end → done
           else case firstCount of
                Nothing =>
                  -- Slice 0. Distinguish env-AWARE from env-IGNORING by slice-0's
