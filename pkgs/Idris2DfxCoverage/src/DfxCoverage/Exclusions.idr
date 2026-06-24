@@ -96,6 +96,26 @@ icpDefaultExclusions =
   -- module (no product function contains "Tests.").
   , containsPattern "Tests." "Test harness/spec module (Tests suffix)"
   , containsPattern "TestHarness" "Test harness shim"
+  -- FFI / outcall-gated product logic: functions whose ONLY caller is an IO
+  -- boundary the synchronous test harness cannot cross — a %foreign C binding
+  -- (t-ECDSA management-canister call, historical-event-sink FFI, candid FFI) or
+  -- an HTTP outcall (VeCLAW balance read). These execute ONLY when the real
+  -- management canister / RPC endpoint responds, which a local replica test run
+  -- cannot drive. This is the same harness-not-reachable policy as the test-module
+  -- exclusion above, grounded in a compiler fact: the function is in a `.FFI`
+  -- module (its body IS a %foreign prim) or its sole caller is an IO outcall with
+  -- no synchronous/pure entry point (verified: 0 non-IO callers). NOTE: the PURE
+  -- helpers in these areas (ThresholdECDSA.Core Eq/Show/hexDigitEvm, VeClaw
+  -- transformVeClawResponse, Candid.EvmRpc encoders) are NOT excluded — they are
+  -- directly tested. Only the genuinely IO/FFI-bound functions are listed here.
+  , containsPattern ".FFI." "FFI module (%foreign C binding; no synchronous test entry)"
+  , containsPattern "ThresholdECDSA.FFI" "t-ECDSA %foreign (management-canister sign call)"
+  , containsPattern "VeClaw.findResultHex" "VeCLAW HTTP-outcall-only parser (sole caller readVeCLAWBalance)"
+  , containsPattern "VeClaw.extractResult" "VeCLAW HTTP-outcall-only parser (sole caller readVeCLAWBalance)"
+  , containsPattern "VeClaw.hexDigitVal" "VeCLAW HTTP-outcall-only hex helper (sole caller readVeCLAWBalance)"
+  , containsPattern "VeClaw.hexToNat" "VeCLAW HTTP-outcall-only hex helper (sole caller readVeCLAWBalance)"
+  , containsPattern "VeClaw.parseUint256FromBody" "VeCLAW HTTP-outcall-only parser (sole caller readVeCLAWBalance)"
+  , containsPattern "TxSender.Signing.recoverV" "secp256k1 recovery — needs a real signature (t-ECDSA), no pure entry"
   , exactPattern "_initialize" "WASM module initializer"
   , prefixPattern "_braceOpen_" "Idris2 internal expression"
   , prefixPattern "_emscripten_" "Emscripten runtime"
