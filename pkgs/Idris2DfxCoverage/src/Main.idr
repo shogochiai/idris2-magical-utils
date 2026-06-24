@@ -386,12 +386,16 @@ runProjectMethod projectDir canisterRef method network = do
 
 ||| Indices of the chunked `runTestBatchN` canister methods to probe. Each batch
 ||| evaluates 8 tests (start = idx*8). Must stay in sync with the generated
-||| harness's batch exports (WasmBuilder.testBatchIndexes). 0..15 covers up to
-||| 128 tests in 8-test slices, enough for the current pure-test list while
-||| keeping every IC update call small (avoids native-stack overflow / replica
-||| crash that a single all-tests call causes).
+||| harness's batch exports (WasmBuilder.testBatchIndexes). 0..31 covers up to
+||| 256 tests in 8-test slices while keeping every IC update call small (avoids
+||| native-stack overflow / replica crash that a single all-tests call causes).
+||| Extended 16->32: GlobalRegistry's pureTestThunks grew past 128 (now ~145 with
+||| the path-coverage subsuites); batches 16+ were unprobed so the tail tests'
+||| paths never recorded (numerator under-counted, run-to-run unstable). Probing a
+||| batch with no tests is a harmless no-op.
 batchProbeIndexes : List Nat
-batchProbeIndexes = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+batchProbeIndexes = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+                     16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
 
 runProjectMethods : String -> String -> List String -> String -> IO (Either String (List String))
 runProjectMethods _ _ [] _ = pure $ Left "No test methods configured"

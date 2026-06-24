@@ -399,13 +399,18 @@ generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
 ||| This is written to /tmp, never touches the original Main.idr
 ||| One canister export `runTestBatchN` is generated per index; each runs an
 ||| 8-test slice (start = idx*8). Cover enough indices that the batches span the
-||| whole pure-test list (0..15 -> up to 128 tests) so chunked probing records
+||| whole pure-test list (0..31 -> up to 256 tests) so chunked probing records
 ||| hits for every test without a single all-tests call (which can overflow the
 ||| IC native stack / crash the replica). Must stay in sync with the dfx-cov
-||| probe's batchProbeIndexes.
+||| probe's batchProbeIndexes. Extended 16->32 batches: GlobalRegistry's
+||| pureTestThunks grew past 128 (now ~145 with the path-coverage subsuites), so
+||| tests beyond index 15 were never executed on the replica and their paths never
+||| recorded (numerator under-counted, run-to-run unstable). Empty batches past the
+||| list end are harmless no-ops (runTestRange clamps).
 testBatchIndexes : List Int
 testBatchIndexes =
-  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+   16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 
 generateTestBatchExport : Int -> List String
 generateTestBatchExport idx =
