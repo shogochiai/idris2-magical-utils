@@ -1,0 +1,94 @@
+name: Lazy Ask CI
+on: [pull_request]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PACK_VERSION: latest
+
+jobs:
+  lazy-ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git for HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Cache pack + Idris2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pack
+            ~/.idris2
+          key: pack-${{ runner.os }}-${{ hashFiles('pack.toml') }}
+          restore-keys: pack-${{ runner.os }}-
+
+      - name: Install Chez Scheme
+        run: sudo apt-get update && sudo apt-get install -y chezscheme
+
+      - name: Install pack + Idris2
+        run: |
+          if [ ! -f "$HOME/.pack/bin/pack" ]; then
+            echo "chezscheme" | bash <(curl -sL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash)
+          fi
+          echo "$HOME/.pack/bin" >> "$GITHUB_PATH"
+
+      - name: Install lazy CLI
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/shogochiai/lazy.git /tmp/lazy-build
+          cd /tmp/lazy-build/pkgs/LazyCli
+          pack install-app lazycli
+
+      - name: Build CI stub shared libraries
+        run: |
+          cat > /tmp/ci-stubs.c << 'STUBS'
+          #include <stdlib.h>
+          #include <string.h>
+          #include <stdint.h>
+          int onnx_init(void){return 0;} void onnx_cleanup(void){}
+          void* onnx_load_model(const char* p){(void)p;return(void*)1;}
+          void onnx_free_session(void* s){(void)s;}
+          float onnx_trm_infer(void* s,const int64_t* i,const float* m,int64_t l){(void)s;(void)i;(void)m;(void)l;return 0.5f;}
+          float onnx_trm_infer_str(void* s,const char* a,const char* b){(void)s;(void)a;(void)b;return 0.5f;}
+          double onnx_trm_infer_str_d(void* s,const char* a,const char* b){(void)s;(void)a;(void)b;return 0.5;}
+          const char* onnx_get_error(void){return "";}
+          void* vocab_db_open(const char* p){(void)p;return(void*)1;}
+          void vocab_db_close(void* d){(void)d;}
+          int vocab_db_init_schema(void* d){(void)d;return 0;}
+          int vocab_db_begin(void* d){(void)d;return 0;}
+          int vocab_db_commit(void* d){(void)d;return 0;}
+          int vocab_db_rollback(void* d){(void)d;return 0;}
+          int vocab_db_insert_morph(void* d,const char* a,const char* b,const char* c,const char* e){(void)d;(void)a;(void)b;(void)c;(void)e;return 0;}
+          int vocab_db_insert_synset(void* d,const char* a,const char* b,const char* c,const char* e){(void)d;(void)a;(void)b;(void)c;(void)e;return 0;}
+          int vocab_db_insert_abbrev(void* d,const char* a,const char* b,const char* c,const char* e,const char* f){(void)d;(void)a;(void)b;(void)c;(void)e;(void)f;return 0;}
+          int vocab_db_clear(void* d){(void)d;return 0;}
+          char* vocab_db_lookup_morph(void* d,const char* s){(void)d;(void)s;return NULL;}
+          char* vocab_db_lookup_morph_by_variant(void* d,const char* s){(void)d;(void)s;return NULL;}
+          char* vocab_db_lookup_synset(void* d,const char* s){(void)d;(void)s;return NULL;}
+          char* vocab_db_lookup_abbrev(void* d,const char* s){(void)d;(void)s;return NULL;}
+          int vocab_db_in_lexicon(void* d,const char* s){(void)d;(void)s;return 0;}
+          char* vocab_db_get_all_morph_stems(void* d){(void)d;return strdup("[]");}
+          char* vocab_db_get_all_synset_ids(void* d){(void)d;return strdup("[]");}
+          char* vocab_db_get_all_abbrev_shorts(void* d){(void)d;return strdup("[]");}
+          char* vocab_db_get_all_lexicon(void* d){(void)d;return strdup("[]");}
+          int vocab_db_count_morphs(void* d){(void)d;return 0;}
+          int vocab_db_count_synsets(void* d){(void)d;return 0;}
+          int vocab_db_count_abbrevs(void* d){(void)d;return 0;}
+          int vocab_db_count_lexicon(void* d){(void)d;return 0;}
+          const char* vocab_db_get_error(void){return "";}
+          void vocab_db_free_string(char* s){free(s);}
+          STUBS
+          gcc -shared -fPIC -o /tmp/libonnx_shim.so /tmp/ci-stubs.c
+          gcc -shared -fPIC -o /tmp/libvocab_db.so /tmp/ci-stubs.c
+          echo "LD_LIBRARY_PATH=/tmp:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Run lazy core ask
+        working-directory: /tmp/lazy-build/pkgs/LazyCli
+        run: |
+          for pkg in Idris2Cdk Idris2IcWasm; do
+            "$GITHUB_WORKSPACE/scripts/ci/lazy-check.sh" core "$GITHUB_WORKSPACE/pkgs/$pkg"
+          done
