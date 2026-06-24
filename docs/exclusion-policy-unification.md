@@ -155,3 +155,50 @@ categoryReason : ExclusionCategory -> String   -- stable text
 Family classifiers: `PathObligation -> Maybe ExclusionCategory`. `reclassifyByClassifier`
 takes that and applies `categoryClass`+`categoryReason`. The pre-existing `ExclusionReason`
 stays as-is (orthogonal: pattern/module matching for dependency exclusions).
+
+---
+
+## EffectBoundary fact-grounding — `--dumppathshits` reachVia spec (fork-compiler, scoped 2026-06-24)
+
+Goal: each emitted path carries the EffectBoundary it reaches + a reachVia witness
+(the call chain to the %foreign primitive), so denominator-exclusion of harness-
+unexecutable paths is asserted by the COMPILER (call-graph fact), never by a human.
+Type spine already landed (Coverage.Standardization.Types.EffectBoundary); PoC that
+linearity makes it a TYPE fact already landed (poc/LinearBoundaryPoC.idr).
+
+### Verified integration points (idrislang-idris2, fork branch feature/es-source-maps)
+- `src/Compiler/Common.idr:528` `collectPathResults : String -> Nat -> CaseTree -> (List PathResult, Nat)`
+  — the per-path enumerator. Attach the boundary witness to each PathResult here.
+- `src/Compiler/Common.idr:92` `namedDefs : List (Name, FC, NamedDef)` (and getCompileDataWith
+  ~:818) — the full compiled-def list = the call-graph source.
+- `src/Core/CompileExpr.idr:209` `MkForeign (ccs : List String) ...` — the %foreign decl;
+  `ccs` carries the C spec (e.g. "C:popen2,libidris2_support"). Match against
+  boundaryPrimitive (popen2 / http_request / ic0.call_new / openFile).
+- `CExp` ctors carrying call edges: `CRef fc Name` (:75), `CApp` (:85), `CExtPrim` (:95).
+
+### Algorithm (one fixpoint + per-path lookup)
+1. directBoundary : Name -> Maybe EffectBoundary — for each def whose CDef is
+   `MkForeign ccs ...`, if any cc matches boundaryPrimitive b → Just b.
+2. reachesBoundary : transitive closure over the call graph (edges = CRef/CApp/CExtPrim
+   names in each def's body). `reachesBoundary n = directBoundary n` ∪ ⋃ over callees.
+   Compute as a fixpoint over namedDefs (worklist; bounded by |defs|).
+3. In collectPathResults, for a leaf path whose terminal expr's free CRef set is S,
+   its boundary = the strongest b in ⋃ reachesBoundary over S (PureComputation if none),
+   and reachVia = a shortest witness chain n₀→…→%foreign(b).
+4. Emit per path: existing path_id + classification, PLUS `effect_boundary` and
+   `reach_via` (the chain). Gated on `dumppathshits`/a new `--dumppaths-boundaries`
+   flag so production builds are unaffected.
+
+### Consumer side (magical-utils, already-typed)
+- Parse `effect_boundary`/`reach_via` into PathObligation (add fields).
+- denominator = paths with `boundaryExcludable boundary == False` (PureComputation).
+  Excluded paths reclassify to `boundaryClass boundary` (UnknownClassification — visible,
+  claim-affecting), NEVER deleted. Report the EffectBoundary histogram + reachVia.
+- A path can ONLY leave the denominator with a compiler-emitted reachVia proof → no
+  observer judgment, no value weight → trick-proof.
+
+### Ideal hardening (separate): linear runProc
+Make `Boundary.Sys.runProc : Argv -> IO (Res Output)` (linear Res). Then "reaches
+ProcessSpawn" upgrades from a call-graph approximation to a TYPE fact (consumes Res),
+independent of the analysis's soundness. PoC proved the compiler enforces exactly-once
+(use-twice → "linear name in non-linear context"; drop → "0 uses ... exactly once").
