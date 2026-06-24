@@ -1174,6 +1174,11 @@ runDispatchSelectors binPath traceOutput selectors = do
         -- caller arg0 + BIG values in the value positions → drives the threshold-
         -- exceeded True/Just side (checkNotExpired not-expired, checkRep, checkApproved).
         , sel ++ callerWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord
+        -- arg0 = small pid 0 → pid-keyed handlers (tally/tallyAndFinalize/vote) act on
+        -- proposal 0 (the one Phase A/B create), reaching pid-dependent tally paths
+        -- like finalTally→findTopScorer (empty scoremap [] on a proposal with no votes).
+        , sel ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord
+        , sel ++ oneWord  ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord
         ]
   -- A stranger-address vector for a single selector (used in the pre-registration
   -- pass, where even the caller is not yet a member → count==0 exhaustion branch).
