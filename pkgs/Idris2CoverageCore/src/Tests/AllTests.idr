@@ -394,6 +394,24 @@ test_PATH_001 () =
                    && p.classification == UserAdmittedPartialGap
                    && p.terminalKind == "partial_gap") paths
 
+||| A function the compiler tagged effect_boundary=ProcessSpawn (reaches popen2),
+||| plus a PureComputation control. The consumer must reclassify the ProcessSpawn
+||| ReachableObligation to UnknownClassification while leaving the pure one in the
+||| denominator — fact-grounded, not an observer judgment.
+boundaryDumppathsJson : String
+boundaryDumppathsJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"App.spawnIt\",\"effect_boundary\":\"ProcessSpawn\",\"paths\":[{\"path_id\":\"App.spawnIt#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"App.pureCalc\",\"effect_boundary\":\"PureComputation\",\"paths\":[{\"path_id\":\"App.pureCalc#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+
+test_PATH_BOUNDARY_001 : () -> Bool
+test_PATH_BOUNDARY_001 () =
+  case parseDumppathsJson boundaryDumppathsJson of
+    Left _ => False
+    Right paths =>
+      any (\p => p.pathId == "App.spawnIt#p0"
+              && p.classification == UnknownClassification) paths
+        && any (\p => p.pathId == "App.pureCalc#p0"
+                   && p.classification == ReachableObligation) paths
+
 test_PATH_002 : () -> Bool
 test_PATH_002 () =
   case parseDumppathsJson sampleDumppathsJson of
@@ -561,6 +579,7 @@ allTests =
 
   -- Path coverage
   , test "PATH_001" "parse dumppaths json" test_PATH_001
+  , test "PATH_BOUNDARY_001" "effect_boundary reclassifies ProcessSpawn to Unknown, keeps Pure" test_PATH_BOUNDARY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003
   , test "PATH_004" "path obligations use path granularity" test_PATH_004

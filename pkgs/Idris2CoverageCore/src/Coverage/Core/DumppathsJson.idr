@@ -68,8 +68,29 @@ parseSteps (step :: rest) = do
   there <- parseSteps rest
   pure (here :: there)
 
-parsePath : String -> JSON -> Either String PathObligation
-parsePath functionName json = do
+||| Parse the compiler-emitted effect_boundary tag. Unknown/absent → PureComputation
+||| (the safe default: a path with no known boundary stays in the denominator).
+parseEffectBoundary : Maybe String -> EffectBoundary
+parseEffectBoundary (Just "ProcessSpawn")   = ProcessSpawn
+parseEffectBoundary (Just "NetworkOutcall") = NetworkOutcall
+parseEffectBoundary (Just "CanisterCall")   = CanisterCall
+parseEffectBoundary (Just "FileSystemIO")   = FileSystemIO
+parseEffectBoundary _                       = PureComputation
+
+||| Fact-grounded reclassification: a path whose function transitively reaches an
+||| unexecutable FFI hole (compiler-computed effect_boundary) is reclassified to
+||| boundaryClass (UnknownClassification — visible, claim-affecting) instead of
+||| being counted as a reachable obligation the harness could verify. Only a
+||| ReachableObligation is overridden (idempotent; never touches Unknown/artifact).
+||| The boundary is a COMPILER FACT, never an observer judgment.
+applyBoundary : EffectBoundary -> ObligationClass -> ObligationClass
+applyBoundary boundary cls =
+  case (cls, boundaryExcludable boundary) of
+    (ReachableObligation, True) => boundaryClass boundary
+    _                           => cls
+
+parsePath : String -> EffectBoundary -> JSON -> Either String PathObligation
+parsePath functionName boundary json = do
   pathId <- maybeToEither "path object is missing path_id" (getStringField "path_id" json)
   classificationRaw <- maybeToEither "path object is missing classification" (getStringField "classification" json)
   terminalKind <- maybeToEither "path object is missing terminal_kind" (getStringField "terminal_kind" json)
@@ -80,25 +101,26 @@ parsePath functionName json = do
     pathId
     functionName
     moduleName
-    (parseClassification classificationRaw)
+    (applyBoundary boundary (parseClassification classificationRaw))
     terminalKind
     (getNatField "terminal_clause_id" json)
     steps
     (getStringField "source_span_union" json)
     (fromMaybe (length steps) (getNatField "path_length" json))
 
-parsePaths : String -> List JSON -> Either String (List PathObligation)
-parsePaths _ [] = Right []
-parsePaths functionName (path :: rest) = do
-  here <- parsePath functionName path
-  there <- parsePaths functionName rest
+parsePaths : String -> EffectBoundary -> List JSON -> Either String (List PathObligation)
+parsePaths _ _ [] = Right []
+parsePaths functionName boundary (path :: rest) = do
+  here <- parsePath functionName boundary path
+  there <- parsePaths functionName boundary rest
   pure (here :: there)
 
 parseFunctionObject : JSON -> Either String (List PathObligation)
 parseFunctionObject json = do
   functionName <- maybeToEither "function object is missing function_name" (getStringField "function_name" json)
+  let boundary = parseEffectBoundary (getStringField "effect_boundary" json)
   pathsJson <- maybeToEither "function object is missing paths" (getField "paths" json >>= getArray)
-  parsePaths functionName pathsJson
+  parsePaths functionName boundary pathsJson
 
 parseFunctionObjects : List JSON -> Either String (List PathObligation)
 parseFunctionObjects [] = Right []
