@@ -127,19 +127,27 @@ reasonString ConstantFalseGuard    = "constant-false guard (logically unreachabl
 -- set. This is the ExclusionReason discipline applied to EXECUTABILITY.
 public export
 data EffectBoundary
-  = PureComputation   -- opens no hole: stays in the denominator, must be tested
-  | ProcessSpawn      -- reaches popen2/runProc: no process in harness
-  | NetworkOutcall    -- reaches HTTP/RPC outcall: no network in harness
-  | CanisterCall      -- reaches IC inter-canister call: no replica in harness
-  | FileSystemIO      -- reaches real fs read/write outside a fixture
+  = PureComputation        -- opens no hole: stays in the denominator, must be tested
+  | ProcessSpawn           -- reaches popen2/runProc: no process in harness
+  | NetworkOutcall         -- reaches HTTP/RPC outcall: no network in harness
+  | CanisterCall           -- reaches IC inter-canister call: no replica in harness
+  | FileSystemIO           -- reaches real fs read/write outside a fixture
+  -- SOUNDNESS ctor: reaches a %foreign whose calling-convention is NOT one of the
+  -- known boundary primitives above. Without this, an unrecognised FFI hole would
+  -- silently fall through to PureComputation (an UN-SOUND miss — a harness-
+  -- unexecutable path mistaken for a testable one). Carrying the cc string keeps
+  -- it VISIBLE: a new external hole appears as UnclassifiedForeign "<cc>" and must
+  -- be triaged (promoted to a precise ctor or confirmed harness-safe), never lost.
+  | UnclassifiedForeign String
 
 public export
 Show EffectBoundary where
-  show PureComputation = "PureComputation"
-  show ProcessSpawn    = "ProcessSpawn"
-  show NetworkOutcall  = "NetworkOutcall"
-  show CanisterCall    = "CanisterCall"
-  show FileSystemIO    = "FileSystemIO"
+  show PureComputation         = "PureComputation"
+  show ProcessSpawn            = "ProcessSpawn"
+  show NetworkOutcall          = "NetworkOutcall"
+  show CanisterCall            = "CanisterCall"
+  show FileSystemIO            = "FileSystemIO"
+  show (UnclassifiedForeign c) = "UnclassifiedForeign(" ++ c ++ ")"
 
 public export
 Eq EffectBoundary where
@@ -148,6 +156,7 @@ Eq EffectBoundary where
   NetworkOutcall  == NetworkOutcall  = True
   CanisterCall    == CanisterCall    = True
   FileSystemIO    == FileSystemIO    = True
+  (UnclassifiedForeign a) == (UnclassifiedForeign b) = a == b
   _               == _               = False
 
 ||| Is a path reaching this boundary honestly excludable from the test-coverage
@@ -156,11 +165,13 @@ Eq EffectBoundary where
 ||| can never be silently added to the excluded set.
 public export
 boundaryExcludable : EffectBoundary -> Bool
-boundaryExcludable PureComputation = False  -- no hole → testable → stays in denom
-boundaryExcludable ProcessSpawn    = True
-boundaryExcludable NetworkOutcall  = True
-boundaryExcludable CanisterCall    = True
-boundaryExcludable FileSystemIO    = True
+boundaryExcludable PureComputation        = False  -- no hole → testable → stays in denom
+boundaryExcludable ProcessSpawn           = True
+boundaryExcludable NetworkOutcall         = True
+boundaryExcludable CanisterCall           = True
+boundaryExcludable FileSystemIO           = True
+boundaryExcludable (UnclassifiedForeign _) = True  -- unknown hole → SAFE side: excludable,
+                                                   -- but classified Unknown (visible) below
 
 ||| The ObligationClass a harness-unexecutable boundary path reclassifies to.
 ||| Reaching an external hole is not a compiler artifact and not logically dead —
@@ -168,21 +179,23 @@ boundaryExcludable FileSystemIO    = True
 ||| keeps it honest (visible, claim-affecting) rather than vanishing it.
 public export
 boundaryClass : EffectBoundary -> ObligationClass
-boundaryClass PureComputation = ReachableObligation
-boundaryClass ProcessSpawn    = UnknownClassification
-boundaryClass NetworkOutcall  = UnknownClassification
-boundaryClass CanisterCall    = UnknownClassification
-boundaryClass FileSystemIO    = UnknownClassification
+boundaryClass PureComputation         = ReachableObligation
+boundaryClass ProcessSpawn            = UnknownClassification
+boundaryClass NetworkOutcall          = UnknownClassification
+boundaryClass CanisterCall            = UnknownClassification
+boundaryClass FileSystemIO            = UnknownClassification
+boundaryClass (UnclassifiedForeign _) = UnknownClassification
 
 ||| The %foreign primitive a boundary funnels through — the documented hole. Used
 ||| to validate that a path's claimed boundary really does reach this primitive.
 public export
 boundaryPrimitive : EffectBoundary -> String
-boundaryPrimitive PureComputation = ""
-boundaryPrimitive ProcessSpawn    = "popen2"
-boundaryPrimitive NetworkOutcall  = "http_request"
-boundaryPrimitive CanisterCall    = "ic0.call_new"
-boundaryPrimitive FileSystemIO    = "openFile"
+boundaryPrimitive PureComputation         = ""
+boundaryPrimitive ProcessSpawn            = "popen2"
+boundaryPrimitive NetworkOutcall          = "http_request"
+boundaryPrimitive CanisterCall            = "ic0.call_new"
+boundaryPrimitive FileSystemIO            = "openFile"
+boundaryPrimitive (UnclassifiedForeign c) = c
 
 public export
 data ObligationGranularity

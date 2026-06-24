@@ -75,7 +75,14 @@ parseEffectBoundary (Just "ProcessSpawn")   = ProcessSpawn
 parseEffectBoundary (Just "NetworkOutcall") = NetworkOutcall
 parseEffectBoundary (Just "CanisterCall")   = CanisterCall
 parseEffectBoundary (Just "FileSystemIO")   = FileSystemIO
-parseEffectBoundary _                       = PureComputation
+parseEffectBoundary (Just s) =
+  -- "UnclassifiedForeign(<cc>)" — an FFI hole the compiler could not classify to a
+  -- precise primitive. Captured (excludable, but Unknown-classified = visible) so
+  -- an unrecognised external call is never mistaken for pure code.
+  if isPrefixOf "UnclassifiedForeign(" s
+     then UnclassifiedForeign (substr 20 (minus (length s) 21) s)  -- strip prefix + trailing ')'
+     else PureComputation
+parseEffectBoundary Nothing = PureComputation
 
 ||| Fact-grounded reclassification: a path whose function transitively reaches an
 ||| unexecutable FFI hole (compiler-computed effect_boundary) is reclassified to
