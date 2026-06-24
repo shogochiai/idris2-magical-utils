@@ -1341,12 +1341,16 @@ findExtraCSources ic0Support = do
     "case \"$b\" in sqlite_bridge.c|sqlite_vfs_bridge.c|sqlite_stable.c|wasi_polyfill.c) [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ] && continue ;; esac; " ++
     "echo \"$f\"; " ++
     "done; " ++
+    -- bulletproof_vfs.c DEFINES sqlite3_os_init (the SQLITE_OS_OTHER app-supplied
+    -- VFS init); WITHOUT it the WASM imports sqlite3_os_init from env unresolved →
+    -- deploy fails IC0505 "invalid import section". The canonical build
+    -- (build-canister-from-config.sh) links it as $VFS_IMPL_C — mirror that here.
     "if [ -d \"$sqlite_ic0\" ] && [ \"$same_sqlite_ic0\" -eq 0 ]; then " ++
-    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c legacy/sqlite_stable.c sqlite/libsqlite3.a; do " ++
+    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c bulletproof_vfs.c legacy/sqlite_stable.c sqlite/libsqlite3.a; do " ++
     "[ -f \"$sqlite_ic0/$rel\" ] && echo \"$sqlite_ic0/$rel\"; " ++
     "done; " ++
     "elif [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ]; then " ++
-    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c sqlite_stable.c wasi_polyfill.c ic_http_outcall.c sqlite/libsqlite3.a; do " ++
+    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c bulletproof_vfs.c sqlite_stable.c wasi_polyfill.c ic_http_outcall.c sqlite/libsqlite3.a; do " ++
     "[ -f \"$indexer_ic0/$rel\" ] && echo \"$indexer_ic0/$rel\"; " ++
     "done; " ++
     "fi; }"
