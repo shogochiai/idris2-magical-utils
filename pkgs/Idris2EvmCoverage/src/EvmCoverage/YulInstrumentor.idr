@@ -1139,6 +1139,25 @@ runDispatchSelectors binPath traceOutput selectors = do
       smallWord c = pack (replicate 63 '0') ++ pack [c]
   let oneWord : String
       oneWord = smallWord '1'
+  -- A "stranger" address word: 0x11 repeated 20 times. It is NEVER the revm CALLER
+  -- (0x20*20) and is never registered by a callerWord-arg0 registration, so any
+  -- member/owner lookup for THIS address takes the NOT-found side: checkMemberLoop's
+  -- `memberAddr == target` False (mismatch → keep looping) and its `idx >= count`
+  -- True (loop exhausted → return False), and requireMember's Fail / checkMember's
+  -- Nothing. These not-member branches are unreachable with caller-arg0 alone (after
+  -- registration every lookup of the caller matches at idx 0), which is exactly the
+  -- gap that left Members/AccessControl member-gate False sides Missing.
+  let strangerWord : String
+      strangerWord = pack (replicate 24 '0') ++ concat (replicate 20 "11")
+  -- A large value word (2^256-1). Used in the value/duration positions so that
+  -- threshold comparisons take their OTHER side: setExpiryDuration(huge) makes a
+  -- later proposal's `expiration = createdAt + huge` satisfy `now < expiration`
+  -- (checkNotExpired Just / not-expired side); a large rep/approvedHeader value
+  -- flips `rep > threshold` / `approvedHeader > 0` (checkRep Just, checkApproved
+  -- Just). The all-zero/small vectors already cover the False/Nothing sides; this
+  -- bigWord vector covers the True/Just sides that need a value above a threshold.
+  let bigWord : String
+      bigWord = pack (replicate 64 'f')
   -- For each selector emit several stateful calldatas with distinct argument
   -- vectors. The Decoder monad threads the offset, so multi-arg handlers now read
   -- each word distinctly; giving them DISTINCT small ids (0/1/2/3) lets id- and
@@ -1150,7 +1169,16 @@ runDispatchSelectors binPath traceOutput selectors = do
         [ sel ++ callerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
         , sel ++ zeroWord    ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord
         , sel ++ oneWord     ++ smallWord '1' ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+        -- arg0 = stranger addr → drives the NOT-member side of member/owner gates.
+        , sel ++ strangerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+        -- caller arg0 + BIG values in the value positions → drives the threshold-
+        -- exceeded True/Just side (checkNotExpired not-expired, checkRep, checkApproved).
+        , sel ++ callerWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord
         ]
+  -- A stranger-address vector for a single selector (used in the pre-registration
+  -- pass, where even the caller is not yet a member → count==0 exhaustion branch).
+  let strangerVec : String -> String
+      strangerVec sel = sel ++ strangerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
   -- Build the calls-file. We do NOT know which selector is the registration
   -- (addMember-style) one, and the selectors run in an arbitrary (sorted) order,
   -- so a single pass may run a gated selector (propose/vote) BEFORE the
@@ -1165,11 +1193,20 @@ runDispatchSelectors binPath traceOutput selectors = do
       onePass = concatMap argsFor selectors
   let allCalls : List String
       allCalls =
+        -- Phase 0 (FRESH state, BEFORE any registration): run every selector once
+        -- with the caller arg and once with the stranger arg. With zero members yet,
+        -- member-gated lookups take the count==0 exhaustion / not-found side
+        -- (checkMemberLoop idx>=count True → False; requireMember Fail; checkMember
+        -- Nothing). This is the member-gate FALSE side that Phase A/B (which register
+        -- first) can never reach. MUST come before Phase A.
+        map callerVec selectors ++ map strangerVec selectors
         -- Phase A: register membership up-front (every selector with caller arg0,
         -- run twice so addMember(caller) definitely precedes the gated selectors).
-        map callerVec selectors ++ map callerVec selectors
+        ++ map callerVec selectors ++ map callerVec selectors
         -- Phase B: three full varied passes (state deepens; member-gated True sides
-        -- now reachable since the caller is registered).
+        -- now reachable since the caller is registered). argsFor now also includes a
+        -- stranger-arg0 vector, so the mismatch (memberAddr != target) branch fires
+        -- even with ≥1 member registered (lookup of a non-member among members).
         ++ onePass ++ onePass ++ onePass
   let callsFile = "/tmp/dispatch-stateful-calls.txt"
   _ <- writeFile callsFile (unlines allCalls)
