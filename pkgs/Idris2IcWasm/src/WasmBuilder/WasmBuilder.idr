@@ -393,6 +393,18 @@ generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
+    , ""
+    -- IO-coverage runner: invokes ONLY TestModule.runTests (the IO/SQL-fixture
+    -- coverage routines: setupSchema + parse-row/query exercises against a real
+    -- replica DB) WITHOUT the pure batch. The all-in-one runTests is omitted from
+    -- probing (too heavy → IC0502); this isolates the IO coverage so its paths
+    -- (parseRow / query functions, unreachable from pure tests) get recorded
+    -- without the pure-test weight. dfx-cov probes this as `runIoCoverage`.
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = do"
+    , "  TestModule.runTests"
+    , "  pure (1, 0)"
     ]
 
 ||| Generate test Main.idr content that imports the standardized shim module
@@ -450,6 +462,10 @@ generateTestMainContent =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = TestHarness.runTrivialTest"
+    , ""
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = TestHarness.runIoCoverage"
     ]
     ++ generateTestBatchExports
     ++
@@ -464,6 +480,7 @@ generateTestMainContent =
     , "      _ <- Main.runTests"
     , "      _ <- Main.runMinimalTests"
     , "      _ <- Main.runTrivialTest"
+    , "      _ <- Main.runIoCoverage"
     ]
     ++ map (\idx => "      _ <- Main.runTestBatch" ++ show idx) testBatchIndexes
     ++
@@ -496,6 +513,7 @@ isTestHarnessExport name =
   name == "runTests" ||
   name == "runMinimalTests" ||
   name == "runTrivialTest" ||
+  name == "runIoCoverage" ||
   isPrefixOf "runTestBatch" name
 
 ||| RefC-level arity for generated top-level symbols.

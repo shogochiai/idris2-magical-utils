@@ -1096,7 +1096,10 @@ runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPa
           -- which then blocks the path-hit query. The batches below cover the
           -- whole list (8 tests each), so no coverage is lost.
           let batchMethods = map (\idx => "runTestBatch" ++ show idx) batchProbeIndexes
-          let methods = "runMinimalTests" :: "runTrivialTest" :: batchMethods
+          -- runIoCoverage runs ONLY the IO/SQL-fixture coverage routines (parse-row
+          -- / query exercises against a real replica DB) — small enough to probe in
+          -- one call, recording paths unreachable from the pure batches.
+          let methods = "runMinimalTests" :: "runTrivialTest" :: "runIoCoverage" :: batchMethods
           callResult <- runProjectMethods projectDir canister methods opts.network
           case callResult of
             Left err => do
