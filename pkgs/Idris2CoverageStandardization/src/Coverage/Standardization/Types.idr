@@ -105,6 +105,85 @@ reasonString SingleCtorDestructure = "single-constructor destructure (irrefutabl
 reasonString StraightLineClause    = "straight-line clause, no branch obligation"
 reasonString ConstantFalseGuard    = "constant-false guard (logically unreachable)"
 
+-- ===========================================================================
+-- EffectBoundary: FACT-grounded harness-unexecutability (NOT value/judgment)
+-- ===========================================================================
+-- A path is honestly excludable from the test-coverage denominator only when it
+-- is UNEXECUTABLE in the test harness for a reason the OBSERVER CANNOT MOVE.
+-- "value is low" (a human weight) and "it's IO" (a human declaration) both fail
+-- this: they are observer judgments and degenerate into a denominator trick.
+--
+-- The trick-proof basis is the EFFECT BOUNDARY a path reaches: which hole in the
+-- program's FFI/IO surface it transitively opens. That reachability is a COMPILER
+-- FACT (call-graph; ideally a TYPE fact once the boundary resource is linear —
+-- `runProc : Argv -> IO (Res Output)` makes "consumes Res" type-checkable). A
+-- path that reaches ProcessSpawn / NetworkOutcall / CanisterCall cannot run in
+-- the Chez/node harness (no process / no network / no replica); a PureComputation
+-- path can. The witness (reachVia: the call chain to the %foreign primitive) is
+-- emitted by instrumentation, never asserted by a human.
+--
+-- Totality anchor: adding a boundary kind forces every match below to answer
+-- "is this harness-excludable?" — a new hole cannot silently widen the excluded
+-- set. This is the ExclusionReason discipline applied to EXECUTABILITY.
+public export
+data EffectBoundary
+  = PureComputation   -- opens no hole: stays in the denominator, must be tested
+  | ProcessSpawn      -- reaches popen2/runProc: no process in harness
+  | NetworkOutcall    -- reaches HTTP/RPC outcall: no network in harness
+  | CanisterCall      -- reaches IC inter-canister call: no replica in harness
+  | FileSystemIO      -- reaches real fs read/write outside a fixture
+
+public export
+Show EffectBoundary where
+  show PureComputation = "PureComputation"
+  show ProcessSpawn    = "ProcessSpawn"
+  show NetworkOutcall  = "NetworkOutcall"
+  show CanisterCall    = "CanisterCall"
+  show FileSystemIO    = "FileSystemIO"
+
+public export
+Eq EffectBoundary where
+  PureComputation == PureComputation = True
+  ProcessSpawn    == ProcessSpawn    = True
+  NetworkOutcall  == NetworkOutcall  = True
+  CanisterCall    == CanisterCall    = True
+  FileSystemIO    == FileSystemIO    = True
+  _               == _               = False
+
+||| Is a path reaching this boundary honestly excludable from the test-coverage
+||| denominator? True ONLY for genuinely harness-unexecutable holes. Totality-
+||| checked: a new EffectBoundary ctor breaks this until classified, so a hole
+||| can never be silently added to the excluded set.
+public export
+boundaryExcludable : EffectBoundary -> Bool
+boundaryExcludable PureComputation = False  -- no hole → testable → stays in denom
+boundaryExcludable ProcessSpawn    = True
+boundaryExcludable NetworkOutcall  = True
+boundaryExcludable CanisterCall    = True
+boundaryExcludable FileSystemIO    = True
+
+||| The ObligationClass a harness-unexecutable boundary path reclassifies to.
+||| Reaching an external hole is not a compiler artifact and not logically dead —
+||| it is reachable product logic the HARNESS cannot drive. UnknownClassification
+||| keeps it honest (visible, claim-affecting) rather than vanishing it.
+public export
+boundaryClass : EffectBoundary -> ObligationClass
+boundaryClass PureComputation = ReachableObligation
+boundaryClass ProcessSpawn    = UnknownClassification
+boundaryClass NetworkOutcall  = UnknownClassification
+boundaryClass CanisterCall    = UnknownClassification
+boundaryClass FileSystemIO    = UnknownClassification
+
+||| The %foreign primitive a boundary funnels through — the documented hole. Used
+||| to validate that a path's claimed boundary really does reach this primitive.
+public export
+boundaryPrimitive : EffectBoundary -> String
+boundaryPrimitive PureComputation = ""
+boundaryPrimitive ProcessSpawn    = "popen2"
+boundaryPrimitive NetworkOutcall  = "http_request"
+boundaryPrimitive CanisterCall    = "ic0.call_new"
+boundaryPrimitive FileSystemIO    = "openFile"
+
 public export
 data ObligationGranularity
   = FunctionLevel
