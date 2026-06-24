@@ -197,6 +197,47 @@ boundaryPrimitive CanisterCall            = "ic0.call_new"
 boundaryPrimitive FileSystemIO            = "openFile"
 boundaryPrimitive (UnclassifiedForeign c) = c
 
+-- ===========================================================================
+-- EffectBoundarySpec: the PLUGGABLE boundary policy (canonical + fork-extensible)
+-- ===========================================================================
+-- EffectBoundary's `boundaryExcludable`/`boundaryPrimitive` above are GLOBAL
+-- defaults, but the SAME hole differs per delivery backend: "what cc opens a hole"
+-- (popen2 on Chez vs child_process on node vs a Yul opcode on EVM) and "is that
+-- hole harness-unexecutable" (a precompile is real-unrunnable on Chez but RUNNABLE
+-- under revm) are BOTH backend-specific. So the policy must be parameterised by the
+-- coverage family — and, to allow free development (etherclaw forks shipping their
+-- own backend/runner), it must be PLUGGABLE, not a closed match in core.
+--
+-- EffectBoundarySpec is plain DATA so an external plugin can construct its own set
+-- for a fork's family without editing core. The canonical families' specs are
+-- provided by a Totality-anchored table (in a coverage package that can see
+-- CoverageFamily); forks add a value with their own familyTag.
+--
+-- TRICK-PROOF CAVEAT (the open question this surfaces): `excludable` here is still
+-- a Bool a plugin asserts. A plugin could declare a real product hole "excludable"
+-- to shrink its denominator — the value-weighting trick, returned. The honest
+-- endpoint keeps `excludable` a fact: a hole is excludable iff that family's runtime
+-- cannot construct its boundary-resource (a linear `Res` whose ctor is absent from
+-- that backend's primitive set). Until that linear grounding lands, a plugin's
+-- `excludable` MUST be auditable: the spec carries the cc it matches and the family
+-- tag, so a reviewer sees exactly what a fork excluded and why.
+public export
+record EffectBoundarySpec where
+  constructor MkEffectBoundarySpec
+  ||| Which coverage family (canonical tag like "evm"/"dfx"/"web"/"core", or a
+  ||| fork's own tag) this spec applies to. Open string → forks are not gated.
+  familyTag    : String
+  ||| The boundary kind a matching hole reaches (drives boundaryClass).
+  boundary     : EffectBoundary
+  ||| Substrings of a %foreign calling-convention that identify this hole on THIS
+  ||| backend (e.g. ["popen2"] on Chez, ["child_process"] on node). A ForeignDef
+  ||| whose cc contains one of these → `boundary`.
+  ccSubstrings : List String
+  ||| Is a path reaching this hole harness-unexecutable for THIS family's runner?
+  ||| (Chez: a precompile is N/A; revm: a precompile is RUNNABLE → not excludable.)
+  ||| AUDIT, do not trust blindly: see the trick-proof caveat above.
+  excludable   : Bool
+
 public export
 data ObligationGranularity
   = FunctionLevel

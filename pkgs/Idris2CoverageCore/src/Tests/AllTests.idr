@@ -6,6 +6,8 @@ module Tests.AllTests
 import Data.List
 
 import Coverage.Core.DumppathsJson
+import Coverage.Boundary.Canonical
+import Idris2.CoverageFamily
 import Coverage.Core.PathCoverage
 import Coverage.Core.Backend
 import Coverage.Core.Exclusions
@@ -402,6 +404,26 @@ boundaryDumppathsJson : String
 boundaryDumppathsJson =
   "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"App.spawnIt\",\"effect_boundary\":\"ProcessSpawn\",\"paths\":[{\"path_id\":\"App.spawnIt#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"App.pureCalc\",\"effect_boundary\":\"PureComputation\",\"paths\":[{\"path_id\":\"App.pureCalc#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
 
+||| The canonical per-family boundary policy: the SAME concept differs by backend
+||| and runner. core ProcessSpawn is harness-unexecutable (Chez can't spawn) →
+||| excludable; evm's call boundary is RUNNABLE under revm → NOT excludable (stays
+||| in the denominator); web's process hole matches a DIFFERENT cc (child_process,
+||| not popen2). Pluggability: forks add their own EffectBoundarySpec for new
+||| backends; this table is the canonical Totality-anchored set.
+test_BOUNDARY_PERFAMILY_001 : () -> Bool
+test_BOUNDARY_PERFAMILY_001 () =
+  let coreSpecs = boundarySpecsFor CoreLib
+      evmSpecs  = boundarySpecsFor EvmHash
+      webSpecs  = boundarySpecsFor WebMVU
+      -- core: ProcessSpawn present AND excludable
+      coreProcExcl = any (\s => s.boundary == ProcessSpawn && s.excludable) coreSpecs
+      -- evm: has a boundary that is NOT excludable (revm runs it)
+      evmNotExcl   = any (\s => not s.excludable) evmSpecs
+      -- web: its process hole matches child_process, NOT popen2 (backend-specific cc)
+      webChildProc = any (\s => elem "child_process" s.ccSubstrings) webSpecs
+      coreNotChild = not (any (\s => elem "child_process" s.ccSubstrings) coreSpecs)
+  in coreProcExcl && evmNotExcl && webChildProc && coreNotChild
+
 test_PATH_BOUNDARY_001 : () -> Bool
 test_PATH_BOUNDARY_001 () =
   case parseDumppathsJson boundaryDumppathsJson of
@@ -580,6 +602,7 @@ allTests =
   -- Path coverage
   , test "PATH_001" "parse dumppaths json" test_PATH_001
   , test "PATH_BOUNDARY_001" "effect_boundary reclassifies ProcessSpawn to Unknown, keeps Pure" test_PATH_BOUNDARY_001
+  , test "BOUNDARY_PERFAMILY_001" "canonical boundary policy differs per family (core vs evm vs web)" test_BOUNDARY_PERFAMILY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003
   , test "PATH_004" "path obligations use path granularity" test_PATH_004
