@@ -89,6 +89,12 @@ icpDefaultExclusions =
     -- the product logic under test, and must not be counted as product obligations.
   , containsPattern ".Tests." "Test harness/spec module"
   , prefixPattern "Tests." "Test harness/spec module"
+  -- `Tests` as a module-name SUFFIX (e.g. Deploy.ExecutorTests, WebsiteRenderTests,
+  -- ManifestTests) — these are test modules (each is ~24-45 `test_` functions), the
+  -- same harness-not-product policy as `.Tests.`, just a naming variant. Verified
+  -- safe: every "Tests." occurrence in the GlobalRegistry denominator is a real test
+  -- module (no product function contains "Tests.").
+  , containsPattern "Tests." "Test harness/spec module (Tests suffix)"
   , containsPattern "TestHarness" "Test harness shim"
   , exactPattern "_initialize" "WASM module initializer"
   , prefixPattern "_braceOpen_" "Idris2 internal expression"
