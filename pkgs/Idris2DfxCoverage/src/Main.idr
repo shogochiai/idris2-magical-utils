@@ -384,6 +384,27 @@ runProjectMethod projectDir canisterRef method network = do
      then pure $ Right content
      else pure $ Left $ "dfx canister call " ++ method ++ " failed: " ++ trim content
 
+||| Like runProjectMethod but RETRIES on failure. The numerator was run-to-run
+||| unstable because a single transient batch failure (replica timeout / instruction
+||| limit on a heavy `runTestBatchN`) was SILENTLY DROPPED by runProjectMethods.go —
+||| that batch's path hits then never recorded, so Missing fluctuated by hundreds of
+||| paths between identical runs. Each `runTestBatchN` records cumulatively into
+||| canister state, so a successful retry recovers exactly the lost hits. We retry up
+||| to `attempts` times; only a persistent failure is reported.
+runProjectMethodRetry : (attempts : Nat) -> String -> String -> String -> String -> IO (Either String String)
+runProjectMethodRetry Z _ _ method _ =
+  pure $ Left $ "method " ++ method ++ " exhausted retries"
+runProjectMethodRetry (S k) projectDir canisterRef method network = do
+  result <- runProjectMethod projectDir canisterRef method network
+  case result of
+    Right ok => pure $ Right ok
+    Left err =>
+      if k == Z
+         then pure $ Left err   -- last attempt: surface the real error
+         else do putStrLn $ "    [numerator] " ++ method ++ " failed, retrying ("
+                          ++ show k ++ " left): " ++ err
+                 runProjectMethodRetry k projectDir canisterRef method network
+
 ||| Indices of the chunked `runTestBatchN` canister methods to probe. Each batch
 ||| evaluates 8 tests (start = idx*8). Must stay in sync with the generated
 ||| harness's batch exports (WasmBuilder.testBatchIndexes). 0..31 covers up to
@@ -407,7 +428,9 @@ runProjectMethods projectDir canisterRef methods network = go methods [] []
          then pure $ Left $ joinBy "\n" (reverse errors)
          else pure $ Right (reverse successes)
     go (method :: rest) successes errors = do
-      result <- runProjectMethod projectDir canisterRef method network
+      -- Retry (3 attempts) so a transient batch timeout doesn't silently drop that
+      -- batch's path hits — the cause of run-to-run numerator instability.
+      result <- runProjectMethodRetry 3 projectDir canisterRef method network
       case result of
         Right _ => go rest (method :: successes) errors
         Left err => go rest successes (err :: errors)

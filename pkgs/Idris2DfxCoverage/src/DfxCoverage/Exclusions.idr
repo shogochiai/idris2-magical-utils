@@ -116,6 +116,21 @@ icpDefaultExclusions =
   , containsPattern "VeClaw.hexToNat" "VeCLAW HTTP-outcall-only hex helper (sole caller readVeCLAWBalance)"
   , containsPattern "VeClaw.parseUint256FromBody" "VeCLAW HTTP-outcall-only parser (sole caller readVeCLAWBalance)"
   , containsPattern "TxSender.Signing.recoverV" "secp256k1 recovery — needs a real signature (t-ECDSA), no pure entry"
+  -- IO/SQL-gated product logic (same policy, verified per function): the function's
+  -- type is `IO _` / `FR _` whose body runs SQL on the replica or an HTTP outcall,
+  -- with NO synchronous/pure entry point. A pure test harness cannot construct the
+  -- replica DB rows / RPC responses these read, so their parse/scan arms never run
+  -- from `Bool` tests. Verified IO in the type signature (parseEventRow : IO _,
+  -- sqlQueryEvents : … -> IO _, getPromptTimelineRec : … -> IO _, etc.). NOTE: the
+  -- PURE recursion helpers nearby (Leb128 encodeUnsigned/encodeSigned go, Manifest
+  -- parseManifest go, ReceiptParse balancedObject go) are NOT excluded — they are
+  -- directly tested; only the genuinely IO/SQL/HTTP-bound functions are listed.
+  , containsPattern "Indexer.StorageSql.parseEventRow"   "SQL row parser (IO; reads replica DB rows, no pure entry)"
+  , containsPattern "Indexer.StorageSql.sqlQueryEvents"  "SQL query (IO; runs on the replica DB, no pure entry)"
+  , containsPattern "Indexer.StorageSql.sqlGetStorageInfo" "SQL info query (IO; runs on the replica DB, no pure entry)"
+  , containsPattern "PromptProposal.Core.getForkExpiration" "SQL read (IO; reads replica DB, no pure entry)"
+  , containsPattern "PromptProposal.Core.getPromptTimelineRec" "SQL timeline read (IO; 5-table join on replica, no pure entry)"
+  , containsPattern "HttpOutcall.Core.httpRequestWithRetry" "HTTP outcall retry loop (FR; needs a live RPC response, no pure entry)"
   , exactPattern "_initialize" "WASM module initializer"
   , prefixPattern "_braceOpen_" "Idris2 internal expression"
   , prefixPattern "_emscripten_" "Emscripten runtime"
