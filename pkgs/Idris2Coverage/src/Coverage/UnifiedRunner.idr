@@ -8,6 +8,8 @@ import public Coverage.DumpcasesParser
 import public Coverage.Core.RuntimeHit
 import public Coverage.Core.PathCoverage
 import Coverage.Core.DumppathsJson
+import Coverage.Exclusions
+import Coverage.PathCoverage
 import Coverage.Standardization.Types
 import System
 import System.Clock
@@ -862,10 +864,19 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        case chunkResults of
          Left err => pure $ Left $ wholeErr ++ "\nChunked fallback failed: " ++ err
          Right paths =>
-           let deduped = nub paths in
-           if null deduped
+           -- Apply the standard path-coverage exclusions to the denominator (the
+           -- UnifiedRunner path previously skipped them, so harness/runtime-only
+           -- obligations were wrongly counted). idris2FullExclusions drops the
+           -- compiler/builtin/test noise; the extra TempStaticDumppaths pattern drops
+           -- the per-chunk generated wrapper Mains (`TempStaticDumppaths_test_*.main`),
+           -- which are this chunked-build's own scaffolding, not product code.
+           let excl     = MkLoadedExclusions
+                            (prefixPattern "TempStaticDumppaths" "Chunked-dumppaths build scaffolding (generated per-chunk Main wrapper)"
+                              :: idris2FullExclusions) "builtin"
+               filtered = filterPathObligations excl emptyExclusionConfig (nub paths) in
+           if null filtered
               then pure $ Left $ wholeErr ++ "\nChunked fallback produced zero path obligations."
-              else pure $ Right $ pathObligationsToDumppathsJson deduped
+              else pure $ Right $ pathObligationsToDumppathsJson filtered
   where
     runChunks : String -> String -> String -> List String -> String -> List (List String) -> Nat -> List PathObligation -> IO (Either String (List PathObligation))
     runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
