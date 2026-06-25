@@ -1049,14 +1049,19 @@ runDumppathsJson ipkgPath = do
 parsePathHitLine : String -> Maybe PathRuntimeHit
 parsePathHitLine line =
   let trimmed = trim line in
-  if null trimmed || isPrefixOf "#" trimmed
+  if null trimmed
      then Nothing
-     else case forget (split (== ',') trimmed) of
-            [pathId] => Just (MkPathRuntimeHit (trim pathId) 1)
-            [pathId, countStr] =>
-              let parsed = fromMaybe 1 (parsePositive (trim countStr))
-              in Just (MkPathRuntimeHit (trim pathId) parsed)
-            _ => Just (MkPathRuntimeHit trimmed 1)
+     -- The hits-out file is ONE PATH-ID PER LINE (written by runNumeratorInProcess
+     -- as `unlines (map .pathId hits)`), NOT a `pathId,count` CSV. Path-ids for
+     -- `where`-bound helpers embed a comma (e.g. "…balancedObject,go#p0"), so a
+     -- comma split here re-truncated them to "…balancedObject" — the SAME bug as the
+     -- canister-reply separator, on the file-readback side. Treat the whole trimmed
+     -- line as the path-id (count is always 1; the join is set-membership). A leading
+     -- '#' is part of a "#pN" suffix mid-id, never a comment here, so don't skip it
+     -- — but a line that is ONLY "#…" (no id before it) cannot be a real path-id.
+     else if isPrefixOf "#" trimmed
+       then Nothing
+       else Just (MkPathRuntimeHit trimmed 1)
 
 loadPathHits : Maybe String -> IO (Either String (List PathRuntimeHit))
 loadPathHits Nothing = pure $ Right []
