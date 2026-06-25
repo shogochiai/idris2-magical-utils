@@ -166,7 +166,14 @@ stripCandidText s =
 ||| Split a comma-separated reply into trimmed, non-empty path-id tokens.
 parsePathIdList : String -> List String
 parsePathIdList s =
-  let raw = forget (split (== ',') s)
+  -- Split on SEMICOLON, not comma: path-ids for `where`-bound / lifted helpers embed
+  -- a comma in their name (e.g. "…balancedObject,go#p0"). A comma split truncated
+  -- those to "…balancedObject" (dropping ",go#pN"), so they never joined and showed
+  -- as permanently-missing. The canister join (__dfxcov_format_path_hits in
+  -- pathcov.c) emits ';' between ids accordingly. Fall back to ',' only for a legacy
+  -- WASM that still comma-joined (no ';' present in the reply).
+  let sep   = if isInfixOf ";" s then ';' else ','
+      raw    = forget (split (== sep) s)
   in filter (/= "") (map trim raw)
 
 ||| Query the live canister's __get_path_hits and return the recorded canonical

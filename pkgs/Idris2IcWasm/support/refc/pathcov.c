@@ -111,10 +111,17 @@ void __dfxcov_reset_path_hits(void) {
   idris2_pathcov_arena_used = 0;
 }
 
-// Comma-separated dump of all recorded path-ids. The buffer is static; callers
+// Semicolon-separated dump of all recorded path-ids. The buffer is static; callers
 // (the canister query) must copy/reply before the next call. If the join output
 // would exceed the buffer, the dump is truncated and the trailing marker
-// ",__TRUNCATED__" is appended so the collector can flag it (no silent loss).
+// ";__TRUNCATED__" is appended so the collector can flag it (no silent loss).
+//
+// SEPARATOR = ';' (NOT ','): path-ids for `where`-bound / lifted helpers embed a
+// comma in their name (e.g. "…balancedObject,go#p0", "Leb128.encodeSigned,go#p1").
+// A comma separator collided with those commas, so the collector split one id into
+// two and dropped the "…,go#pN" tail — those where-helper paths could NEVER join
+// and showed as permanently-missing. ';' never appears inside an Idris path-id and
+// (unlike '\n') survives dfx's candid `text` reply rendering verbatim.
 #ifndef IDRIS2_PATHCOV_DUMP_BYTES
 #define IDRIS2_PATHCOV_DUMP_BYTES (1 << 22) // 4 MiB reply text
 #endif
@@ -130,14 +137,14 @@ const char *__dfxcov_format_path_hits(void) {
     size_t len = strlen(cur);
     size_t need = len + (first ? 0 : 1);
     if (pos + need + 1 >= sizeof(idris2_pathcov_dump) - 16) {
-      const char *mark = ",__TRUNCATED__";
+      const char *mark = ";__TRUNCATED__";
       size_t mlen = strlen(mark);
       memcpy(idris2_pathcov_dump + pos, mark, mlen);
       pos += mlen;
       idris2_pathcov_dump[pos] = '\0';
       return idris2_pathcov_dump;
     }
-    if (!first) idris2_pathcov_dump[pos++] = ',';
+    if (!first) idris2_pathcov_dump[pos++] = ';';
     memcpy(idris2_pathcov_dump + pos, cur, len);
     pos += len;
     idris2_pathcov_dump[pos] = '\0';
