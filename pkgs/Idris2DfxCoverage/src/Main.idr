@@ -886,12 +886,48 @@ resolveIpkgForPaths opts =
 ||| so `idris2 --dumppaths-json` over it yields obligations for exactly the
 ||| functions the instrumented WASM can record. Returns the original ipkg path
 ||| unchanged if no Tests/AllTests module is found (falls back to canister prep).
+||| True iff this ipkg's content declares `main = Tests.AllTests` AND lists the
+||| Tests.AllTests module — i.e. it IS the test-universe ipkg (the same module set
+||| the forTestBuild WASM compiles), not the canister-Main ipkg.
+ipkgIsTestUniverse : String -> Bool
+ipkgIsTestUniverse content =
+  let ls = map trim (lines content)
+      hasTestMain = any (\l => l == "main = Tests.AllTests" || l == "main=Tests.AllTests") ls
+      listsTestMod = any (\l => isInfixOf "Tests.AllTests" l && (isPrefixOf "," l || isPrefixOf "modules" l)) ls
+  in hasTestMain && listsTestMod
+
+||| Find a sibling ipkg in `projectDir` that IS the test-universe ipkg. lazy passes
+||| the CANISTER ipkg (main = Main, modules = canister set with NO Coverage.*/Tests.*),
+||| but the numerator instruments the TEST universe (Tests.AllTests + Coverage.* +
+||| transitive imports). Rewriting the canister ipkg's main line does NOT add the
+||| missing modules, so its dumppaths universe stays canister-only — the disjoint
+||| universe bug. The real test ipkg already has the correct `modules =` list, so we
+||| use it directly. Returns Nothing when no sibling test ipkg exists.
+findSiblingTestIpkg : (projectDir : String) -> (excludeName : String) -> IO (Maybe String)
+findSiblingTestIpkg projectDir excludeName = do
+  Right entries <- listDir projectDir
+    | Left _ => pure Nothing
+  -- Skip the passed ipkg and any generated temp ipkg (named canister-dfxprepared-*
+  -- or dfx-dumppaths-temp-*); ipkgIsTestUniverse is the authoritative test.
+  let candidates = filter (\n => isSuffixOf ".ipkg" n && n /= excludeName
+                                   && not (isInfixOf "canister-dfxprepared-" n)
+                                   && not (isInfixOf "dfx-dumppaths-temp-" n))
+                          entries
+  go (map (\n => projectDir ++ "/" ++ n) candidates)
+  where
+    go : List String -> IO (Maybe String)
+    go [] = pure Nothing
+    go (p :: rest) = do
+      Right c <- readFile p
+        | Left _ => go rest
+      if ipkgIsTestUniverse c then pure (Just p) else go rest
+
 prepareTestUniverseDumppathsIpkg : String -> IO String
 prepareTestUniverseDumppathsIpkg ipkgPath = do
   Right content <- readFile ipkgPath
     | Left _ => pure ipkgPath
   t <- time
-  let (projectDir, _) = splitPath ipkgPath
+  let (projectDir, ipkgName) = splitPath ipkgPath
   -- Confirm a test entry exists; otherwise this preparer is inapplicable.
   let testMainPath = projectDir ++ "/src/Tests/AllTests.idr"
   hasTestMain <- do
@@ -900,22 +936,34 @@ prepareTestUniverseDumppathsIpkg ipkgPath = do
     pure True
   if not hasTestMain
      then pure ipkgPath
-     else do
-       let tempPath = projectDir ++ "/canister-dfxprepared-" ++ show t ++ ".ipkg"
-       -- Keep ALL modules (including Tests.*); just point main/executable at the
-       -- test entry so the dumppaths universe == the forTestBuild WASM universe.
-       let rewriteMainLine : String -> String
-           rewriteMainLine line =
-             let trimmed = trim line
-             in if isPrefixOf "main " trimmed || isPrefixOf "main=" trimmed
-                   then "main = Tests.AllTests"
-                else if isPrefixOf "executable " trimmed || isPrefixOf "executable=" trimmed
-                   then "executable = run-tests"
-                else line
-       let sanitized = unlines (map rewriteMainLine (lines content))
-       Right () <- writeFile tempPath sanitized
-         | Left _ => pure ipkgPath
-       pure tempPath
+     else if ipkgIsTestUniverse content
+       -- Already the test-universe ipkg: nothing to swap; just keep it (the dumppaths
+       -- build over it yields the test universe — Coverage.* / Tests.* included).
+       then pure ipkgPath
+       else do
+         -- The passed ipkg is the canister-Main ipkg (its `modules =` list lacks
+         -- Tests.AllTests / Coverage.*). Use the sibling TEST ipkg as the denominator
+         -- base so the dumppaths universe == the forTestBuild WASM universe.
+         mTestIpkg <- findSiblingTestIpkg projectDir ipkgName
+         case mTestIpkg of
+           Just testIpkg => pure testIpkg
+           Nothing => do
+             -- No sibling test ipkg found: fall back to rewriting this ipkg's main
+             -- line (best-effort; only aligns if the canister modules transitively
+             -- reach the test surface). Better than the canister-Main preparer.
+             let tempPath = projectDir ++ "/canister-dfxprepared-" ++ show t ++ ".ipkg"
+             let rewriteMainLine : String -> String
+                 rewriteMainLine line =
+                   let trimmed = trim line
+                   in if isPrefixOf "main " trimmed || isPrefixOf "main=" trimmed
+                         then "main = Tests.AllTests"
+                      else if isPrefixOf "executable " trimmed || isPrefixOf "executable=" trimmed
+                         then "executable = run-tests"
+                      else line
+             let sanitized = unlines (map rewriteMainLine (lines content))
+             Right () <- writeFile tempPath sanitized
+               | Left _ => pure ipkgPath
+             pure tempPath
 
 prepareDumppathsIpkg : String -> IO String
 prepareDumppathsIpkg ipkgPath = do
