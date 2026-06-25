@@ -1461,17 +1461,49 @@ runFunctionHitsOnce projectDir testModules timeout = do
         countCanonical : List CompiledCase -> Nat
         countCanonical = length . filter (\c => c.kind == Canonical)
 
+||| Normalize a recorded path-id's record-projection segments so they match the
+||| dumppaths denominator's bare-field form. The fork compiler's recordPathHit names
+||| a record field accessor with Idris's projection DISPLAY syntax `(.field)`, but
+||| the dumppaths writer (functionPathEntry/fullShowName) emits the BARE `field`. So
+||| `…TxEvidence.(.chainId)#p0` (recorded) must become `…TxEvidence.chainId#p0` to
+||| join with the denominator — otherwise EVERY record accessor (the bulk of core's
+||| obligations) shows as permanently-missing. Strip the `(.` … `)` wrapper wherever
+||| it appears in the dotted name. Same class as the dfx comma-separator mismatch.
+normalizeProjectionName : String -> String
+normalizeProjectionName s = pack (go (unpack s))
+  where
+    go : List Char -> List Char
+    goField : List Char -> List Char
+    go [] = []
+    -- "(.field)"  →  "field"   (drop '(', drop '.', keep field chars, drop ')')
+    go ('(' :: '.' :: rest) = goField rest
+    go (c :: rest) = c :: go rest
+    goField [] = []
+    goField (')' :: rest) = go rest
+    goField (c :: rest) = c :: goField rest
+
+||| Split off ONLY a trailing ",<digits>" count, leaving the rest as the path-id.
+||| The path-id itself contains commas (where-bound helpers: "…registryReqId,afterFirst,go#p0"),
+||| so splitting on EVERY comma truncated the name (same class as the dfx comma bug).
+||| The recorded line is "<path-id>,<count>"; the count is the final comma-field IFF
+||| it is all digits — otherwise the whole line is the path-id (no count).
+splitTrailingCount : String -> (String, Nat)
+splitTrailingCount s =
+  case reverse (forget (split (== ',') s)) of
+    (lastSeg :: restRev@(_ :: _)) =>
+      let lt = trim lastSeg in
+      if lt /= "" && all isDigit (unpack lt)
+        then (trim (joinBy "," (reverse restRev)), fromMaybe 1 (parsePositive lt))
+        else (trim s, 1)
+    _ => (trim s, 1)
+
 parsePathHitLineLocal : String -> Maybe PathRuntimeHit
 parsePathHitLineLocal line =
   let trimmed = trim line in
   if null trimmed || isPrefixOf "#" trimmed
      then Nothing
-     else case forget (split (== ',') trimmed) of
-            [pathId] => Just (MkPathRuntimeHit (trim pathId) 1)
-            [pathId, countStr] =>
-              let parsed = fromMaybe 1 (parsePositive (trim countStr))
-              in Just (MkPathRuntimeHit (trim pathId) parsed)
-            _ => Just (MkPathRuntimeHit trimmed 1)
+     else let (pathId, cnt) = splitTrailingCount trimmed
+          in Just (MkPathRuntimeHit (normalizeProjectionName pathId) cnt)
 
 ||| Tests per intra-module slice. The exe is built ONCE and run repeatedly with
 ||| IDRIS2COV_TEST_OFFSET/_LIMIT windows of this size — each a fresh process whose
