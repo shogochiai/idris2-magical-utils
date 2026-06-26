@@ -687,6 +687,7 @@ obligationClassName ReachableObligation = "ReachableObligation"
 obligationClassName LogicallyUnreachable = "LogicallyUnreachable"
 obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
 obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
+obligationClassName ExternalEffectBoundary = "ExternalEffectBoundary"
 obligationClassName UnknownClassification = "UnknownClassification"
 
 pathStepToJson : PathStep -> String
@@ -1475,23 +1476,13 @@ runFunctionHitsOnce projectDir testModules timeout = do
 ||| Normalize a recorded path-id's record-projection segments so they match the
 ||| dumppaths denominator's bare-field form. The fork compiler's recordPathHit names
 ||| a record field accessor with Idris's projection DISPLAY syntax `(.field)`, but
-||| the dumppaths writer (functionPathEntry/fullShowName) emits the BARE `field`. So
-||| `…TxEvidence.(.chainId)#p0` (recorded) must become `…TxEvidence.chainId#p0` to
-||| join with the denominator — otherwise EVERY record accessor (the bulk of core's
-||| obligations) shows as permanently-missing. Strip the `(.` … `)` wrapper wherever
-||| it appears in the dotted name. Same class as the dfx comma-separator mismatch.
-normalizeProjectionName : String -> String
-normalizeProjectionName s = pack (go (unpack s))
-  where
-    go : List Char -> List Char
-    goField : List Char -> List Char
-    go [] = []
-    -- "(.field)"  →  "field"   (drop '(', drop '.', keep field chars, drop ')')
-    go ('(' :: '.' :: rest) = goField rest
-    go (c :: rest) = c :: go rest
-    goField [] = []
-    goField (')' :: rest) = go rest
-    goField (c :: rest) = c :: goField rest
+-- NOTE: the old `normalizeProjectionName` polyfill (which stripped the `(.field)`
+-- projection wrapper so a recorded `(.chainId)` would join a BARE-`chainId`
+-- denominator) was removed once the fork compiler was fixed to emit record-field
+-- accessors as a SINGLE canonical `(.field)` form on BOTH sides (the bare selector
+-- wrapper is dropped from the dumppaths denominator; see isRecordSelectorWrapper in
+-- Compiler.Common). The two sides now agree natively, so the recorded id must be
+-- used verbatim — re-stripping `(.field)`→`field` here would re-break the join.
 
 ||| Split off ONLY a trailing ",<digits>" count, leaving the rest as the path-id.
 ||| The path-id itself contains commas (where-bound helpers: "…registryReqId,afterFirst,go#p0"),
@@ -1514,7 +1505,7 @@ parsePathHitLineLocal line =
   if null trimmed || isPrefixOf "#" trimmed
      then Nothing
      else let (pathId, cnt) = splitTrailingCount trimmed
-          in Just (MkPathRuntimeHit (normalizeProjectionName pathId) cnt)
+          in Just (MkPathRuntimeHit pathId cnt)
 
 ||| Tests per intra-module slice. The exe is built ONCE and run repeatedly with
 ||| IDRIS2COV_TEST_OFFSET/_LIMIT windows of this size — each a fresh process whose

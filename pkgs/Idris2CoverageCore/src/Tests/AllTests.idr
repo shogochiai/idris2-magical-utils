@@ -398,8 +398,10 @@ test_PATH_001 () =
 
 ||| A function the compiler tagged effect_boundary=ProcessSpawn (reaches popen2),
 ||| plus a PureComputation control. The consumer must reclassify the ProcessSpawn
-||| ReachableObligation to UnknownClassification while leaving the pure one in the
-||| denominator — fact-grounded, not an observer judgment.
+||| ReachableObligation to ExternalEffectBoundary (a RECOGNISED, non-blocking
+||| exclusion — the harness cannot spawn the process) while leaving the pure one in
+||| the denominator — fact-grounded, not an observer judgment. Note: only an
+||| UNRECOGNISED foreign hole (UnclassifiedForeign) becomes UnknownClassification.
 boundaryDumppathsJson : String
 boundaryDumppathsJson =
   "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"App.spawnIt\",\"effect_boundary\":\"ProcessSpawn\",\"paths\":[{\"path_id\":\"App.spawnIt#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"App.pureCalc\",\"effect_boundary\":\"PureComputation\",\"paths\":[{\"path_id\":\"App.pureCalc#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
@@ -430,9 +432,26 @@ test_PATH_BOUNDARY_001 () =
     Left _ => False
     Right paths =>
       any (\p => p.pathId == "App.spawnIt#p0"
-              && p.classification == UnknownClassification) paths
+              && p.classification == ExternalEffectBoundary) paths
         && any (\p => p.pathId == "App.pureCalc#p0"
                    && p.classification == ReachableObligation) paths
+
+||| Soundness guarantee: an UNRECOGNISED foreign hole (effect_boundary=
+||| UnclassifiedForeign(<cc>)) must STAY UnknownClassification — it blocks the claim
+||| so a new external call is triaged onto the benign or boundary list, never
+||| silently counted as pure. (Recognised holes get ExternalEffectBoundary above;
+||| this is the OTHER side of that split.)
+unclassifiedBoundaryJson : String
+unclassifiedBoundaryJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"App.mystery\",\"effect_boundary\":\"UnclassifiedForeign(C:some_new_prim, libwhatever)\",\"paths\":[{\"path_id\":\"App.mystery#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+
+test_PATH_BOUNDARY_002 : () -> Bool
+test_PATH_BOUNDARY_002 () =
+  case parseDumppathsJson unclassifiedBoundaryJson of
+    Left _ => False
+    Right paths =>
+      any (\p => p.pathId == "App.mystery#p0"
+              && p.classification == UnknownClassification) paths
 
 test_PATH_002 : () -> Bool
 test_PATH_002 () =
@@ -601,7 +620,8 @@ allTests =
 
   -- Path coverage
   , test "PATH_001" "parse dumppaths json" test_PATH_001
-  , test "PATH_BOUNDARY_001" "effect_boundary reclassifies ProcessSpawn to Unknown, keeps Pure" test_PATH_BOUNDARY_001
+  , test "PATH_BOUNDARY_001" "effect_boundary reclassifies ProcessSpawn to ExternalEffectBoundary, keeps Pure" test_PATH_BOUNDARY_001
+  , test "PATH_BOUNDARY_002" "unrecognised UnclassifiedForeign boundary stays UnknownClassification (soundness)" test_PATH_BOUNDARY_002
   , test "BOUNDARY_PERFAMILY_001" "canonical boundary policy differs per family (core vs evm vs web)" test_BOUNDARY_PERFAMILY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003

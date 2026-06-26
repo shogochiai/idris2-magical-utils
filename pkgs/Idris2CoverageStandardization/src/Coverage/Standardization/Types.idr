@@ -23,6 +23,17 @@ data ObligationClass
   | LogicallyUnreachable
   | UserAdmittedPartialGap
   | CompilerInsertedArtifact
+  | ExternalEffectBoundary
+    -- A path whose function transitively reaches a RECOGNISED external effect hole
+    -- (ProcessSpawn / NetworkOutcall / CanisterCall / FileSystemIO) — a COMPILER
+    -- FACT (a ForeignDef with a matching cc string on a refersTo path). The harness
+    -- genuinely cannot execute it (it cannot spawn git, open a socket, call a
+    -- canister, or touch the filesystem in a pure test), so it is a KNOWN, deliberate
+    -- exclusion — distinct from UnknownClassification, which is reserved for an
+    -- UNRECOGNISED foreign prim that must be triaged. Excluded, non-blocking, not in
+    -- the denominator. Reaching a recognised hole is neither a compiler artifact nor
+    -- logically dead, so it gets its own honest class rather than being folded into
+    -- CompilerInsertedArtifact or wrongly blocking the claim as "unknown".
   | UnknownClassification
 
 public export
@@ -31,6 +42,7 @@ Show ObligationClass where
   show LogicallyUnreachable = "LogicallyUnreachable"
   show UserAdmittedPartialGap = "UserAdmittedPartialGap"
   show CompilerInsertedArtifact = "CompilerInsertedArtifact"
+  show ExternalEffectBoundary = "ExternalEffectBoundary"
   show UnknownClassification = "UnknownClassification"
 
 public export
@@ -39,6 +51,7 @@ Eq ObligationClass where
   LogicallyUnreachable == LogicallyUnreachable = True
   UserAdmittedPartialGap == UserAdmittedPartialGap = True
   CompilerInsertedArtifact == CompilerInsertedArtifact = True
+  ExternalEffectBoundary == ExternalEffectBoundary = True
   UnknownClassification == UnknownClassification = True
   _ == _ = False
 
@@ -180,10 +193,17 @@ boundaryExcludable (UnclassifiedForeign _) = True  -- unknown hole → SAFE side
 public export
 boundaryClass : EffectBoundary -> ObligationClass
 boundaryClass PureComputation         = ReachableObligation
-boundaryClass ProcessSpawn            = UnknownClassification
-boundaryClass NetworkOutcall          = UnknownClassification
-boundaryClass CanisterCall            = UnknownClassification
-boundaryClass FileSystemIO            = UnknownClassification
+-- RECOGNISED external effect holes: a known, deliberate, non-blocking exclusion
+-- (the harness cannot spawn a process, open a socket, call a canister, or touch
+-- the filesystem in a pure test). These are NOT "unknown" — the compiler named the
+-- hole — so they get the dedicated ExternalEffectBoundary class instead of wrongly
+-- blocking the coverage claim as UnknownClassification.
+boundaryClass ProcessSpawn            = ExternalEffectBoundary
+boundaryClass NetworkOutcall          = ExternalEffectBoundary
+boundaryClass CanisterCall            = ExternalEffectBoundary
+boundaryClass FileSystemIO            = ExternalEffectBoundary
+-- UNRECOGNISED foreign prim: genuinely unknown — stays UnknownClassification so it
+-- surfaces (blocks the claim) and gets triaged onto the benign or boundary lists.
 boundaryClass (UnclassifiedForeign _) = UnknownClassification
 
 ||| The %foreign primitive a boundary funnels through — the documented hole. Used
@@ -302,6 +322,7 @@ countsAsDenominator ReachableObligation = True
 countsAsDenominator UserAdmittedPartialGap = True
 countsAsDenominator LogicallyUnreachable = False
 countsAsDenominator CompilerInsertedArtifact = False
+countsAsDenominator ExternalEffectBoundary = False
 countsAsDenominator UnknownClassification = False
 
 public export
@@ -310,12 +331,14 @@ mustBeCovered ReachableObligation = True
 mustBeCovered UserAdmittedPartialGap = True
 mustBeCovered LogicallyUnreachable = False
 mustBeCovered CompilerInsertedArtifact = False
+mustBeCovered ExternalEffectBoundary = False
 mustBeCovered UnknownClassification = False
 
 public export
 mustBeExcluded : ObligationClass -> Bool
 mustBeExcluded LogicallyUnreachable = True
 mustBeExcluded CompilerInsertedArtifact = True
+mustBeExcluded ExternalEffectBoundary = True
 mustBeExcluded ReachableObligation = False
 mustBeExcluded UserAdmittedPartialGap = False
 mustBeExcluded UnknownClassification = False

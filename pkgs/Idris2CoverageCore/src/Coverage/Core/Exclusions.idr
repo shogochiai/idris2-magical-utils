@@ -196,7 +196,15 @@ defaultExclusions =
     -- Default interface implementations (auto-generated, trivial)
   , suffixPattern "./=" "Default Eq./= implementation"
   , suffixPattern "./" "Default Eq./= JavaScript backend shorthand"
-  , containsPattern ".(." "Record projection implementation"
+    -- NOTE: the `.(.` "record projection" exclusion was REMOVED. The forked
+    -- compiler now emits each record field as a SINGLE canonical `(.field)`
+    -- projection obligation (the bare `Mod.field` selector wrapper is dropped
+    -- from the dumppaths denominator; see isRecordSelectorWrapper in
+    -- Compiler.Common). The projection is therefore a REAL, recorded-hit-bearing
+    -- denominator obligation — excluding `.(.` here stripped every record
+    -- accessor from the denominator while its runtime `(.field)` hits remained,
+    -- turning ~1100 covered accessors into "unknown" obligations (the
+    -- record-selector denominator regression). Projections must stay counted.
   , containsPattern " implementation at " "Interface implementation wrapper"
   , containsPattern ".showPrec" "Show implementation wrapper"
   ]

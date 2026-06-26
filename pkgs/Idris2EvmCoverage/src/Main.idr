@@ -383,6 +383,7 @@ obligationClassName ReachableObligation = "ReachableObligation"
 obligationClassName LogicallyUnreachable = "LogicallyUnreachable"
 obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
 obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
+obligationClassName ExternalEffectBoundary = "ExternalEffectBoundary"
 obligationClassName UnknownClassification = "UnknownClassification"
 
 pathToFullJson : PathObligation -> String

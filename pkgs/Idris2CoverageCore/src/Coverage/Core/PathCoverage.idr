@@ -56,6 +56,7 @@ showPathClassification ReachableObligation = "ReachableObligation"
 showPathClassification LogicallyUnreachable = "LogicallyUnreachable"
 showPathClassification UserAdmittedPartialGap = "UserAdmittedPartialGap"
 showPathClassification CompilerInsertedArtifact = "CompilerInsertedArtifact"
+showPathClassification ExternalEffectBoundary = "ExternalEffectBoundary"
 showPathClassification UnknownClassification = "UnknownClassification"
 
 public export
