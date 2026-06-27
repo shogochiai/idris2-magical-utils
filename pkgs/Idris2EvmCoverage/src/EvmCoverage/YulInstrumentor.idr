@@ -1213,8 +1213,24 @@ runDispatchSelectors binPath traceOutput selectors = do
         -- stranger-arg0 vector, so the mismatch (memberAddr != target) branch fires
         -- even with ≥1 member registered (lookup of a non-member among members).
         ++ onePass ++ onePass ++ onePass
+  -- Phase C (OPTIONAL, project-supplied happy-path): the generic vectors above are
+  -- selector-blind, so they cannot thread a contract's multi-step happy-path whose
+  -- later calls depend on EXACT argument values produced by earlier ones (e.g. a vote
+  -- that must rank only the header/command ids a fresh proposal actually has, so that a
+  -- subsequent tally produces a winner and execute's requireApproved/requireNotExecuted
+  -- become reachable). A project can supply that exact, ordered call list as a file of
+  -- one calldata hex per line via EVM_COV_HAPPYPATH; its calls run AFTER Phase B against
+  -- the accumulated (member-registered, proposal-bearing) state. Absent/unreadable env
+  -- → no effect (the generic phases are unchanged).
+  mHappyPath <- getEnv "EVM_COV_HAPPYPATH"
+  happyCalls <- case mHappyPath of
+                  Nothing => pure []
+                  Just hp => do
+                    Right content <- readFile hp
+                      | Left _ => pure []
+                    pure (filter (not . null) (map trim (lines content)))
   let callsFile = "/tmp/dispatch-stateful-calls.txt"
-  _ <- writeFile callsFile (unlines allCalls)
+  _ <- writeFile callsFile (unlines (allCalls ++ happyCalls))
   let seqTrace = "/tmp/dispatch-stateful-trace.csv"
   let seqCmd = runner ++ " --calls-file " ++ callsFile
             ++ " --gas 400000000 " ++ runtimePath
