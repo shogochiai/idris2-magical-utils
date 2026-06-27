@@ -58,6 +58,7 @@ showPathClassification UserAdmittedPartialGap = "UserAdmittedPartialGap"
 showPathClassification CompilerInsertedArtifact = "CompilerInsertedArtifact"
 showPathClassification ExternalEffectBoundary = "ExternalEffectBoundary"
 showPathClassification UnknownClassification = "UnknownClassification"
+showPathClassification StubbedReach = "StubbedReach"
 
 public export
 Show PathObligation where
@@ -142,9 +143,13 @@ pathCoverageMeasurement paths hitPathIds =
       excludedIds =
         nub $ map (.obligationId) $
           filter (\ob => mustBeExcluded ob.classification) obligations
+      -- claim-blocking ids: any class whose `blocksClaim` is True — currently
+      -- UnknownClassification (untriaged foreign prim) and StubbedReach (stub/spy
+      -- hit). Using `blocksClaim` not `== UnknownClassification` keeps this gate
+      -- totality-anchored: a new blocking class cannot slip past silently.
       unknownIds =
         nub $ map (.obligationId) $
-          filter (\ob => ob.classification == UnknownClassification) obligations
+          filter (\ob => blocksClaim ob.classification) obligations
       coveredIds =
         filter (\oid => elem oid denominatorIds) (nub hitPathIds)
   in MkCoverageMeasurement denominatorIds coveredIds excludedIds unknownIds

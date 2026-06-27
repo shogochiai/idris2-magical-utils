@@ -47,6 +47,7 @@ parseClassification "LogicallyUnreachable" = LogicallyUnreachable
 parseClassification "UserAdmittedPartialGap" = UserAdmittedPartialGap
 parseClassification "CompilerInsertedArtifact" = CompilerInsertedArtifact
 parseClassification "ExternalEffectBoundary" = ExternalEffectBoundary
+parseClassification "StubbedReach" = StubbedReach
 parseClassification _ = UnknownClassification
 
 parseStep : JSON -> Either String PathStep

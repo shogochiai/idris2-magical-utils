@@ -35,6 +35,24 @@ data ObligationClass
     -- logically dead, so it gets its own honest class rather than being folded into
     -- CompilerInsertedArtifact or wrongly blocking the claim as "unknown".
   | UnknownClassification
+  | StubbedReach
+    -- A path that IS genuinely reachable (a real ReachableObligation), but whose
+    -- ONLY runtime "hit" came from a STUB/SPY read — a test that forced the path to
+    -- fire WITHOUT performing or verifying any meaningful computation. Two
+    -- compiler-visible facts qualify a hit as stubbed: (1) the covering term routes
+    -- through `believe_me` / fabricated input on the way to the obligation (the value
+    -- was invented, not constructed), or (2) the read's result is discarded
+    -- (`const () x`, `case x of _ => True`, `null x || True`) so the projection fires
+    -- but its value is never observed. Such a "hit" is a SPY ("it was called") not a
+    -- proof ("it was called correctly"). Counting it as covered is the
+    -- COVERING-DIRECTION denominator trick — inflating the numerator with meaningless
+    -- hits instead of shrinking the denominator. So StubbedReach stays IN the
+    -- denominator (it is a real obligation that STILL needs genuine coverage) but is
+    -- NOT covered: it counts as a gap, and its presence in a coverage CLAIM blocks
+    -- the claim, exactly like UnknownClassification. Distinct from a genuine
+    -- ReachableObligation hit (`r.field == knownValue` verifies the value
+    -- round-trips). Trick-proof (TOTALITY_ANCHOR.md): the demotion is justified by a
+    -- compiler fact (believe_me in the term / discarded result), not a human label.
 
 public export
 Show ObligationClass where
@@ -44,6 +62,7 @@ Show ObligationClass where
   show CompilerInsertedArtifact = "CompilerInsertedArtifact"
   show ExternalEffectBoundary = "ExternalEffectBoundary"
   show UnknownClassification = "UnknownClassification"
+  show StubbedReach = "StubbedReach"
 
 public export
 Eq ObligationClass where
@@ -53,6 +72,7 @@ Eq ObligationClass where
   CompilerInsertedArtifact == CompilerInsertedArtifact = True
   ExternalEffectBoundary == ExternalEffectBoundary = True
   UnknownClassification == UnknownClassification = True
+  StubbedReach == StubbedReach = True
   _ == _ = False
 
 -- =============================================================================
@@ -324,6 +344,7 @@ countsAsDenominator LogicallyUnreachable = False
 countsAsDenominator CompilerInsertedArtifact = False
 countsAsDenominator ExternalEffectBoundary = False
 countsAsDenominator UnknownClassification = False
+countsAsDenominator StubbedReach = True   -- a real obligation; stays in the denominator
 
 public export
 mustBeCovered : ObligationClass -> Bool
@@ -333,6 +354,7 @@ mustBeCovered LogicallyUnreachable = False
 mustBeCovered CompilerInsertedArtifact = False
 mustBeCovered ExternalEffectBoundary = False
 mustBeCovered UnknownClassification = False
+mustBeCovered StubbedReach = True         -- a stub hit does NOT satisfy it -> still a gap
 
 public export
 mustBeExcluded : ObligationClass -> Bool
@@ -342,6 +364,23 @@ mustBeExcluded ExternalEffectBoundary = True
 mustBeExcluded ReachableObligation = False
 mustBeExcluded UserAdmittedPartialGap = False
 mustBeExcluded UnknownClassification = False
+mustBeExcluded StubbedReach = False       -- not excluded; it must become genuinely covered
+
+||| Does the presence of an obligation of this class in a coverage CLAIM make the
+||| claim inadmissible? Two classes block: UnknownClassification (an unrecognised
+||| foreign prim that must be triaged before any honest number can be reported) and
+||| StubbedReach (a path whose only "hit" is a stub/spy read — claiming it as
+||| covered is the covering-direction trick). Totality-anchored: a new ObligationClass
+||| ctor must decide here too, so no class can silently slip past the claim gate.
+public export
+blocksClaim : ObligationClass -> Bool
+blocksClaim ReachableObligation = False
+blocksClaim LogicallyUnreachable = False
+blocksClaim UserAdmittedPartialGap = False
+blocksClaim CompilerInsertedArtifact = False
+blocksClaim ExternalEffectBoundary = False
+blocksClaim UnknownClassification = True
+blocksClaim StubbedReach = True
 
 public export
 defaultSoundnessEnvelope : SoundnessEnvelope

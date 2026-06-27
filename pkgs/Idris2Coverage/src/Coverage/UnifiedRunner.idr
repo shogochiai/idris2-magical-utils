@@ -689,6 +689,7 @@ obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
 obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
 obligationClassName ExternalEffectBoundary = "ExternalEffectBoundary"
 obligationClassName UnknownClassification = "UnknownClassification"
+obligationClassName StubbedReach = "StubbedReach"
 
 pathStepToJson : PathStep -> String
 pathStepToJson step =

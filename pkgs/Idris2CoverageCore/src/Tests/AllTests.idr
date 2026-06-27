@@ -478,6 +478,25 @@ test_PATH_003 () =
           1
       result = buildPathCoverageResult [unknownPath] []
   in not result.claimAdmissible
+
+||| STUBBED_001: a StubbedReach obligation (a path whose only hit was a stub/spy
+||| read) blocks the coverage claim, exactly like UnknownClassification — counting
+||| a meaningless hit as covered is the covering-direction denominator trick.
+test_PATH_STUBBED_001 : () -> Bool
+test_PATH_STUBBED_001 () =
+  let stubbedPath =
+        MkPathObligation
+          "Main.stubbed#p0"
+          "Main.stubbed"
+          "Main"
+          StubbedReach
+          "stubbed"
+          Nothing
+          [MkPathStep "Main.stubbed#0:0" 0 "stubbed" Nothing (Just "default") Nothing]
+          Nothing
+          1
+      result = buildPathCoverageResult [stubbedPath] []
+  in not result.claimAdmissible
      && result.measurement.unknownIds == ["Main.unknown#p0"]
 
 test_PATH_004 : () -> Bool
@@ -625,6 +644,7 @@ allTests =
   , test "BOUNDARY_PERFAMILY_001" "canonical boundary policy differs per family (core vs evm vs web)" test_BOUNDARY_PERFAMILY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003
+  , test "PATH_STUBBED_001" "stubbed (stub/spy) path blocks admissible claim" test_PATH_STUBBED_001
   , test "PATH_004" "path obligations use path granularity" test_PATH_004
   -- Backend (unified abstraction)
   , test "BACKEND_001" "coveredByKey string-identity join" test_BACKEND_001

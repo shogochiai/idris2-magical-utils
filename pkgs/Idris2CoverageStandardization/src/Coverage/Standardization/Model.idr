@@ -67,12 +67,16 @@ isCoverageClaimAdmissible standard obligations =
       obligation.granularity == standard.granularity
         && allExpectedGranularity rest
 
+    -- An obligation makes the claim inadmissible iff its class `blocksClaim`
+    -- (UnknownClassification or StubbedReach). Using the totality-anchored
+    -- `blocksClaim` rather than a `case ... of X => False; _ => True` means a new
+    -- ObligationClass ctor cannot slip past this gate as silently "known".
     allKnown : List CoverageObligation -> Bool
     allKnown [] = True
     allKnown (obligation :: rest) =
-      case classification obligation of
-        UnknownClassification => False
-        _ => allKnown rest
+      if blocksClaim (classification obligation)
+        then False
+        else allKnown rest
 
 public export
 coveragePct : CoverageMeasurement -> Maybe Double
