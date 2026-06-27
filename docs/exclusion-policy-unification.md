@@ -202,3 +202,36 @@ Make `Boundary.Sys.runProc : Argv -> IO (Res Output)` (linear Res). Then "reache
 ProcessSpawn" upgrades from a call-graph approximation to a TYPE fact (consumes Res),
 independent of the analysis's soundness. PoC proved the compiler enforces exactly-once
 (use-twice → "linear name in non-linear context"; drop → "0 uses ... exactly once").
+
+---
+
+## StubbedReach — the covering-direction trick (2026-06-28)
+
+The exclusion machinery above guards the **denominator** direction: don't shrink what
+counts. There is a symmetric trick on the **numerator** side: inflate it with
+*meaningless hits*. A test can force a path to fire without performing or verifying any
+real computation — `believe_me`-fabricated input, or a discarded read (`const () x`,
+`case x of _ => True`, `null x || True`). The projection logs a hit, the path turns
+"covered", but nothing was proven. That is a **spy** ("it was called"), not a proof
+("it was called correctly"). Counting it as covered is the covering-direction
+denominator trick.
+
+`ObligationClass` gains **`StubbedReach`** (Standardization/Types.idr) — a genuinely
+reachable path whose only hit is a stub/spy read. Policy (all totality-anchored, no
+catch-all): `countsAsDenominator = True` (a real obligation), `mustBeCovered = True` (a
+stub hit does NOT satisfy it → it stays a gap), `mustBeExcluded = False`, and a new
+`blocksClaim StubbedReach = True` — a stubbed path inside a *claim* makes the claim
+inadmissible, exactly like `UnknownClassification`. `buildPathCoverageResult` and
+`Model.allKnown` now route through `blocksClaim` instead of `== UnknownClassification`,
+so a future blocking class cannot slip the gate silently. Adding the ctor made the
+anchor fire across ~11 sites (every total match on `ObligationClass`); each was forced
+to decide. Probe: `PATH_STUBBED_001`.
+
+**Trick-proof**, same rule as the rest: the demotion is justified by a *compiler fact*
+(a `believe_me` in the term, or a syntactically-discarded result), not a human "this one
+is a stub." A genuine `ReachableObligation` hit — `r.field == knownValue`, which verifies
+the value round-trips — is honest and unaffected.
+
+This closed the gap exposed when core path-coverage crossed 50% partly on `believe_me`
+and value-blind reads. The believe_me fabrications were removed (real constructions +
+value-verifying reads), and the type now makes "claim a stub as covered" inexpressible.
