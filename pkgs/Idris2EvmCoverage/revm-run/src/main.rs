@@ -253,6 +253,17 @@ fn main() {
         // sequence; we print the aggregate at the end.
         Some(seq) => {
             let mut last: Option<ExecutionResult> = None;
+            // Optional per-call block.timestamp advance (REVM_TIME_STEP seconds).
+            // Some flows need time to pass BETWEEN calls within one sequence: e.g. a
+            // proposal must be voted on while NOT expired, then tallied AFTER it expires
+            // (finalTally only approves an expired proposal). With a constant timestamp
+            // that is impossible. Advancing the block timestamp per call lets the
+            // sequence simulate elapsed time, making the vote→(expire)→tally→execute
+            // approval path reachable. Default 0 (unchanged behaviour) when unset.
+            let time_step: u64 = std::env::var("REVM_TIME_STEP")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
             for (ci, data) in seq.iter().enumerate() {
                 evm.tx_mut().data = Bytes::from(data.clone());
                 // Advance the caller nonce to match the committed account state,
@@ -260,6 +271,13 @@ fn main() {
                 // mismatch (so addMember's sstore never commits and member-gated
                 // True branches stay unreachable).
                 evm.tx_mut().nonce = Some(ci as u64);
+                if time_step > 0 {
+                    evm.block_mut().timestamp = evm.block_mut().timestamp
+                        .saturating_add(U256::from(time_step));
+                }
+                if std::env::var("REVM_DEBUG").is_ok() {
+                    eprintln!("[call {ci}] ts={}", evm.block_mut().timestamp);
+                }
                 match evm.transact_commit() {
                     Ok(r) => {
                         if std::env::var("REVM_DEBUG").is_ok() {
