@@ -138,7 +138,14 @@ fn load_calldata(args: &Args) -> Result<Vec<u8>, String> {
 
 /// Parse the sequence of calldata from --calls-file (one hex line each).
 /// Blank lines and `#` comments are skipped. Returns Ok(None) when no file.
-fn load_calls(args: &Args) -> Result<Option<Vec<Vec<u8>>>, String> {
+/// Each call is (optional per-call caller, calldata). A line may carry an
+/// optional `caller:0x<40hex>|` prefix to override the default CALLER for that
+/// one call — this lets a sequence include a genuine NON-MEMBER call (needed to
+/// reach a require*-style guard's failing arm) without faking it. Absent prefix
+/// → default CALLER.
+type Call = (Option<[u8; 20]>, Vec<u8>);
+
+fn load_calls(args: &Args) -> Result<Option<Vec<Call>>, String> {
     let path = match &args.calls_file {
         None => return Ok(None),
         Some(p) => p,
@@ -151,9 +158,26 @@ fn load_calls(args: &Args) -> Result<Option<Vec<Vec<u8>>>, String> {
         if t.is_empty() || t.starts_with('#') {
             continue;
         }
-        let stripped = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
-        let bytes = hex::decode(stripped).map_err(|e| format!("Invalid calls hex '{t}': {e}"))?;
-        calls.push(bytes);
+        let (caller_opt, data_str) = if let Some(rest) = t.strip_prefix("caller:") {
+            match rest.split_once('|') {
+                Some((addr_hex, data)) => {
+                    let ah = addr_hex.strip_prefix("0x").or_else(|| addr_hex.strip_prefix("0X")).unwrap_or(addr_hex);
+                    let ab = hex::decode(ah).map_err(|e| format!("Invalid caller hex '{addr_hex}': {e}"))?;
+                    if ab.len() != 20 {
+                        return Err(format!("caller must be 20 bytes, got {}", ab.len()));
+                    }
+                    let mut a = [0u8; 20];
+                    a.copy_from_slice(&ab);
+                    (Some(a), data)
+                }
+                None => return Err(format!("caller: prefix needs '|' separator: '{t}'")),
+            }
+        } else {
+            (None, t)
+        };
+        let stripped = data_str.strip_prefix("0x").or_else(|| data_str.strip_prefix("0X")).unwrap_or(data_str);
+        let bytes = hex::decode(stripped).map_err(|e| format!("Invalid calls hex '{data_str}': {e}"))?;
+        calls.push((caller_opt, bytes));
     }
     Ok(Some(calls))
 }
@@ -264,13 +288,24 @@ fn main() {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            for (ci, data) in seq.iter().enumerate() {
+            // Per-caller nonce: each distinct caller address has its own nonce
+            // sequence, so an injected non-member call (different caller) doesn't
+            // desync the default caller's nonce.
+            use std::collections::HashMap;
+            let mut nonces: HashMap<[u8; 20], u64> = HashMap::new();
+            let default_caller: [u8; 20] = caller.into();
+            for (ci, (caller_opt, data)) in seq.iter().enumerate() {
                 evm.tx_mut().data = Bytes::from(data.clone());
-                // Advance the caller nonce to match the committed account state,
-                // otherwise revm rejects every call after the first with a nonce
+                let this_caller = caller_opt.unwrap_or(default_caller);
+                evm.tx_mut().caller = Address::from(this_caller);
+                // Advance the per-caller nonce to match committed account state,
+                // otherwise revm rejects calls after the first with a nonce
                 // mismatch (so addMember's sstore never commits and member-gated
                 // True branches stay unreachable).
-                evm.tx_mut().nonce = Some(ci as u64);
+                let n = nonces.entry(this_caller).or_insert(0);
+                evm.tx_mut().nonce = Some(*n);
+                *n += 1;
+                let _ = ci;
                 if time_step > 0 {
                     evm.block_mut().timestamp = evm.block_mut().timestamp
                         .saturating_add(U256::from(time_step));
