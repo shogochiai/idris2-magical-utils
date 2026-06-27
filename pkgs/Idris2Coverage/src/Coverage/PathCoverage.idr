@@ -14,11 +14,31 @@ import public Coverage.Core.RuntimeHit
 
 %default covering
 
+||| The compiler names a case block inside function `f` as
+||| `<Module>.case block in [case block in …] f`. Excluding `f` should also exclude
+||| those nested-case obligations, otherwise listing an IO handler in `functions`
+||| catches only its top-level path and leaves every `case block in <handler>`
+||| obligation in the denominator. Strip the leading "case block in " segments from
+||| the local part so the reconstructed `<Module>.<f>` can be compared to the
+||| excluded name. (A bare function with no case block is unchanged.)
+stripCaseBlockPrefixes : String -> String
+stripCaseBlockPrefixes name =
+  case break (== '.') (reverse name) of
+    (revLocal, revModDot) =>
+      let local = reverse revLocal
+          modPart = reverse revModDot   -- includes the trailing '.'
+          marker = "case block in "
+          go : String -> String
+          go s = if isPrefixOf marker s then go (substr (length marker) (length s) s) else s
+      in modPart ++ go local
+
 matchesConfig : ExclusionConfig -> String -> Bool
 matchesConfig config name =
      any (\p => isPrefixOf p name) config.modulePrefixes
   || any (\pkg => isPrefixOf (capitalizeFirst pkg ++ ".") name) config.packageNames
   || any (\fn => fn == name) config.functionNames
+  -- also exclude case blocks belonging to an excluded function
+  || any (\fn => fn == stripCaseBlockPrefixes name) config.functionNames
   where
     capitalizeFirst : String -> String
     capitalizeFirst s = case strM s of
