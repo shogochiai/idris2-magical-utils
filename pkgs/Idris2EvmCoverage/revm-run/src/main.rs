@@ -54,11 +54,30 @@ const CALLER: [u8; 20] = [0x20; 20];
 #[derive(Default)]
 struct LogCapture {
     logs: Vec<Log>,
+    /// When REVM_TRACE_REVERT is set: the PC of every REVERT/INVALID opcode that
+    /// executes, in order. The LAST entry of a reverting call is the revert site.
+    /// Lets us locate WHICH revert in the dispatched handler fired (e.g. the
+    /// Fail-arm REVERT of a guard vs a deeper one) instead of guessing.
+    revert_pcs: Vec<usize>,
+    /// Whether REVM_TRACE_REVERT is active (read once).
+    trace_revert: bool,
 }
 
 impl<DB: Database> Inspector<DB> for LogCapture {
     fn log(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>, log: &Log) {
         self.logs.push(log.clone());
+    }
+
+    fn step(&mut self, interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
+        if !self.trace_revert {
+            return;
+        }
+        // current_opcode() is the byte at the program counter about to execute.
+        let op = interp.current_opcode();
+        // 0xFD REVERT, 0xFE INVALID — both abort the frame.
+        if op == 0xFD || op == 0xFE {
+            self.revert_pcs.push(interp.program_counter());
+        }
     }
 }
 
@@ -252,7 +271,10 @@ fn main() {
 
     let mut evm = Evm::builder()
         .with_db(db)
-        .with_external_context(LogCapture::default())
+        .with_external_context(LogCapture {
+            trace_revert: std::env::var("REVM_TRACE_REVERT").is_ok(),
+            ..Default::default()
+        })
         .append_handler_register(inspector_handle_register)
         .modify_tx_env(|tx| {
             tx.caller = caller;
@@ -297,6 +319,8 @@ fn main() {
             // Cursor into the accumulated marker log, advanced per call so we can
             // print only the markers that fired during the current call.
             let mut percall_marker_cursor: usize = 0;
+            // Same, for revert-PC traces (REVM_TRACE_REVERT).
+            let mut percall_revert_cursor: usize = 0;
             for (ci, (caller_opt, data)) in seq.iter().enumerate() {
                 evm.tx_mut().data = Bytes::from(data.clone());
                 let this_caller = caller_opt.unwrap_or(default_caller);
@@ -355,6 +379,23 @@ fn main() {
                         }
                     }
                     percall_marker_cursor = total;
+                }
+                // Per-call REVERT/INVALID opcode PCs. The LAST one is where the
+                // dispatched handler aborted — pinpointing which revert site
+                // (which guard's Fail-arm, or a deeper one) fired.
+                if std::env::var("REVM_TRACE_REVERT").is_ok() {
+                    let total = evm.context.external.revert_pcs.len();
+                    let start = percall_revert_cursor;
+                    let pcs = &evm.context.external.revert_pcs[start..total];
+                    if let Some(last_pc) = pcs.last() {
+                        eprintln!(
+                            "[call {ci}] revert/invalid opcodes: {} (last PC = {} / 0x{:x})",
+                            pcs.len(), last_pc, last_pc
+                        );
+                    } else {
+                        eprintln!("[call {ci}] revert/invalid opcodes: 0 (no abort)");
+                    }
+                    percall_revert_cursor = total;
                 }
                 if std::env::var("REVM_DUMP_STORAGE").is_ok() {
                     let callee_addr = Address::from(CALLEE);
