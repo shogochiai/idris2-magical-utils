@@ -234,11 +234,24 @@ If any of those *doesn't* bite, the design has a hole — fix the type, not the 
    the execute-chain arms either get covered or fail with an *automatic storage dump that
    shows exactly which slot mismatched* (the `checkRep` vs `isRep` rep-slot bug this
    session pinned by hand). This alone is the affordance fix.
+   — **✅ indexed monad PoC done**: `pkgs/Idris2EvmCoverage/src/EvmCoverage/Scenario.idr`
+     (commit `28d3eea3`). `validExecuteChain` typechecks; the 4 raw-calldata traps
+     (execute-without-approval, tally-before-expiry, fork/vote-by-non-rep, vote-with-no-cmd)
+     are now compile-time type errors. **Remaining for step 1**: `runScenario` interpreter
+     (lower each action to calldata against an isolated revm DB, explicit time, auto
+     storage-dump), then swap `EVM_COV_HAPPYPATH` to consume a typed Scenario.
 2. **`reach` table** — a per-predicate establishing-prefix, hand-written first, then
    derived. Feeds Scenario prefixes for each missing arm.
+   — **✅ PoC done**: `pkgs/Idris2EvmCoverage/src/EvmCoverage/Reach.idr` (commit
+     `6235629b`). `reach : Fact -> Maybe (Reached target)` synthesises the establishing
+     prefix; `Reached.evidence : Holds target post` makes it trap-proof (reach cannot
+     return a scenario that misses its target). `reach (Approved 0)` derives the exact
+     propose→fork→vote→expire→tally chain the manual session couldn't hand-craft;
+     `allGuardFactsReachable` proves all execute-chain arms derive from their predicates.
 3. **The fuzzer loop** — for every un-covered guard arm in the coverage report, call
    `reach predicate sense`, run the synthesised Scenario, re-measure. Replaces the manual
-   calldata grind end-to-end.
+   calldata grind end-to-end. **Blocked on step 1's `runScenario`** (needs a runnable
+   interpreter to turn a `Reached` into measured coverage).
 
 The boundary with existing machinery: `Scenario`/`reach` produce the *input sequence*;
 the existing `Idris2EvmCoverage` runner (revm-run, fork-yul `--dumppathshits`) measures
