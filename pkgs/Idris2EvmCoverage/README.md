@@ -126,6 +126,32 @@ The intended operating model is:
 This distinction is not optional polish. It is part of the backend milestone
 for making branch-level coverage operationally safe.
 
+## Differential check: revm-run vs idris2-evm-run
+
+The pipeline runs ONE EVM backend (`resolveEvmRunner` picks revm-run if on PATH,
+else the pure-Idris idris2-evm-run). Picking one discards the strongest
+correctness signal available — two INDEPENDENT EVM implementations agreeing on
+the same input. If they disagree, one is wrong, and that *includes revm-run
+itself*, which nothing else here cross-checks. (A whole class of bugs found
+while raising TextDAO coverage were *codegen* miscompiles: a backend executing
+correct bytecode wrong, or correct source compiled to wrong bytecode — exactly
+what a backend-vs-backend diff catches.)
+
+`scripts/diff-runners.sh` runs the SAME runtime bytecode + calldata through both
+and asserts the SET of fired path-marker LOG topics is identical:
+
+```bash
+scripts/diff-runners.sh <runtime-bytecode> <calldata-hex>
+scripts/diff-runners.sh <runtime-bytecode> --calls-file <file>   # revm-side full;
+    # pure interp lacks --calls-file, so calls-file mode diffs the FIRST call only
+```
+
+PASS = both backends fired the same marker topics. FAIL = the sets differ → one
+backend miscompiles/misexecutes that path. Run it across the contract's
+selectors as a backend-conformance gate before trusting a single-runner coverage
+number. It is the runtime backstop until either backend is proven against
+official EVM state-test vectors.
+
 ## Diagnostics
 
 Full-pipeline runs now emit branch diagnostics data:
