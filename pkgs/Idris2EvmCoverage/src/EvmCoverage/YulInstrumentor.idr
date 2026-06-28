@@ -1230,14 +1230,30 @@ runDispatchSelectors binPath traceOutput selectors = do
                       | Left _ => pure []
                     pure (filter (not . null) (map trim (lines content)))
   let callsFile = "/tmp/dispatch-stateful-calls.txt"
-  _ <- writeFile callsFile (unlines (allCalls ++ happyCalls))
+  -- The GENERIC phases run first against a shared DB. The project-supplied
+  -- happy-path, however, must run from a FRESH state in its OWN revm invocation:
+  -- otherwise its proposal id is N (the generic phases already created 0..N-1),
+  -- while its vote/tally/execute calldata targets pid 0 — so the votes/reps it
+  -- writes never align with the proposal it tallies, finalTally finds no winner,
+  -- and execute's requireApproved-gated arms stay unreachable. Running happyCalls
+  -- separately makes pid 0 the proposal the happy-path itself creates, so the
+  -- full propose→vote→tally(approve)→execute chain (and its guard arms) is reached.
+  _ <- writeFile callsFile (unlines allCalls)
   let seqTrace = "/tmp/dispatch-stateful-trace.csv"
   let seqCmd = runner ++ " --calls-file " ++ callsFile
             ++ " --gas 400000000 " ++ runtimePath
             ++ " > " ++ seqTrace ++ " 2>/dev/null"
   _ <- system seqCmd
-  -- Append the stateful trace to the aggregate so its markers join the numerator.
   _ <- system ("cat " ++ seqTrace ++ " >> " ++ traceOutput ++ " 2>/dev/null")
+  -- Second, independent run for the happy-path (fresh DB → pid 0 is its own).
+  let hpCallsFile = "/tmp/dispatch-happypath-calls.txt"
+  _ <- writeFile hpCallsFile (unlines happyCalls)
+  let hpTrace = "/tmp/dispatch-happypath-trace.csv"
+  let hpCmd = runner ++ " --calls-file " ++ hpCallsFile
+           ++ " --gas 400000000 " ++ runtimePath
+           ++ " > " ++ hpTrace ++ " 2>/dev/null"
+  _ <- if null happyCalls then pure 0 else system hpCmd
+  _ <- if null happyCalls then pure 0 else system ("cat " ++ hpTrace ++ " >> " ++ traceOutput ++ " 2>/dev/null")
   Right _ <- readFile traceOutput
     | Left _ => pure $ Left "Cannot read aggregated dispatch trace"
   pure $ Right traceOutput

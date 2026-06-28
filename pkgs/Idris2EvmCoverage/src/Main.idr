@@ -262,8 +262,17 @@ runDumppathsJson ipkgPath = do
        let outPath = "/tmp/idris2_evm_cov_paths_" ++ show t ++ ".json"
        let logPath = "/tmp/idris2_evm_cov_paths_" ++ show t ++ ".log"
        let partsPath = outPath ++ ".parts"
+       -- When measuring with the fork-yul stack, the denominator build must resolve
+       -- the project's custom local deps (e.g. idris2-subcontract) from the fork
+       -- build-prefix, exactly like the YulInstrumentor codegen path. EVM_PATHCOV_PREFIX
+       -- (the fork build-prefix) is exported as IDRIS2_PREFIX so the fork compiler finds
+       -- its fork-built libs. IDRIS2_PREFIX and IDRIS2_PACKAGE_PATH must NOT both be set
+       -- (they conflict), so the prefix mode wins when present.
+       mPathcovPrefix <- getEnv "EVM_PATHCOV_PREFIX"
        pkgPath <- discoverPackagePath
-       let envPrefix = if null pkgPath then "" else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
+       let envPrefix = case mPathcovPrefix of
+                         Just p => "IDRIS2_PREFIX=\"" ++ p ++ "\" "
+                         Nothing => if null pkgPath then "" else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
        let cmd = "cd " ++ projectDir ++ " && "
               ++ envPrefix ++ idris2Cmd ++ " --dumppaths-json " ++ outPath ++ " --build " ++ ipkgName
               ++ " > " ++ logPath ++ " 2>&1"
@@ -385,6 +394,7 @@ obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
 obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
 obligationClassName ExternalEffectBoundary = "ExternalEffectBoundary"
 obligationClassName UnknownClassification = "UnknownClassification"
+obligationClassName StubbedReach = "StubbedReach"
 
 pathToFullJson : PathObligation -> String
 pathToFullJson path =
