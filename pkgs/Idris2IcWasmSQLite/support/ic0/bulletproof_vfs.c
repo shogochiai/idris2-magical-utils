@@ -58,6 +58,29 @@ extern uint64_t ic0_stable64_grow(uint64_t new_pages);
 extern void ic0_stable64_read(uint64_t dst, uint64_t offset, uint64_t size);
 extern void ic0_stable64_write(uint64_t offset, uint64_t src, uint64_t size);
 
+/* --- TEMPORARY debug instrumentation (BP_DEBUG) for the SQL-write-no-op probe.
+ * Remove once the persistence bug is root-fixed. Logs key VFS events + two
+ * numbers to the canister log so storeTestEvent's write→commit→next-call-load
+ * is observable. */
+#ifdef BP_DEBUG
+extern void ic0_debug_print(int32_t src, int32_t size);
+static void bp_dbg(const char* tag, uint64_t a, uint64_t b) {
+    char buf[96]; int n = 0;
+    for (const char* p = tag; *p && n < 40; ++p) buf[n++] = *p;
+    buf[n++] = ' ';
+    char tmp[24]; int t = 0; uint64_t x = a;
+    if (x == 0) tmp[t++] = '0'; else { while (x) { tmp[t++] = (char)('0' + (x % 10)); x /= 10; } }
+    while (t) buf[n++] = tmp[--t];
+    buf[n++] = ','; buf[n++] = ' ';
+    t = 0; x = b;
+    if (x == 0) tmp[t++] = '0'; else { while (x) { tmp[t++] = (char)('0' + (x % 10)); x /= 10; } }
+    while (t) buf[n++] = tmp[--t];
+    ic0_debug_print((int32_t)(uintptr_t)buf, n);
+}
+#else
+static inline void bp_dbg(const char* tag, uint64_t a, uint64_t b) { (void)tag; (void)a; (void)b; }
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -205,11 +228,13 @@ static int bp_store_super(const BpSuper* s) {
  * crash-consistent. Called at commit/xSync/truncate — once per transaction, not
  * once per page. No-op if nothing changed. */
 static int bp_flush_super(void) {
+    bp_dbg("flush_super dirty,db_size", (uint64_t)g_sb_dirty, g_sb.db_size);
     if (!g_sb_dirty) return SQLITE_OK;
     BpSuper next = g_sb;
     next.tx_id = g_sb.tx_id + 1;
     int rc = bp_store_super(&next);   /* updates g_sb to `next` on success */
     if (rc == SQLITE_OK) g_sb_dirty = 0;
+    bp_dbg("flush_super wrote tx,db_size", next.tx_id, next.db_size);
     return rc;
 }
 
@@ -230,9 +255,11 @@ static int bp_load_super(void) {
     if (pick != NULL) {
         g_sb = *pick;
         g_sb_loaded = 1;
+        bp_dbg("load_super pick tx,db_size", pick->tx_id, pick->db_size);
         return SQLITE_OK;
     }
     /* fresh */
+    bp_dbg("load_super FRESH r0,r1", (uint64_t)r0, (uint64_t)r1);
     BpSuper fresh;
     memset(&fresh, 0, sizeof(fresh));
     fresh.memory_id = (uint64_t)g_memory_id;
@@ -271,6 +298,7 @@ static int bp_main_write(uint64_t offset, const uint8_t* src, uint64_t len) {
     /* in-place overwrite at B + offset. NO append, NO overlay, NO journal. The
      * message either commits all of these writes or discards them on trap. */
     ic0_stable64_write(BP_REGION_OFF(g_base) + offset, (uint64_t)(uintptr_t)src, len);
+    bp_dbg("xWrite off,len", offset, len);
     /* Track the new logical size IN MEMORY only. Persisting the superblock on
      * every write would write it once per page (a needless extra dirty page per
      * page, paper §3). Instead the superblock is flushed once at commit/xSync
