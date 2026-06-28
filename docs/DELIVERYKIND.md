@@ -5,6 +5,7 @@
 > - [PLUGIN_ARCHITECTURE.md](./PLUGIN_ARCHITECTURE.md) — *how* an outside fork adds a backend without editing core.
 > - [forkers/README.md](./forkers/README.md) — the step-by-step for a forker.
 > - [exclusion-policy-unification.md](./exclusion-policy-unification.md) — the deep history of the honesty problem these enums solve.
+> - [SCENARIO_AND_REFINEMENT_FUZZING.md](./SCENARIO_AND_REFINEMENT_FUZZING.md) — the *next* layer: writing state-carrying coverage as a typed scenario, and reaching un-covered guard arms by synthesising a refinement witness instead of hand-grinding calldata.
 
 ---
 
