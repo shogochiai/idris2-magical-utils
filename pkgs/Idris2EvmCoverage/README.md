@@ -161,8 +161,24 @@ small programs whose RETURN / LOG / storage / status are computable by hand
 - `diff-runners.sh`      — relative: the two backends agree on a real contract.
 - `conformance-revm.sh`  — absolute: revm-run matches the EVM spec on knowns.
 
-Run both before trusting a single-runner coverage number. (`REVM_SHOW_RETURN=1`
-surfaces a call's RETURN data for assertions without changing default output.)
+A third tier — `e2e-lifecycle-oracle.sh` (lives with the contract) — asserts the
+contract's full lifecycle reaches the right OBSERVABLE STATE on-chain (e.g.
+approvedHeader==1), the VALUE check that branch-reachability coverage cannot do.
+
+`scripts/verify-evm-backend.sh` BUNDLES all three into one gate — run it before
+trusting a single-runner coverage number:
+
+```bash
+E2E_CALLS=<contract>/coverage-happy-path.calls REVM_TIME_STEP=10 \
+  scripts/verify-evm-backend.sh /tmp/runtime-dispatch.bin <sel1> <sel2> …
+# → "ALL CHECKS PASS — coverage from this backend is trustworthy."  (exit 0)
+# A failure means do NOT trust the coverage %. SKIP_E2E=1 runs engine checks only.
+```
+
+Demonstrated to discriminate: with a reintroduced newtype codegen bug, coverage
+merely drops 81.68%→70.99% (reads as "low coverage"), but the gate's E2E oracle
+FAILS loudly (approvedHeader unset). (`REVM_SHOW_RETURN=1` surfaces a call's
+RETURN data for assertions without changing default output.)
 
 ## Diagnostics
 
