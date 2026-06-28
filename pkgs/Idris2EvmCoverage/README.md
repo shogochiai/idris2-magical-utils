@@ -149,8 +149,20 @@ scripts/diff-runners.sh <runtime-bytecode> --calls-file <file>   # revm-side ful
 PASS = both backends fired the same marker topics. FAIL = the sets differ → one
 backend miscompiles/misexecutes that path. Run it across the contract's
 selectors as a backend-conformance gate before trusting a single-runner coverage
-number. It is the runtime backstop until either backend is proven against
-official EVM state-test vectors.
+number.
+
+A differential check proves the two backends AGREE; it cannot prove either is
+CORRECT (both could share a bug). `scripts/conformance-revm.sh` pins the
+absolute correctness of the revm-run side against HAND-COMPUTED EVM vectors —
+small programs whose RETURN / LOG / storage / status are computable by hand
+(incl. `LT 2<3 == 1` and `GT 2>3 == 0`, the EVM-side counterpart to the
+`<`-vs-`>` codegen bug). Together:
+
+- `diff-runners.sh`      — relative: the two backends agree on a real contract.
+- `conformance-revm.sh`  — absolute: revm-run matches the EVM spec on knowns.
+
+Run both before trusting a single-runner coverage number. (`REVM_SHOW_RETURN=1`
+surfaces a call's RETURN data for assertions without changing default output.)
 
 ## Diagnostics
 

@@ -458,9 +458,14 @@ fn print_trace_with_logs(result: Option<&ExecutionResult>, logs: &[Log]) {
         None => {}
         Some(ExecutionResult::Success { gas_used, output, .. }) => {
             println!("Result: SUCCESS (gas used: {gas_used})");
-            if let Output::Call(bytes) = output {
-                // coverage parser ignores return data; omitting keeps parity
-                let _ = bytes;
+            // Coverage parsing ignores return data (kept off by default for parity
+            // with idris2-evm-run), but a CONFORMANCE check needs the actual RETURN
+            // value to assert revm-run computes the right answer. REVM_SHOW_RETURN
+            // surfaces it on stdout without disturbing the default coverage output.
+            if std::env::var("REVM_SHOW_RETURN").is_ok() {
+                if let Output::Call(bytes) = output {
+                    println!("Return: 0x{}", hex::encode(bytes.as_ref()));
+                }
             }
         }
         Some(ExecutionResult::Revert { gas_used, .. }) => {
