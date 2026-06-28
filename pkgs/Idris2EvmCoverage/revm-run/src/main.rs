@@ -294,6 +294,9 @@ fn main() {
             use std::collections::HashMap;
             let mut nonces: HashMap<[u8; 20], u64> = HashMap::new();
             let default_caller: [u8; 20] = caller.into();
+            // Cursor into the accumulated marker log, advanced per call so we can
+            // print only the markers that fired during the current call.
+            let mut percall_marker_cursor: usize = 0;
             for (ci, (caller_opt, data)) in seq.iter().enumerate() {
                 evm.tx_mut().data = Bytes::from(data.clone());
                 let this_caller = caller_opt.unwrap_or(default_caller);
@@ -332,6 +335,26 @@ fn main() {
                             eprintln!("[call {ci}] ENV-ERR {_e:?}");
                         }
                     }
+                }
+                // Per-call path-marker topics. The inspector captures every
+                // log1(0,0,<path-id>) marker AS IT EXECUTES (before any revert
+                // rolls it back), accumulating into context.external.logs. Print
+                // the marker topics that fired DURING this call (the slice past
+                // the previous call's end) so a reverting handler still reveals
+                // exactly how far its control flow got — e.g. whether
+                // requireRepProof's Ok-marker fired (rep passed, fail is later)
+                // or only its Fail-marker fired. This is the observable signal
+                // that replaces guessing which guard a revert came from.
+                if std::env::var("REVM_PERCALL_MARKERS").is_ok() {
+                    let total = evm.context.external.logs.len();
+                    let start = percall_marker_cursor;
+                    eprintln!("[call {ci}] markers this call: {}", total - start);
+                    for lg in &evm.context.external.logs[start..total] {
+                        for t in lg.topics() {
+                            eprintln!("    marker 0x{}", hex::encode(t.as_slice()));
+                        }
+                    }
+                    percall_marker_cursor = total;
                 }
                 if std::env::var("REVM_DUMP_STORAGE").is_ok() {
                     let callee_addr = Address::from(CALLEE);
