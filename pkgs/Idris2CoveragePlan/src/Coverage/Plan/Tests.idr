@@ -34,9 +34,16 @@ test_humanoid_declared =
   && isImplemented (coverageStatusFor AndroidDevice)
   && isImplemented (coverageStatusFor CoreLib)
 
+||| ExternalFork is declared-unimplemented BY DESIGN (fork-family packages bypass
+||| the Idris2 verification chain entirely — not a "not yet specified" TODO like
+||| Humanoid, but a permanent, deliberate non-mechanism).
+test_externalfork_declared : Bool
+test_externalfork_declared = not (isImplemented (coverageStatusFor ExternalFork))
+
 main : IO ()
 main = do
   let checks = [ ("no-silent-gap", test_no_silent_gap)
-               , ("humanoid-declared-unimplemented", test_humanoid_declared) ]
+               , ("humanoid-declared-unimplemented", test_humanoid_declared)
+               , ("externalfork-declared-unimplemented", test_externalfork_declared) ]
   _ <- traverse (\(n, ok) => putStrLn ((if ok then "  PASS " else "  FAIL ") ++ n)) checks
   putStrLn ("Passed " ++ show (length (filter snd checks)) ++ "/" ++ show (length checks))

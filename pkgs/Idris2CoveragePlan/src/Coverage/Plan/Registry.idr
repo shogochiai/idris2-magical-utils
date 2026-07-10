@@ -112,6 +112,10 @@ coverageStatusFor Humanoid      =
   DeclaredUnimplemented (MkUnimplementedReason
     "embodiment hit-stream (actuator/sensor path evidence) not yet specified"
     (Just "ETHERCLAW-humanoid-coverage"))
+coverageStatusFor ExternalFork  =
+  DeclaredUnimplemented (MkUnimplementedReason
+    "forked external/non-Idris2 upstream — no Idris2 dumppaths coverage mechanism BY DESIGN (verification chain is bypassed for fork-family packages, not merely unimplemented yet)"
+    (Just "ETHERCLAW-fork-family-verification"))
 
 ||| Is a family's coverage story a runnable backend (vs declared-unimplemented)?
 public export

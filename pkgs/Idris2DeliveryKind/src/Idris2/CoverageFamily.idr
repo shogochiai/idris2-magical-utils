@@ -37,6 +37,7 @@ data CoverageFamily
   | AndroidDevice  -- pre-collected id-file denominator; string-identity join; PURE (no forked build, no IO)
   | CoreLib        -- forked --dumppaths-json denominator; string-identity join; CLI / pure-library coverage
   | Humanoid       -- embodiment layer; NO runnable backend yet (declared-unimplemented with a rationale)
+  | ExternalFork   -- forked external/non-Idris2 upstream; NO Idris2 coverage mechanism BY DESIGN (declared-unimplemented)
 
 public export
 Eq CoverageFamily where
@@ -46,6 +47,7 @@ Eq CoverageFamily where
   AndroidDevice == AndroidDevice = True
   CoreLib       == CoreLib       = True
   Humanoid      == Humanoid      = True
+  ExternalFork  == ExternalFork  = True
   _             == _             = False
 
 ||| The established wire/string tag for each coverage family. Total: adding a
@@ -59,6 +61,7 @@ coverageFamilyTag WebMVU        = "web"
 coverageFamilyTag AndroidDevice = "android-device"
 coverageFamilyTag CoreLib       = "core"
 coverageFamilyTag Humanoid      = "humanoid"
+coverageFamilyTag ExternalFork  = "fork"
 
 ||| Parse a coverage-family tag back to its `CoverageFamily`. Round-trips with
 ||| `coverageFamilyTag` over `allCoverageFamilies` (see the contract test). Unknown →
@@ -70,6 +73,7 @@ coverageFamilyFromString "dfx"            = DfxWasm
 coverageFamilyFromString "web"            = WebMVU
 coverageFamilyFromString "android-device" = AndroidDevice
 coverageFamilyFromString "humanoid"       = Humanoid
+coverageFamilyFromString "fork"           = ExternalFork
 coverageFamilyFromString _                = CoreLib   -- "core" + unknown → CoreLib
 
 public export
@@ -80,4 +84,4 @@ Show CoverageFamily where
 ||| no-silent-gap contract tests, and any UI that enumerates coverage mechanisms.
 public export
 allCoverageFamilies : List CoverageFamily
-allCoverageFamilies = [EvmHash, DfxWasm, WebMVU, AndroidDevice, CoreLib, Humanoid]
+allCoverageFamilies = [EvmHash, DfxWasm, WebMVU, AndroidDevice, CoreLib, Humanoid, ExternalFork]

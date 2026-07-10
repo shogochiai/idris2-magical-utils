@@ -76,6 +76,7 @@ data DeliveryKind
   | IOS                        -- idris2-react-native: phone layer (MVU → signed IPA)
   | Humanoid (Maybe HumanoidConfig)  -- embodiment layer (robot; config optional)
   | Core                       -- a pure Idris2 library
+  | Fork                       -- a forked EXTERNAL (possibly non-Idris2) upstream; bypasses the Idris2-specific verification chain by design; "release" means a merged upstream PR/MR, not GovSrc activation
 
 public export
 Eq DeliveryKind where
@@ -87,6 +88,7 @@ Eq DeliveryKind where
   IOS          == IOS          = True
   (Humanoid _) == (Humanoid _) = True
   Core         == Core         = True
+  Fork         == Fork         = True
   _            == _            = False
 
 -- =============================================================================
@@ -112,6 +114,7 @@ coverageFamilyOf Android      = WebMVU      -- MVU dumppaths path coverage over 
 coverageFamilyOf IOS          = WebMVU      -- same MVU layer as Android/Web → same coverage
 coverageFamilyOf (Humanoid _) = Humanoid
 coverageFamilyOf Core         = CoreLib
+coverageFamilyOf Fork         = ExternalFork  -- no Idris2 dumppaths coverage — verification bypassed by design
 
 ||| The COVERAGE-family wire tag for a delivery (the string callers that historically
 ||| used `coverageFamilyOf : … -> String` use this). Composes the typed map with the
@@ -135,6 +138,7 @@ deliveryTag Android      = "android"
 deliveryTag IOS          = "ios"
 deliveryTag (Humanoid _) = "humanoid"
 deliveryTag Core         = "core"
+deliveryTag Fork         = "fork"
 
 public export
 Show DeliveryKind where
@@ -153,10 +157,11 @@ deliveryKindFromString "web"      = Web
 deliveryKindFromString "android"  = Android
 deliveryKindFromString "ios"      = IOS
 deliveryKindFromString "humanoid" = Humanoid Nothing
+deliveryKindFromString "fork"     = Fork
 deliveryKindFromString _          = Core   -- "core" + unknown → Core
 
 ||| Every delivery kind (payload-free representatives) — for UIs that enumerate
 ||| deliveries (the app's release-wiring picker) and exhaustiveness-style iteration.
 public export
 allDeliveryKinds : List DeliveryKind
-allDeliveryKinds = [EVM, ICP Nothing, CLI, Web, Android, IOS, Humanoid Nothing, Core]
+allDeliveryKinds = [EVM, ICP Nothing, CLI, Web, Android, IOS, Humanoid Nothing, Core, Fork]
