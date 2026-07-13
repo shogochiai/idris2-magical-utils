@@ -41,29 +41,40 @@ style : List StyleDecl -> Attr e
 style decls = Prop "style" (renderStyle decls)
 
 -- =============================================================================
--- Common style fragments (a small Claude-app-like dark design system)
+-- Common style fragments (a Gemini-like light design system:
+-- white base, one blue pinpoint accent)
 -- =============================================================================
 
 ||| App palette.
 public export
 bgColor : String
-bgColor = "#1a1a1a"          -- near-black background
+bgColor = "#ffffff"          -- white base
 
 public export
 surfaceColor : String
-surfaceColor = "#2a2a2a"     -- card / surface
+surfaceColor = "#f7f8fa"     -- card / surface (very light gray)
 
 public export
 accentColor : String
-accentColor = "#d97757"      -- Claude terracotta accent
+accentColor = "#1a73e8"      -- Gemini blue pinpoint accent
 
 public export
 textColor : String
-textColor = "#ececec"
+textColor = "#1f1f1f"        -- near-black text
 
 public export
 mutedColor : String
-mutedColor = "#9a9a9a"
+mutedColor = "#5f6368"       -- Google gray secondary text
+
+||| Hairline divider / border on the light base.
+public export
+borderColor : String
+borderColor = "#e3e5e8"
+
+||| Text / icon colour to place ON the accent (white on blue).
+public export
+onAccentColor : String
+onAccentColor = "#ffffff"
 
 ||| Flex column container filling available space.
 public export
