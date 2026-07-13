@@ -1,0 +1,5 @@
+# the path here seems fragile,
+# should probably come up with a better alternative
+APPDIR="../../../build/exec/idris2-lsp-redox_app"
+EXE="$APPDIR/idris2-lsp-redox.so"
+IDRIS2_APPDIR="$APPDIR" IDRIS2_INC_SRC="$APPDIR" "${SCHEME_BIN:-$HOME/.local/bin/scheme}" --program "$EXE" < in.log

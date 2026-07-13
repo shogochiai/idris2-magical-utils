@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://idris2-magical-utils.local/schema/redox-path-snapshot-1.0.json",
+  "title": "Redox Path Snapshot Protocol 1.0",
+  "type": "object",
+  "required": ["protocolVersion", "schemaVersion", "methods"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "1.0" },
+    "methods": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "idris2/dumpPaths",
+          "idris2/diffPaths",
+          "idris2/getPathSnapshot",
+          "idris2/promotePathSnapshot",
+          "idris2/rejectPathSnapshot"
+        ]
+      }
+    },
+    "snapshotPayload": { "$ref": "#/$defs/snapshotPayload" },
+    "pathDiff": { "$ref": "#/$defs/pathDiff" },
+    "promotionWitness": { "$ref": "#/$defs/promotionWitness" }
+  },
+  "$defs": {
+    "pathFact": {
+      "type": "object",
+      "required": ["lineageId", "revisionId", "specId"],
+      "properties": {
+        "lineageId": { "type": "string" },
+        "revisionId": { "type": "string" },
+        "definitionId": { "type": "string" },
+        "caseAddress": { "type": "string" },
+        "moduleId": { "type": "string" },
+        "specId": { "type": "string" },
+        "obligations": { "type": "array", "items": { "type": "string" } },
+        "semanticHash": { "type": "string" },
+        "sourceRange": {},
+        "originDigest": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "snapshotPayload": {
+      "type": "object",
+      "required": [
+        "projectId",
+        "versions",
+        "sourceDigest",
+        "compilerVersion",
+        "harnessVersion",
+        "schemaVersion",
+        "elabStatus",
+        "paths",
+        "invalidDefinitions",
+        "dirtyModules",
+        "diagnosticsDigest",
+        "parentVerified"
+      ],
+      "properties": {
+        "projectId": { "type": "string" },
+        "versions": { "type": "object" },
+        "sourceDigest": { "type": "string" },
+        "sourceDocumentDigest": { "type": "string" },
+        "compilerVersion": {},
+        "harnessVersion": {},
+        "schemaVersion": {},
+        "elabStatus": { "enum": ["Complete", "Partial", "Failed"] },
+        "paths": { "type": "array", "items": { "$ref": "#/$defs/pathFact" } },
+        "invalidDefinitions": { "type": "array", "items": { "type": "string" } },
+        "dirtyModules": { "type": "array", "items": { "type": "string" } },
+        "diagnosticsDigest": {},
+        "parentVerified": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "pathDiff": {
+      "type": "object",
+      "required": [
+        "removedFacts",
+        "addedFacts",
+        "modifiedBefore",
+        "modifiedAfter",
+        "unchangedLineages",
+        "relocatedLineages",
+        "fallbackFacts",
+        "impactDirect",
+        "impactClosed",
+        "completeness",
+        "diffDigest"
+      ],
+      "properties": {
+        "removedFacts": { "type": "object", "additionalProperties": { "$ref": "#/$defs/pathFact" } },
+        "addedFacts": { "type": "object", "additionalProperties": { "$ref": "#/$defs/pathFact" } },
+        "modifiedBefore": { "type": "object", "additionalProperties": { "$ref": "#/$defs/pathFact" } },
+        "modifiedAfter": { "type": "object", "additionalProperties": { "$ref": "#/$defs/pathFact" } },
+        "unchangedLineages": { "type": "array", "items": { "type": "string" } },
+        "relocatedLineages": { "type": "array", "items": { "type": "string" } },
+        "fallbackFacts": { "type": "object", "additionalProperties": { "$ref": "#/$defs/pathFact" } },
+        "impactDirect": { "type": "array", "items": { "type": "string" } },
+        "impactClosed": { "type": "array", "items": { "type": "string" } },
+        "completeness": { "enum": ["Complete", "Partial", "Failed"] },
+        "diffDigest": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "promotionWitness": {
+      "type": "object",
+      "required": ["result"],
+      "properties": {
+        "parentSnapshotId": { "type": "string" },
+        "workingSnapshotId": { "type": "string" },
+        "pathDiffDigest": { "type": "string" },
+        "impactDigest": { "type": "string" },
+        "verifiedSpecIds": { "type": "array", "items": { "type": "string" } },
+        "qeqVerifierVersion": { "type": "string" },
+        "result": { "enum": [1, true] },
+        "proofDigest": { "type": "string" },
+        "logicalClock": { "type": "integer" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

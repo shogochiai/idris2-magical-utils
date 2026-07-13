@@ -33,6 +33,7 @@ This repo currently has two major threads:
 | `Idris2WebCoverage` | Web/runtime coverage adapters and semantic function-level runner |
 | `Idris2CoverageStandardization` | Draft standard, upstream requirements, and maintainer prep material |
 | `Idris2ExecutionStandardization` | Backend-aware execution value vocabulary (`Cycles`, `Wei`, `ChainId`, etc.) |
+| `Idris2LspRedox` | Forked `idris2-lsp` with Redox path snapshot, diff, lifecycle, and QEQ witness RPCs |
 
 ## Coverage Architecture
 
