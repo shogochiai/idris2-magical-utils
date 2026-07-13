@@ -117,3 +117,8 @@ ipkg = "idris2-ffi-integration.ipkg"
 type = "local"
 path = "pkgs/idris2fficoverage"
 ipkg = "idris2-ffi-coverage.ipkg"
+
+[custom.all.idris2-lsp-redox]
+type = "local"
+path = "pkgs/Idris2LspRedox"
+ipkg = "idris2-lsp.ipkg"

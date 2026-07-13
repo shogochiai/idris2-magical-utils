@@ -1,0 +1,69 @@
+[definitions]
+prefix = "REQ_LSP_REDOX"
+
+[[spec_area]]
+name = "Protocol Surface"
+
+[[spec]]
+id = "${prefix}_CAPABILITY_001"
+title = "Advertise Redox path snapshot capability"
+invariant = "The server SHALL advertise redoxPathSnapshots with protocolVersion, schemaVersion, canonicalEncoding, and every supported custom method."
+
+[[spec]]
+id = "${prefix}_STANDARD_LSP_001"
+title = "Preserve standard LSP behavior"
+invariant = "Editors that do not call Redox custom methods SHALL continue to observe the standard Idris2 LSP initialize and message behavior without custom capability regressions."
+
+[[spec_area]]
+name = "Snapshot and Impact"
+
+[[spec]]
+id = "${prefix}_DUMP_001"
+title = "Create version-coherent path snapshots"
+invariant = "dumpPaths SHALL reject stale expectedVersions and SHALL bind every accepted snapshot to project identity, lifecycle state, elab status, and specRegistryDigest."
+
+[[spec]]
+id = "${prefix}_DIFF_001"
+title = "Diff path snapshots conservatively"
+invariant = "diffPaths SHALL compare snapshots by stable path lineage, expose added removed modified relocated unchanged and fallback facts, and produce both diff and impact digests."
+
+[[spec]]
+id = "${prefix}_PRECISION_001"
+title = "Unknown elaboration is not unaffected"
+invariant = "Partial or failed elaboration SHALL produce DefinitionFallback, ModuleFallback, or ProjectFallback impact rather than claiming an empty unaffected impact."
+
+[[spec]]
+id = "${prefix}_PROJECT_001"
+title = "Separate project identity by registry and worktree inputs"
+invariant = "Project identity SHALL be caller-bindable so Luci can isolate repo, worktree, base commit, harness version, and Spec Binding Registry digest."
+
+[[spec_area]]
+name = "Promotion Lifecycle"
+
+[[spec]]
+id = "${prefix}_WITNESS_001"
+title = "Validate exact path promotion witnesses"
+invariant = "Promotion SHALL require a witness bound to the working snapshot, parent snapshot when present, path diff digest, path impact digest, verified path SpecIds, registry digest, verifier version, and accepted result."
+
+[[spec]]
+id = "${prefix}_PREPARE_001"
+title = "Support prepared promotion lifecycle"
+invariant = "preparePathPromotion SHALL validate and persist a content-addressed prepared record, and promotePathSnapshot SHALL accept either the prepared digest or the same full witness idempotently."
+
+[[spec]]
+id = "${prefix}_REJECT_001"
+title = "Reject failed or superseded path snapshots"
+invariant = "rejectPathSnapshot SHALL mark working or prepared snapshots as rejected and SHALL be idempotent for already rejected snapshots."
+
+[[spec]]
+id = "${prefix}_RECOVERY_001"
+title = "Export and import snapshot store state"
+invariant = "The server SHALL export and import payload, lifecycle, current verified, current working, prepared promotion, and witness maps so Luci can recover content-addressed transactions after restart."
+
+[[spec_area]]
+name = "Luci Boundary"
+
+[[spec]]
+id = "${prefix}_LUCI_BOUNDARY_001"
+title = "Expose path impact without owning RestoreQEQ"
+invariant = "idris2-lsp-redox SHALL provide only path-observable impact and promotion verification; Luci SHALL own federated impact, AGA RestoreQEQ, certificates, and release authority."

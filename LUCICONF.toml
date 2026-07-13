@@ -1,0 +1,109 @@
+# LUCICONF.toml
+#
+# Luci instance configuration for idris2-magical-utils.
+# Each package under pkgs/ is registered as a lazy quality target. Packages keep
+# their own SPEC.toml/test evidence at the package root or below src/.
+
+[instance]
+ticker = "IMU"
+name = "idris2-magical-utils"
+ens = "idris2-magical-utils.local"
+instance_id = "idris2-magical-utils"
+version = 1
+mode = "standalone"
+executor = "codex"
+architect = "codex"
+source_repo = "shogochiai/idris2-magical-utils"
+build = "pack install-app idris2-lsp-redox"
+
+[[lazy]]
+target = "pkgs/Idris2AndroidCoverage"
+family = "android"
+
+[[lazy]]
+target = "pkgs/Idris2BitcoinScript"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2Cdk"
+family = "dfx"
+
+[[lazy]]
+target = "pkgs/Idris2Coverage"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2CoverageCore"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2CoveragePlan"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2CoverageStandardization"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2DeliveryKind"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2DfxCoverage"
+family = "dfx"
+
+[[lazy]]
+target = "pkgs/Idris2E2eHarness"
+family = "integration"
+
+[[lazy]]
+target = "pkgs/Idris2Evm"
+family = "evm"
+
+[[lazy]]
+target = "pkgs/Idris2EvmCoverage"
+family = "evm"
+
+[[lazy]]
+target = "pkgs/Idris2ExecutionStandardization"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2IcWasm"
+family = "dfx"
+
+[[lazy]]
+target = "pkgs/Idris2IcWasmSQLite"
+family = "dfx"
+
+[[lazy]]
+target = "pkgs/Idris2LspRedox"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2ReactNative"
+family = "android"
+
+[[lazy]]
+target = "pkgs/Idris2RuntimeHost"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2Subcontract"
+family = "evm"
+
+[[lazy]]
+target = "pkgs/Idris2TestSuite"
+family = "core"
+
+[[lazy]]
+target = "pkgs/Idris2WebCoverage"
+family = "web"
+
+[[lazy]]
+target = "pkgs/idris2fficoverage"
+family = "integration"
+
+[[lazy]]
+target = "pkgs/idris2ffiintegration"
+family = "integration"

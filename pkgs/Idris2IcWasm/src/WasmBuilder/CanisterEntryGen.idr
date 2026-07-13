@@ -35,6 +35,12 @@ record CmdMapEntry where
   injections : List Injection
   resultFn   : Maybe String    -- @result_fn=funcName: custom result function
   deferredReplyHook : Maybe String -- @deferred_reply=funcName: external hook takes over reply
+  deferIfPending : Maybe String -- @defer_if_pending=funcName: run Idris normally, then
+                               -- skip the auto-reply if funcName() != 0 (the Idris
+                               -- handler fired an async inter-canister call and its
+                               -- reply callback will reply — deferred-reply AFTER an
+                               -- in-Idris ACL/decision step, unlike @deferred_reply
+                               -- which bypasses Idris entirely)
 
 ||| Options controlling code generation
 public export
@@ -64,35 +70,37 @@ assignCmdIds methods = zip methods (go 0 methods)
 
 ||| Parse annotation tokens from cmd-map line remainder
 ||| e.g. "@inject_time=2 @inject_const=3:900 @result_fn=ic_str_c_get"
-parseAnnotations : List String -> (List Injection, Maybe String, Maybe String)
-parseAnnotations [] = ([], Nothing, Nothing)
+parseAnnotations : List String -> (List Injection, Maybe String, Maybe String, Maybe String)
+parseAnnotations [] = ([], Nothing, Nothing, Nothing)
 parseAnnotations (tok :: rest) =
-  let (injs, rfn, dfn) = parseAnnotations rest
+  let (injs, rfn, dfn, pfn) = parseAnnotations rest
   in if isPrefixOf "@inject_time=" tok
        then case parsePositive {a=Nat} (substr 13 (length tok) tok) of
-              Just n  => (InjectTime n :: injs, rfn, dfn)
-              Nothing => (injs, rfn, dfn)
+              Just n  => (InjectTime n :: injs, rfn, dfn, pfn)
+              Nothing => (injs, rfn, dfn, pfn)
      else if isPrefixOf "@inject_const=" tok
        then let val = substr 14 (length tok) tok
             in case break (== ':') (unpack val) of
                  (nPart, ':' :: vPart) =>
                    case (parsePositive {a=Nat} (pack nPart), parseInteger {a=Integer} (pack vPart)) of
-                     (Just n, Just v) => (InjectConst n v :: injs, rfn, dfn)
-                     _                => (injs, rfn, dfn)
-                 _ => (injs, rfn, dfn)
+                     (Just n, Just v) => (InjectConst n v :: injs, rfn, dfn, pfn)
+                     _                => (injs, rfn, dfn, pfn)
+                 _ => (injs, rfn, dfn, pfn)
      else if isPrefixOf "@inject_time_plus=" tok
        then let val = substr 18 (length tok) tok
             in case break (== ':') (unpack val) of
                  (nPart, ':' :: vPart) =>
                    case (parsePositive {a=Nat} (pack nPart), parseInteger {a=Integer} (pack vPart)) of
-                     (Just n, Just v) => (InjectTimePlus n v :: injs, rfn, dfn)
-                     _                => (injs, rfn, dfn)
-                 _ => (injs, rfn, dfn)
+                     (Just n, Just v) => (InjectTimePlus n v :: injs, rfn, dfn, pfn)
+                     _                => (injs, rfn, dfn, pfn)
+                 _ => (injs, rfn, dfn, pfn)
      else if isPrefixOf "@result_fn=" tok
-       then (injs, Just (substr 11 (length tok) tok), dfn)
+       then (injs, Just (substr 11 (length tok) tok), dfn, pfn)
      else if isPrefixOf "@deferred_reply=" tok
-       then (injs, rfn, Just (substr 16 (length tok) tok))
-     else (injs, rfn, dfn)
+       then (injs, rfn, Just (substr 16 (length tok) tok), pfn)
+     else if isPrefixOf "@defer_if_pending=" tok
+       then (injs, rfn, dfn, Just (substr 18 (length tok) tok))
+     else (injs, rfn, dfn, pfn)
 
 ||| Parse a cmd-map file: lines of "methodName=N [@annotation...]" or "# comment"
 ||| Returns list of (methodName, CmdMapEntry) pairs
@@ -116,8 +124,8 @@ parseCmdMapEntries content =
                                numStr     = trim (pack rest)
                            in case parseInteger {a=Integer} numStr of
                                 Just n  => if n >= 0
-                                  then let (injs, rfn, dfn) = parseAnnotations annots
-                                       in Just (methodName, MkCmdMapEntry (cast n) injs rfn dfn)
+                                  then let (injs, rfn, dfn, pfn) = parseAnnotations annots
+                                       in Just (methodName, MkCmdMapEntry (cast n) injs rfn dfn pfn)
                                   else Nothing
                                 Nothing => Nothing
                          _ => Nothing
@@ -391,10 +399,18 @@ genMethodEntryWithAnnotations opts cmdMapEntries pair =
       injections = maybe [] (.injections) entry
       resultFn   = entry >>= (.resultFn)
       deferredHook = entry >>= (.deferredReplyHook)
+      deferPending = entry >>= (.deferIfPending)
       argDecPair = genArgDecodeCode pfx method.argTypes
       setupCode  = fst argDecPair
       setArgCode = snd argDecPair
-      replyCode  = genReplyCode pfx resultFn method.returnType
+      replyCodeRaw : String
+      replyCodeRaw = genReplyCode pfx resultFn method.returnType
+      -- @defer_if_pending: the Idris handler may have fired an async inter-canister
+      -- call and deferred the reply; skip the auto-reply when the predicate says so.
+      replyCode : String
+      replyCode  = maybe replyCodeRaw
+                     (\fn => "    if (" ++ fn ++ "() == 0) {\n    " ++ replyCodeRaw ++ "    }\n")
+                     deferPending
       injCode    = genInjectionCode pfx injections
       vfsOpen    = genSqlVfsOpen opts method.isQuery
       vfsClose   = genSqlVfsClose opts method.isQuery
@@ -525,6 +541,8 @@ fixedHeader opts cmdMapEntries =
       customFnDecls = concatMap (\fn => "extern const char* " ++ fn ++ "(void);\n") customFns
       deferredFns = nub $ mapMaybe (\(_, e) => e.deferredReplyHook) cmdMapEntries
       deferredFnDecls = concatMap (\fn => "extern const char* " ++ fn ++ "(const uint8_t* arg_buf, int32_t arg_buf_size);\n") deferredFns
+      deferPendingFns = nub $ mapMaybe (\(_, e) => e.deferIfPending) cmdMapEntries
+      deferPendingFnDecls = concatMap (\fn => "extern int32_t " ++ fn ++ "(void);\n") deferPendingFns
   in
     "/*\n" ++
     " * Canister Entry Points - AUTO-GENERATED from can.did\n" ++
@@ -573,6 +591,7 @@ fixedHeader opts cmdMapEntries =
     "extern void " ++ pfx ++ "_reset_ffi(void);\n" ++
     (if null customFns then "" else "\n/* Custom result functions */\n" ++ customFnDecls) ++
     (if null deferredFns then "" else "\n/* Deferred reply hooks */\n" ++ deferredFnDecls) ++
+    (if null deferPendingFns then "" else "\n/* Defer-if-pending predicates (Idris fired an async call; skip auto-reply) */\n" ++ deferPendingFnDecls) ++
     "\n" ++
     (if opts.sqlStable
        then "/* Forward declarations from SQLite persistence (auto-coupled: --sql-stable) */\n" ++

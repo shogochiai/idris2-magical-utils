@@ -1,0 +1,15 @@
+package idris2-lsp-redox
+version = 1.1.0
+
+opts = "-Wno-shadowing"
+
+depends = idris2, contrib, lsp-lib
+
+langversion >= 0.7.0
+
+sourcedir = "src"
+
+main = Server.Main
+executable = idris2-lsp-redox
+
+prebuild = "make src/Server/Generated.idr"
