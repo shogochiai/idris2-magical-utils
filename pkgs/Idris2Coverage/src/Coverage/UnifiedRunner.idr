@@ -1500,12 +1500,32 @@ splitTrailingCount s =
         else (trim s, 1)
     _ => (trim s, 1)
 
+||| Split a hits line into (label, rest). The forked compiler writes each hit as
+||| `<label>\t<path-id>` (System.Coverage.enterTest sets the label; empty when a
+||| harness never called enterTest). We split on the FIRST tab: everything before
+||| it is the opaque attribution label, everything after is the path-id (possibly
+||| still carrying a trailing `,count`). A line with no tab is treated as an
+||| unlabelled path-id (backwards-tolerant), so both formats parse. A path-id never
+||| contains a tab, so rejoining the tail on '\t' is lossless.
+splitHitLabel : String -> (String, String)
+splitHitLabel s =
+  case forget (split (== '\t') s) of
+    (label :: rest@(_ :: _)) => (label, joinBy "\t" rest)
+    _                        => ("", s)  -- no tab → unlabelled path-id
+
+||| The attribution label a hits line carries (empty when unlabelled). Exposed so
+||| the --spec filter can keep only hits produced under a matching test.
+export
+pathHitLabel : String -> String
+pathHitLabel line = fst (splitHitLabel (trim line))
+
 parsePathHitLineLocal : String -> Maybe PathRuntimeHit
 parsePathHitLineLocal line =
   let trimmed = trim line in
   if null trimmed || isPrefixOf "#" trimmed
      then Nothing
-     else let (pathId, cnt) = splitTrailingCount trimmed
+     else let labelRest      = splitHitLabel trimmed
+              (pathId, cnt)  = splitTrailingCount (snd labelRest)
           in Just (MkPathRuntimeHit pathId cnt)
 
 ||| Tests per intra-module slice. The exe is built ONCE and run repeatedly with
@@ -1595,9 +1615,19 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
       out <- readFile outPath
       removeFileIfExists outPath
       hitsContent <- readFile pathHitsPath
+      -- Optional per-SpecId scoping: IDRIS2COV_SPEC_FILTER=<REQ_ID> keeps ONLY the
+      -- hits produced under a test whose name (the attribution label) matches
+      -- `test_<REQ_ID>_...` — the numerator for ONE requirement's paths. Unset →
+      -- keep every hit (whole-target numerator, unchanged behaviour).
+      specFilter <- getEnv "IDRIS2COV_SPEC_FILTER"
+      let keepLine : String -> Bool
+          keepLine ln = case specFilter of
+                          Nothing => True
+                          Just "" => True
+                          Just req => isPrefixOf ("test_" ++ req) (pathHitLabel ln)
       let sliceHits = case hitsContent of
                         Left _ => []
-                        Right c => mapMaybe parsePathHitLineLocal (lines c)
+                        Right c => mapMaybe parsePathHitLineLocal (filter keepLine (lines c))
       let pf : Maybe (Nat, Nat)
           pf = case out of
                  Left _  => Nothing
