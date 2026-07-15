@@ -1,0 +1,15 @@
+package idris2-html-verifier-tests
+version = 0.1.0
+authors = "EtherClaw"
+brief   = "Idris2HtmlVerifier test runner"
+
+depends = base, contrib, idris2playwright
+
+sourcedir = "src"
+
+modules = HtmlVerifier.Crawl
+        , Tests.AllTests
+        , TestRunner
+
+main = TestRunner
+executable = idris2-html-verifier-tests

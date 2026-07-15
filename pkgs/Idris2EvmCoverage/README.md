@@ -126,6 +126,60 @@ The intended operating model is:
 This distinction is not optional polish. It is part of the backend milestone
 for making branch-level coverage operationally safe.
 
+## Differential check: revm-run vs idris2-evm-run
+
+The pipeline runs ONE EVM backend (`resolveEvmRunner` picks revm-run if on PATH,
+else the pure-Idris idris2-evm-run). Picking one discards the strongest
+correctness signal available — two INDEPENDENT EVM implementations agreeing on
+the same input. If they disagree, one is wrong, and that *includes revm-run
+itself*, which nothing else here cross-checks. (A whole class of bugs found
+while raising TextDAO coverage were *codegen* miscompiles: a backend executing
+correct bytecode wrong, or correct source compiled to wrong bytecode — exactly
+what a backend-vs-backend diff catches.)
+
+`scripts/diff-runners.sh` runs the SAME runtime bytecode + calldata through both
+and asserts the SET of fired path-marker LOG topics is identical:
+
+```bash
+scripts/diff-runners.sh <runtime-bytecode> <calldata-hex>
+scripts/diff-runners.sh <runtime-bytecode> --calls-file <file>   # revm-side full;
+    # pure interp lacks --calls-file, so calls-file mode diffs the FIRST call only
+```
+
+PASS = both backends fired the same marker topics. FAIL = the sets differ → one
+backend miscompiles/misexecutes that path. Run it across the contract's
+selectors as a backend-conformance gate before trusting a single-runner coverage
+number.
+
+A differential check proves the two backends AGREE; it cannot prove either is
+CORRECT (both could share a bug). `scripts/conformance-revm.sh` pins the
+absolute correctness of the revm-run side against HAND-COMPUTED EVM vectors —
+small programs whose RETURN / LOG / storage / status are computable by hand
+(incl. `LT 2<3 == 1` and `GT 2>3 == 0`, the EVM-side counterpart to the
+`<`-vs-`>` codegen bug). Together:
+
+- `diff-runners.sh`      — relative: the two backends agree on a real contract.
+- `conformance-revm.sh`  — absolute: revm-run matches the EVM spec on knowns.
+
+A third tier — `e2e-lifecycle-oracle.sh` (lives with the contract) — asserts the
+contract's full lifecycle reaches the right OBSERVABLE STATE on-chain (e.g.
+approvedHeader==1), the VALUE check that branch-reachability coverage cannot do.
+
+`scripts/verify-evm-backend.sh` BUNDLES all three into one gate — run it before
+trusting a single-runner coverage number:
+
+```bash
+E2E_CALLS=<contract>/coverage-happy-path.calls REVM_TIME_STEP=10 \
+  scripts/verify-evm-backend.sh /tmp/runtime-dispatch.bin <sel1> <sel2> …
+# → "ALL CHECKS PASS — coverage from this backend is trustworthy."  (exit 0)
+# A failure means do NOT trust the coverage %. SKIP_E2E=1 runs engine checks only.
+```
+
+Demonstrated to discriminate: with a reintroduced newtype codegen bug, coverage
+merely drops 81.68%→70.99% (reads as "low coverage"), but the gate's E2E oracle
+FAILS loudly (approvedHeader unset). (`REVM_SHOW_RETURN=1` surfaces a call's
+RETURN data for assertions without changing default output.)
+
 ## Diagnostics
 
 Full-pipeline runs now emit branch diagnostics data:

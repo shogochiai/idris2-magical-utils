@@ -2,13 +2,13 @@
 ||| path obligations are measured for parity-ti Step 4 coverage.
 |||
 ||| This is deliberately a SEPARATE sum from `DeliveryKind` (the delivery axis A):
-|||   - Several deliveries share one coverage family: `Web`, `Android` (as the pure
-|||     MVU layer) and `IOS` all measure as `WebMVU` (the same forked-dumppaths
-|||     Msg-branch path coverage).
-|||   - One delivery can map to TWO coverage families: an `Android` build is measured
-|||     as `WebMVU` by default (the pure MVU layer), but `AndroidDevice` is a distinct
-|||     family reached explicitly by the on-device runner (a flat id-file denominator
-|||     and logcat numerator, no forked build).
+|||   - Some deliveries share one coverage family: `Web` and `IOS` both measure as
+|||     `WebMVU` (the same forked-dumppaths Msg-branch coverage under node).
+|||   - `Android` measures ONLY as `AndroidDevice` — a real on-device run (flat id-file
+|||     denominator + logcat numerator). It is deliberately NOT folded into `WebMVU`:
+|||     re-running MVU logic under node is a surrogate runtime, not the APK on a phone,
+|||     so it would over-claim Android coverage. Android keeps its own family to refuse
+|||     that substitution.
 |||
 ||| Why a sum and not a string tag: a TOTAL dispatch over `CoverageFamily` forces
 ||| every family to declare its coverage story (Denominator / Numerator / Chunk /
@@ -33,8 +33,8 @@ public export
 data CoverageFamily
   = EvmHash        -- forked --dumppaths-json denominator; FNV-1a topic join (key = Integer)
   | DfxWasm        -- forked --dumppaths-json denominator; string-identity join (3 strategies, all terminate in pathId)
-  | WebMVU         -- forked --dumppaths-json (--cg node) denominator; string-identity join; covers Web + Android-MVU + iOS
-  | AndroidDevice  -- pre-collected id-file denominator; string-identity join; PURE (no forked build, no IO)
+  | WebMVU         -- forked --dumppaths-json (--cg node) denominator; string-identity join; covers Web + iOS
+  | AndroidDevice  -- real on-device id-file denominator; the ONLY honest Android coverage (no node surrogate)
   | CoreLib        -- forked --dumppaths-json denominator; string-identity join; CLI / pure-library coverage
   | Humanoid       -- embodiment layer; NO runnable backend yet (declared-unimplemented with a rationale)
 

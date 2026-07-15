@@ -1,0 +1,15 @@
+package idris2-html-verifier
+version = 0.1.0
+authors = "EtherClaw"
+brief   = "Crawl a deployed static site and verify every internal link resolves"
+
+depends = base, contrib, idris2playwright
+
+sourcedir = "src"
+
+modules = HtmlVerifier.Crawl
+        , Main
+
+main = Main
+executable = html-verifier
+opts = "--cg node"

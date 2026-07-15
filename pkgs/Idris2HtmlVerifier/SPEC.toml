@@ -1,0 +1,92 @@
+[definitions]
+prefix = "REQ_HTMLVERIFY"
+
+[[spec_area]]
+name = "Link classification and resolution"
+
+[[spec]]
+id = "${prefix}_INTERNAL_001"
+title = "isInternalLink accepts relative paths and same-origin absolute URLs, rejects everything else"
+invariant = "isInternalLink baseUrl href SHALL be True for any href that is empty-string-excluded, non-fragment, non-mailto relative path, and for any absolute http(s) URL that is prefixed by baseUrl; it SHALL be False for an empty href, a pure \"#anchor\" fragment, a \"mailto:\" link, and an absolute http(s) URL NOT prefixed by baseUrl (a different origin)."
+
+[[spec]]
+id = "${prefix}_RESOLVE_001"
+title = "resolveUrl strips fragments and joins relative hrefs onto baseUrl"
+invariant = "resolveUrl baseUrl href SHALL strip any trailing \"#fragment\" from href; an already-absolute http(s) href SHALL pass through unchanged (fragment-stripped); a href beginning with \"/\" SHALL be joined directly onto baseUrl; any other (bare-filename) relative href SHALL be joined onto baseUrl with an inserted \"/\"."
+
+[[spec]]
+id = "${prefix}_JSONARR_001"
+title = "parseJsonStringArray parses a JSON array-of-strings into a List String"
+invariant = "parseJsonStringArray SHALL parse the exact output shape of JSON.stringify(Array.from(...).map(x=>x)) -- a bracketed, comma-separated, double-quoted string list -- into the equivalent List String, including the empty array and single-element cases."
+
+[[spec]]
+id = "${prefix}_PARSEVISIT_001"
+title = "parseVisitResult parses visit-page.mjs's fixed JSON response shape"
+invariant = "parseVisitResult SHALL extract (status, title, links) from the exact JSON object shape {\"status\":<int>,\"title\":<string>,\"links\":[<string>,...]} that support/visit-page.mjs always emits, including a negative status (navigation-level failure) and empty title/links."
+
+[[spec_area]]
+name = "Status classification and crawl report"
+
+[[spec]]
+id = "${prefix}_STATUS_001"
+title = "isOkStatus accepts exactly the 2xx/3xx range"
+invariant = "isOkStatus status SHALL be True iff 200 <= status < 400; it SHALL be False for any 4xx/5xx status and for -1 (a navigation-level failure such as DNS/connection refused, distinct from a genuine HTTP error status)."
+
+[[spec]]
+id = "${prefix}_REPORT_001"
+title = "renderCrawlReport announces PASS iff brokenLinks is empty, and always names the failing edges otherwise"
+invariant = "renderCrawlReport report's text contains \"PASS\" and no \"FAIL\" when report.brokenLinks is empty; when report.brokenLinks is non-empty, the text contains \"FAIL\" together with every (fromUrl, targetUrl) edge, never a bare unqualified failure message."
+
+[[spec]]
+id = "${prefix}_REQUIREDMISSING_001"
+title = "renderCrawlReport announces FAIL when requiredMissing is non-empty, even with zero broken links"
+invariant = "renderCrawlReport report's text SHALL contain \"PASS\" and no \"FAIL\" only when BOTH report.brokenLinks and report.requiredMissing are empty; a non-empty requiredMissing SHALL produce a \"FAIL\" verdict naming every missing URL, independent of whether brokenLinks is itself empty -- a page that loads successfully but is never linked to from the crawled entry points is a distinct failure from a genuinely broken link."
+
+[[spec_area]]
+name = "Conduit digest verification (\"no lies\" check on WebsiteRender's derived landing page)"
+
+[[spec]]
+id = "${prefix}_CONDUITPARSE_001"
+title = "parseConduitCheck/splitJsonObjects parse visit-page.mjs's conduits array, including a null href"
+invariant = "Given visit-page.mjs's fixed conduit object shape {\"pending\":<bool>,\"href\":<string|null>,\"declaredDigest\":<string>,\"actualDigest\":<string>,\"fetchOk\":<bool>}, parseConduitCheck SHALL extract all five fields correctly, with a JSON \"href\":null producing Nothing and any quoted href producing Just that string."
+
+[[spec]]
+id = "${prefix}_CONDUITLIE_001"
+title = "isConduitLie flags exactly a linked conduit whose fetch failed or whose actual digest disagrees with the declared one"
+invariant = "isConduitLie c SHALL be True iff c.href is Just AND (c.fetchOk is False OR c.declaredDigest /= c.actualDigest); it SHALL be False for a pending conduit (href == Nothing, nothing claimed), for a Ready conduit with no download surface (href == Nothing, e.g. dfx/evm), and for a Ready conduit whose actual digest matches its declared one."
+
+[[spec]]
+id = "${prefix}_LIEREPORT_001"
+title = "renderCrawlReport announces FAIL when conduitLies is non-empty, even with zero broken links and zero requiredMissing"
+invariant = "renderCrawlReport report's text SHALL contain \"FAIL\" (and never bare \"PASS\") whenever report.conduitLies is non-empty, independent of report.brokenLinks/report.requiredMissing, naming the page URL, the linked href, and both the declared and actual digest for every lie -- a download conduit's digest claim not matching what is actually served is a distinct failure mode from a broken link or an unreachable page."
+
+[[spec_area]]
+name = "Crawl loop (pure edge/broken-link derivation)"
+
+[[spec]]
+id = "${prefix}_CRAWL_DEDUP_001"
+title = "A crawl visits each distinct URL at most once regardless of how many pages link to it"
+invariant = "Given multiple discovered edges targeting the SAME url, the crawl loop SHALL visit that url exactly once (never re-queue an already-visited url), and the final report's visited list SHALL contain no duplicate url."
+
+[[spec]]
+id = "${prefix}_CRAWL_BROKEN_001"
+title = "brokenLinks names every edge whose target was never successfully visited"
+invariant = "An edge (fromUrl, targetUrl) SHALL appear in the final report's brokenLinks iff no visited PageResult with url == targetUrl has an ok (2xx/3xx) status -- covering both a target that returned an error status and a target that was never reached (e.g. a navigation-level failure) at all."
+
+[[spec]]
+id = "${prefix}_CRAWL_REQUIRED_001"
+title = "crawlSite's requiredMissing lists exactly the requiredPaths never discovered while crawling from entryUrls"
+invariant = "crawlSite baseUrl entryUrls requiredPaths SHALL resolve each requiredPaths entry against baseUrl the same way a discovered href is resolved, and its final report.requiredMissing SHALL contain exactly those resolved URLs for which no visited page's url matches -- a required path reached only because it was ALSO passed as an entryUrl does not exercise this guarantee, so callers needing it MUST NOT list the same path in both entryUrls and requiredPaths."
+
+[[spec_area]]
+name = "No silent gaps (a genuinely built artifact never included in a release stays \"coming soon\" forever)"
+
+[[spec]]
+id = "${prefix}_MISSINGREADY_001"
+title = "missingReadyFamilies flags exactly the required labels for which no crawled conduit is Ready"
+invariant = "missingReadyFamilies requiredReadyLabels allConduits SHALL contain exactly those labels in requiredReadyLabels for which no conduit in allConduits has a matching headingEn with pending == False -- a label matched only by a pending (not Ready) conduit, or not matched by any conduit at all, SHALL both be reported as missing; a label matched by at least one Ready conduit SHALL NOT be reported, regardless of how many other pending conduits share the same label."
+
+[[spec]]
+id = "${prefix}_NOTREADYREPORT_001"
+title = "renderCrawlReport announces FAIL when notReadyFamilies is non-empty, even with zero broken links, zero requiredMissing, and zero conduitLies"
+invariant = "renderCrawlReport report's text SHALL contain \"FAIL\" (and never bare \"PASS\") whenever report.notReadyFamilies is non-empty, independent of report.brokenLinks/report.requiredMissing/report.conduitLies, naming every missing family label -- a family whose artifact is genuinely built but was simply never included in a release's unit list is a distinct failure mode from a broken link, an unreached page, or a digest mismatch, since a pending conduit makes no claim to verify and therefore cannot be caught by the digest-lie check alone."

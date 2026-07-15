@@ -8,6 +8,8 @@ import public Coverage.DumpcasesParser
 import public Coverage.Core.RuntimeHit
 import public Coverage.Core.PathCoverage
 import Coverage.Core.DumppathsJson
+import Coverage.Exclusions
+import Coverage.PathCoverage
 import Coverage.Standardization.Types
 import System
 import System.Clock
@@ -685,7 +687,9 @@ obligationClassName ReachableObligation = "ReachableObligation"
 obligationClassName LogicallyUnreachable = "LogicallyUnreachable"
 obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
 obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
+obligationClassName ExternalEffectBoundary = "ExternalEffectBoundary"
 obligationClassName UnknownClassification = "UnknownClassification"
+obligationClassName StubbedReach = "StubbedReach"
 
 pathStepToJson : PathStep -> String
 pathStepToJson step =
@@ -862,10 +866,19 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        case chunkResults of
          Left err => pure $ Left $ wholeErr ++ "\nChunked fallback failed: " ++ err
          Right paths =>
-           let deduped = nub paths in
-           if null deduped
+           -- Apply the standard path-coverage exclusions to the denominator (the
+           -- UnifiedRunner path previously skipped them, so harness/runtime-only
+           -- obligations were wrongly counted). idris2FullExclusions drops the
+           -- compiler/builtin/test noise; the extra TempStaticDumppaths pattern drops
+           -- the per-chunk generated wrapper Mains (`TempStaticDumppaths_test_*.main`),
+           -- which are this chunked-build's own scaffolding, not product code.
+           let excl     = MkLoadedExclusions
+                            (prefixPattern "TempStaticDumppaths" "Chunked-dumppaths build scaffolding (generated per-chunk Main wrapper)"
+                              :: idris2FullExclusions) "builtin"
+               filtered = filterPathObligations excl emptyExclusionConfig (nub paths) in
+           if null filtered
               then pure $ Left $ wholeErr ++ "\nChunked fallback produced zero path obligations."
-              else pure $ Right $ pathObligationsToDumppathsJson deduped
+              else pure $ Right $ pathObligationsToDumppathsJson filtered
   where
     runChunks : String -> String -> String -> List String -> String -> List (List String) -> Nat -> List PathObligation -> IO (Either String (List PathObligation))
     runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
@@ -1461,17 +1474,59 @@ runFunctionHitsOnce projectDir testModules timeout = do
         countCanonical : List CompiledCase -> Nat
         countCanonical = length . filter (\c => c.kind == Canonical)
 
+||| Normalize a recorded path-id's record-projection segments so they match the
+||| dumppaths denominator's bare-field form. The fork compiler's recordPathHit names
+||| a record field accessor with Idris's projection DISPLAY syntax `(.field)`, but
+-- NOTE: the old `normalizeProjectionName` polyfill (which stripped the `(.field)`
+-- projection wrapper so a recorded `(.chainId)` would join a BARE-`chainId`
+-- denominator) was removed once the fork compiler was fixed to emit record-field
+-- accessors as a SINGLE canonical `(.field)` form on BOTH sides (the bare selector
+-- wrapper is dropped from the dumppaths denominator; see isRecordSelectorWrapper in
+-- Compiler.Common). The two sides now agree natively, so the recorded id must be
+-- used verbatim — re-stripping `(.field)`→`field` here would re-break the join.
+
+||| Split off ONLY a trailing ",<digits>" count, leaving the rest as the path-id.
+||| The path-id itself contains commas (where-bound helpers: "…registryReqId,afterFirst,go#p0"),
+||| so splitting on EVERY comma truncated the name (same class as the dfx comma bug).
+||| The recorded line is "<path-id>,<count>"; the count is the final comma-field IFF
+||| it is all digits — otherwise the whole line is the path-id (no count).
+splitTrailingCount : String -> (String, Nat)
+splitTrailingCount s =
+  case reverse (forget (split (== ',') s)) of
+    (lastSeg :: restRev@(_ :: _)) =>
+      let lt = trim lastSeg in
+      if lt /= "" && all isDigit (unpack lt)
+        then (trim (joinBy "," (reverse restRev)), fromMaybe 1 (parsePositive lt))
+        else (trim s, 1)
+    _ => (trim s, 1)
+
+||| Split a hits line into (label, rest). The forked compiler writes each hit as
+||| `<label>\t<path-id>` (System.Coverage.enterTest sets the label; empty when a
+||| harness never called enterTest). We split on the FIRST tab: everything before
+||| it is the opaque attribution label, everything after is the path-id (possibly
+||| still carrying a trailing `,count`). A line with no tab is treated as an
+||| unlabelled path-id (backwards-tolerant), so both formats parse. A path-id never
+||| contains a tab, so rejoining the tail on '\t' is lossless.
+splitHitLabel : String -> (String, String)
+splitHitLabel s =
+  case forget (split (== '\t') s) of
+    (label :: rest@(_ :: _)) => (label, joinBy "\t" rest)
+    _                        => ("", s)  -- no tab → unlabelled path-id
+
+||| The attribution label a hits line carries (empty when unlabelled). Exposed so
+||| the --spec filter can keep only hits produced under a matching test.
+export
+pathHitLabel : String -> String
+pathHitLabel line = fst (splitHitLabel (trim line))
+
 parsePathHitLineLocal : String -> Maybe PathRuntimeHit
 parsePathHitLineLocal line =
   let trimmed = trim line in
   if null trimmed || isPrefixOf "#" trimmed
      then Nothing
-     else case forget (split (== ',') trimmed) of
-            [pathId] => Just (MkPathRuntimeHit (trim pathId) 1)
-            [pathId, countStr] =>
-              let parsed = fromMaybe 1 (parsePositive (trim countStr))
-              in Just (MkPathRuntimeHit (trim pathId) parsed)
-            _ => Just (MkPathRuntimeHit trimmed 1)
+     else let labelRest      = splitHitLabel trimmed
+              (pathId, cnt)  = splitTrailingCount (snd labelRest)
+          in Just (MkPathRuntimeHit pathId cnt)
 
 ||| Tests per intra-module slice. The exe is built ONCE and run repeatedly with
 ||| IDRIS2COV_TEST_OFFSET/_LIMIT windows of this size — each a fresh process whose
@@ -1525,6 +1580,17 @@ runExeSlices : (projectDir : String) -> (relExecPath : String) -> (pathHitsPath 
             -> IO (List PathRuntimeHit)
 runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceMaxSlices
   where
+    -- Env-gated per-slice trace. Set IDRIS2COV_SLICE_DEBUG=1 to diagnose a
+    -- non-deterministic numerator: prints offset, exit code, parsed (passed,
+    -- failed), this slice's hit count, accumulated hit count, and which
+    -- termination branch the walk took. Off by default (no output pollution).
+    sliceDebug : String -> IO ()
+    sliceDebug msg = do
+      dbg <- getEnv "IDRIS2COV_SLICE_DEBUG"
+      case dbg of
+        Just v => if trim v == "" || trim v == "0" then pure () else putStrLn ("    [slice] " ++ msg)
+        Nothing => pure ()
+
     -- offset, sliceIdx, firstCount (passed+failed of slice 0), accHits, fuel
     go : Nat -> Nat -> Maybe Nat -> List PathRuntimeHit -> Nat -> IO (List PathRuntimeHit)
     go _ _ _ acc Z = pure acc
@@ -1549,9 +1615,19 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
       out <- readFile outPath
       removeFileIfExists outPath
       hitsContent <- readFile pathHitsPath
+      -- Optional per-SpecId scoping: IDRIS2COV_SPEC_FILTER=<REQ_ID> keeps ONLY the
+      -- hits produced under a test whose name (the attribution label) matches
+      -- `test_<REQ_ID>_...` — the numerator for ONE requirement's paths. Unset →
+      -- keep every hit (whole-target numerator, unchanged behaviour).
+      specFilter <- getEnv "IDRIS2COV_SPEC_FILTER"
+      let keepLine : String -> Bool
+          keepLine ln = case specFilter of
+                          Nothing => True
+                          Just "" => True
+                          Just req => isPrefixOf ("test_" ++ req) (pathHitLabel ln)
       let sliceHits = case hitsContent of
                         Left _ => []
-                        Right c => mapMaybe parsePathHitLineLocal (lines c)
+                        Right c => mapMaybe parsePathHitLineLocal (filter keepLine (lines c))
       let pf : Maybe (Nat, Nat)
           pf = case out of
                  Left _  => Nothing
@@ -1566,10 +1642,28 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
       -- have tests. Keep its partial hits and ADVANCE past it rather than
       -- terminating. Bounded by fuel/intraSliceMaxSlices.
       let timedOut = (sliceExit == 142 || sliceExit == 124) && isNothing pf
-      if timedOut
-        then go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+      -- A slice that exited NON-ZERO with NO "Results:" line (e.g. SIGKILL/OOM
+      -- exit 137, a segfault, or any crash that aborts mid-suite) is ALSO not a
+      -- genuine past-the-end: terminating here would keep only this slice's
+      -- partial hits and silently drop every later window — the flaky-numerator
+      -- bug (covered measured as 4131 vs 507 across runs depended on whether
+      -- slice 0 happened to finish cleanly). Treat it like a timeout: keep the
+      -- partial hits already written (write-on-first-hit) and ADVANCE. Only a
+      -- CLEAN exit (0) with count==0 means we have genuinely walked off the end.
+      let crashedMidSlice = (sliceExit /= 0) && isNothing pf && not timedOut
+      sliceDebug $ "offset=" ++ show offset ++ " idx=" ++ show idx
+                ++ " exit=" ++ show sliceExit
+                ++ " pf=" ++ show pf ++ " count=" ++ show count
+                ++ " sliceHits=" ++ show (length sliceHits)
+                ++ " accHits=" ++ show (length acc')
+                ++ " firstCount=" ++ show firstCount
+                ++ " timedOut=" ++ show timedOut
+                ++ " crashedMidSlice=" ++ show crashedMidSlice
+      if timedOut || crashedMidSlice
+        then do sliceDebug "branch=ADVANCE(timeout/crash)"
+                go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
         else if count == 0
-          then pure acc'  -- empty slice → past the end → done
+          then do sliceDebug "branch=STOP(clean-empty past-the-end)"; pure acc'  -- clean empty slice → past the end → done
           else case firstCount of
                Nothing =>
                  -- Slice 0. Distinguish env-AWARE from env-IGNORING by slice-0's
@@ -1579,8 +1673,9 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
                  -- (A suite SMALLER than one window gives count < limit and the
                  --  next slice returns 0 → natural stop.)
                  if count > intraSliceLimit
-                   then pure acc'  -- exe ignored window, ran everything: slice-0 IS the full set
-                   else go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
+                   then do sliceDebug "branch=STOP(slice0 count>limit env-ignored)"; pure acc'  -- exe ignored window, ran everything: slice-0 IS the full set
+                   else do sliceDebug "branch=ADVANCE(slice0 env-aware)"
+                           go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
                Just _ =>
                  -- Env-aware: keep walking windows until an empty slice (count==0,
                  -- handled above) or a short final slice (count < limit) ends it.
@@ -1588,8 +1683,9 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
                  -- must NOT treat "count == firstCount" as the ignore signal (that
                  -- false-positived and stopped after one window — undercounting).
                  if count < intraSliceLimit
-                   then pure acc'  -- last (partial) window consumed → done
-                   else go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+                   then do sliceDebug "branch=STOP(short final window)"; pure acc'  -- last (partial) window consumed → done
+                   else do sliceDebug "branch=ADVANCE(env-aware full window)"
+                           go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
 
 ||| Test-module count above which the runtime path-coverage exe is built and run
 ||| in sequential chunks instead of one whole-suite process. A single exe that

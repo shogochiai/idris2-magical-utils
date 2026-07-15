@@ -17,6 +17,7 @@
 module Idris2.TestSuite
 
 import Data.List
+import System.Coverage
 
 %default total
 
@@ -61,6 +62,12 @@ runSuite = go 0 0
     go : Nat -> Nat -> TestSuite -> IO (Nat, Nat)
     go p f [] = pure (p, f)
     go p f ((name, body) :: rest) = do
+      -- Attribute every path hit during this test to its name (path-coverage
+      -- Step 4): under --dumppaths-hits the compiler records `<name>\t<path-id>`,
+      -- so the numerator can be grouped per test (hence per SpecId, since test
+      -- names are `test_<REQ_ID>_...`). A no-op in a normal (non-instrumented)
+      -- build, so this costs nothing off the coverage path.
+      enterTest name
       ok <- body
       if ok
         then do putStrLn ("[PASS] " ++ name); go (S p) f rest

@@ -384,14 +384,39 @@ runProjectMethod projectDir canisterRef method network = do
      then pure $ Right content
      else pure $ Left $ "dfx canister call " ++ method ++ " failed: " ++ trim content
 
+||| Like runProjectMethod but RETRIES on failure. The numerator was run-to-run
+||| unstable because a single transient batch failure (replica timeout / instruction
+||| limit on a heavy `runTestBatchN`) was SILENTLY DROPPED by runProjectMethods.go —
+||| that batch's path hits then never recorded, so Missing fluctuated by hundreds of
+||| paths between identical runs. Each `runTestBatchN` records cumulatively into
+||| canister state, so a successful retry recovers exactly the lost hits. We retry up
+||| to `attempts` times; only a persistent failure is reported.
+runProjectMethodRetry : (attempts : Nat) -> String -> String -> String -> String -> IO (Either String String)
+runProjectMethodRetry Z _ _ method _ =
+  pure $ Left $ "method " ++ method ++ " exhausted retries"
+runProjectMethodRetry (S k) projectDir canisterRef method network = do
+  result <- runProjectMethod projectDir canisterRef method network
+  case result of
+    Right ok => pure $ Right ok
+    Left err =>
+      if k == Z
+         then pure $ Left err   -- last attempt: surface the real error
+         else do putStrLn $ "    [numerator] " ++ method ++ " failed, retrying ("
+                          ++ show k ++ " left): " ++ err
+                 runProjectMethodRetry k projectDir canisterRef method network
+
 ||| Indices of the chunked `runTestBatchN` canister methods to probe. Each batch
 ||| evaluates 8 tests (start = idx*8). Must stay in sync with the generated
-||| harness's batch exports (WasmBuilder.testBatchIndexes). 0..15 covers up to
-||| 128 tests in 8-test slices, enough for the current pure-test list while
-||| keeping every IC update call small (avoids native-stack overflow / replica
-||| crash that a single all-tests call causes).
+||| harness's batch exports (WasmBuilder.testBatchIndexes). 0..31 covers up to
+||| 256 tests in 8-test slices while keeping every IC update call small (avoids
+||| native-stack overflow / replica crash that a single all-tests call causes).
+||| Extended 16->32: GlobalRegistry's pureTestThunks grew past 128 (now ~145 with
+||| the path-coverage subsuites); batches 16+ were unprobed so the tail tests'
+||| paths never recorded (numerator under-counted, run-to-run unstable). Probing a
+||| batch with no tests is a harmless no-op.
 batchProbeIndexes : List Nat
-batchProbeIndexes = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+batchProbeIndexes = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+                     16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
 
 runProjectMethods : String -> String -> List String -> String -> IO (Either String (List String))
 runProjectMethods _ _ [] _ = pure $ Left "No test methods configured"
@@ -403,7 +428,9 @@ runProjectMethods projectDir canisterRef methods network = go methods [] []
          then pure $ Left $ joinBy "\n" (reverse errors)
          else pure $ Right (reverse successes)
     go (method :: rest) successes errors = do
-      result <- runProjectMethod projectDir canisterRef method network
+      -- Retry (3 attempts) so a transient batch timeout doesn't silently drop that
+      -- batch's path hits — the cause of run-to-run numerator instability.
+      result <- runProjectMethodRetry 3 projectDir canisterRef method network
       case result of
         Right _ => go rest (method :: successes) errors
         Left err => go rest successes (err :: errors)
@@ -859,12 +886,48 @@ resolveIpkgForPaths opts =
 ||| so `idris2 --dumppaths-json` over it yields obligations for exactly the
 ||| functions the instrumented WASM can record. Returns the original ipkg path
 ||| unchanged if no Tests/AllTests module is found (falls back to canister prep).
+||| True iff this ipkg's content declares `main = Tests.AllTests` AND lists the
+||| Tests.AllTests module — i.e. it IS the test-universe ipkg (the same module set
+||| the forTestBuild WASM compiles), not the canister-Main ipkg.
+ipkgIsTestUniverse : String -> Bool
+ipkgIsTestUniverse content =
+  let ls = map trim (lines content)
+      hasTestMain = any (\l => l == "main = Tests.AllTests" || l == "main=Tests.AllTests") ls
+      listsTestMod = any (\l => isInfixOf "Tests.AllTests" l && (isPrefixOf "," l || isPrefixOf "modules" l)) ls
+  in hasTestMain && listsTestMod
+
+||| Find a sibling ipkg in `projectDir` that IS the test-universe ipkg. lazy passes
+||| the CANISTER ipkg (main = Main, modules = canister set with NO Coverage.*/Tests.*),
+||| but the numerator instruments the TEST universe (Tests.AllTests + Coverage.* +
+||| transitive imports). Rewriting the canister ipkg's main line does NOT add the
+||| missing modules, so its dumppaths universe stays canister-only — the disjoint
+||| universe bug. The real test ipkg already has the correct `modules =` list, so we
+||| use it directly. Returns Nothing when no sibling test ipkg exists.
+findSiblingTestIpkg : (projectDir : String) -> (excludeName : String) -> IO (Maybe String)
+findSiblingTestIpkg projectDir excludeName = do
+  Right entries <- listDir projectDir
+    | Left _ => pure Nothing
+  -- Skip the passed ipkg and any generated temp ipkg (named canister-dfxprepared-*
+  -- or dfx-dumppaths-temp-*); ipkgIsTestUniverse is the authoritative test.
+  let candidates = filter (\n => isSuffixOf ".ipkg" n && n /= excludeName
+                                   && not (isInfixOf "canister-dfxprepared-" n)
+                                   && not (isInfixOf "dfx-dumppaths-temp-" n))
+                          entries
+  go (map (\n => projectDir ++ "/" ++ n) candidates)
+  where
+    go : List String -> IO (Maybe String)
+    go [] = pure Nothing
+    go (p :: rest) = do
+      Right c <- readFile p
+        | Left _ => go rest
+      if ipkgIsTestUniverse c then pure (Just p) else go rest
+
 prepareTestUniverseDumppathsIpkg : String -> IO String
 prepareTestUniverseDumppathsIpkg ipkgPath = do
   Right content <- readFile ipkgPath
     | Left _ => pure ipkgPath
   t <- time
-  let (projectDir, _) = splitPath ipkgPath
+  let (projectDir, ipkgName) = splitPath ipkgPath
   -- Confirm a test entry exists; otherwise this preparer is inapplicable.
   let testMainPath = projectDir ++ "/src/Tests/AllTests.idr"
   hasTestMain <- do
@@ -873,22 +936,34 @@ prepareTestUniverseDumppathsIpkg ipkgPath = do
     pure True
   if not hasTestMain
      then pure ipkgPath
-     else do
-       let tempPath = projectDir ++ "/canister-dfxprepared-" ++ show t ++ ".ipkg"
-       -- Keep ALL modules (including Tests.*); just point main/executable at the
-       -- test entry so the dumppaths universe == the forTestBuild WASM universe.
-       let rewriteMainLine : String -> String
-           rewriteMainLine line =
-             let trimmed = trim line
-             in if isPrefixOf "main " trimmed || isPrefixOf "main=" trimmed
-                   then "main = Tests.AllTests"
-                else if isPrefixOf "executable " trimmed || isPrefixOf "executable=" trimmed
-                   then "executable = run-tests"
-                else line
-       let sanitized = unlines (map rewriteMainLine (lines content))
-       Right () <- writeFile tempPath sanitized
-         | Left _ => pure ipkgPath
-       pure tempPath
+     else if ipkgIsTestUniverse content
+       -- Already the test-universe ipkg: nothing to swap; just keep it (the dumppaths
+       -- build over it yields the test universe — Coverage.* / Tests.* included).
+       then pure ipkgPath
+       else do
+         -- The passed ipkg is the canister-Main ipkg (its `modules =` list lacks
+         -- Tests.AllTests / Coverage.*). Use the sibling TEST ipkg as the denominator
+         -- base so the dumppaths universe == the forTestBuild WASM universe.
+         mTestIpkg <- findSiblingTestIpkg projectDir ipkgName
+         case mTestIpkg of
+           Just testIpkg => pure testIpkg
+           Nothing => do
+             -- No sibling test ipkg found: fall back to rewriting this ipkg's main
+             -- line (best-effort; only aligns if the canister modules transitively
+             -- reach the test surface). Better than the canister-Main preparer.
+             let tempPath = projectDir ++ "/canister-dfxprepared-" ++ show t ++ ".ipkg"
+             let rewriteMainLine : String -> String
+                 rewriteMainLine line =
+                   let trimmed = trim line
+                   in if isPrefixOf "main " trimmed || isPrefixOf "main=" trimmed
+                         then "main = Tests.AllTests"
+                      else if isPrefixOf "executable " trimmed || isPrefixOf "executable=" trimmed
+                         then "executable = run-tests"
+                      else line
+             let sanitized = unlines (map rewriteMainLine (lines content))
+             Right () <- writeFile tempPath sanitized
+               | Left _ => pure ipkgPath
+             pure tempPath
 
 prepareDumppathsIpkg : String -> IO String
 prepareDumppathsIpkg ipkgPath = do
@@ -974,14 +1049,19 @@ runDumppathsJson ipkgPath = do
 parsePathHitLine : String -> Maybe PathRuntimeHit
 parsePathHitLine line =
   let trimmed = trim line in
-  if null trimmed || isPrefixOf "#" trimmed
+  if null trimmed
      then Nothing
-     else case forget (split (== ',') trimmed) of
-            [pathId] => Just (MkPathRuntimeHit (trim pathId) 1)
-            [pathId, countStr] =>
-              let parsed = fromMaybe 1 (parsePositive (trim countStr))
-              in Just (MkPathRuntimeHit (trim pathId) parsed)
-            _ => Just (MkPathRuntimeHit trimmed 1)
+     -- The hits-out file is ONE PATH-ID PER LINE (written by runNumeratorInProcess
+     -- as `unlines (map .pathId hits)`), NOT a `pathId,count` CSV. Path-ids for
+     -- `where`-bound helpers embed a comma (e.g. "…balancedObject,go#p0"), so a
+     -- comma split here re-truncated them to "…balancedObject" — the SAME bug as the
+     -- canister-reply separator, on the file-readback side. Treat the whole trimmed
+     -- line as the path-id (count is always 1; the join is set-membership). A leading
+     -- '#' is part of a "#pN" suffix mid-id, never a comment here, so don't skip it
+     -- — but a line that is ONLY "#…" (no id before it) cannot be a real path-id.
+     else if isPrefixOf "#" trimmed
+       then Nothing
+       else Just (MkPathRuntimeHit trimmed 1)
 
 loadPathHits : Maybe String -> IO (Either String (List PathRuntimeHit))
 loadPathHits Nothing = pure $ Right []
@@ -1092,7 +1172,10 @@ runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPa
           -- which then blocks the path-hit query. The batches below cover the
           -- whole list (8 tests each), so no coverage is lost.
           let batchMethods = map (\idx => "runTestBatch" ++ show idx) batchProbeIndexes
-          let methods = "runMinimalTests" :: "runTrivialTest" :: batchMethods
+          -- runIoCoverage runs ONLY the IO/SQL-fixture coverage routines (parse-row
+          -- / query exercises against a real replica DB) — small enough to probe in
+          -- one call, recording paths unreachable from the pure batches.
+          let methods = "runMinimalTests" :: "runTrivialTest" :: "runIoCoverage" :: batchMethods
           callResult <- runProjectMethods projectDir canister methods opts.network
           case callResult of
             Left err => do

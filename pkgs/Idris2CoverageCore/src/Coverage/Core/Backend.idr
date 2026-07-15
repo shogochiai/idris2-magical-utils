@@ -111,12 +111,16 @@ isGeneratedRecordProjectionPath path =
 ||| path stays in the set with an honest class so `denominator + excluded + unknown
 ||| == total` (the anti-"hallucinated perfection" rule). IDEMPOTENCY GUARD: only a
 ||| ReachableObligation is ever overridden, so re-parsing already-classified content
-||| never resets a non-Reachable class. The `classifier` returns `Just (cls, reason)`
-||| to reclassify, or `Nothing` to leave a path as a normal product obligation.
-||| (This is exactly evm's reclassifyPathObligations generalised over the classifier;
-||| evm composes its rich `classifyEvmExclusion`, dfx/web compose `artifactClassifier`.)
+||| never resets a non-Reachable class.
+|||
+||| The `classifier` returns `Just reason` (a CANONICAL `ExclusionReason`, NOT an
+||| arbitrary `(ObligationClass, String)`) to reclassify, or `Nothing` to leave a
+||| path as a normal product obligation. The target ObligationClass is then derived
+||| from the single-source-of-truth `reasonClass` — a family CANNOT pick an ad-hoc
+||| class/reason, so the narrow-denominator trick (excluding an observable product
+||| branch) is structurally impossible: the type has no ctor for it.
 public export
-reclassifyByClassifier : (PathObligation -> Maybe (ObligationClass, String))
+reclassifyByClassifier : (PathObligation -> Maybe Types.ExclusionReason)
                       -> List PathObligation -> List PathObligation
 reclassifyByClassifier classifier = map reclassify
   where
@@ -125,32 +129,32 @@ reclassifyByClassifier classifier = map reclassify
       case path.classification of
         ReachableObligation =>
           case classifier path of
-            Just (cls, _) => { classification := cls } path
-            Nothing       => path
+            Just reason => { classification := reasonClass reason } path
+            Nothing     => path
         _ => path
 
 ||| The artifact classifier, parameterized by the projection predicate so each
-||| family preserves its exact historical denominator: a path is a
-||| CompilerInsertedArtifact if it is a generated projection (per `projTest`) OR
-||| matches the family's test-harness exclusion patterns. evm composes its richer
-||| classifier on top (Yul collapse, constant-false → LogicallyUnreachable).
+||| family preserves its exact historical denominator: a path is a generated
+||| projection (`GeneratedProjection`) OR matches the family's test-harness
+||| exclusion patterns (`NonProductModule`). Both map to CompilerInsertedArtifact
+||| via `reasonClass`, so the denominator is unchanged from the old tuple form.
 ||| `projTest` = `isBareRecordProjectionPath` (dfx/evm historical) or
 ||| `isGeneratedRecordProjectionPath` (web superset, bare+dotted).
 public export
 artifactClassifierWith : (projTest : PathObligation -> Bool)
                       -> (testHarness : List ExclPattern)
-                      -> PathObligation -> Maybe (ObligationClass, String)
+                      -> PathObligation -> Maybe Types.ExclusionReason
 artifactClassifierWith projTest testHarness path =
   if projTest path
-    then Just (CompilerInsertedArtifact, "generated record projection")
+    then Just GeneratedProjection
   else case isMethodExcluded testHarness path.functionName of
-         Just reason => Just (CompilerInsertedArtifact, reason)
-         Nothing     => Nothing
+         Just _  => Just NonProductModule
+         Nothing => Nothing
 
 ||| The WEB-superset classifier (bare + dotted projections). Used by web/android.
 public export
 artifactClassifier : (testHarness : List ExclPattern)
-                  -> PathObligation -> Maybe (ObligationClass, String)
+                  -> PathObligation -> Maybe Types.ExclusionReason
 artifactClassifier = artifactClassifierWith isGeneratedRecordProjectionPath
 
 ||| Reclassify with the WEB-superset projection predicate (bare + dotted). This is

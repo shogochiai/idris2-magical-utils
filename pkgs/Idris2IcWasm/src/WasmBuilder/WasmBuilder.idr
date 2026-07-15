@@ -393,19 +393,36 @@ generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
+    , ""
+    -- IO-coverage runner: invokes ONLY TestModule.runTests (the IO/SQL-fixture
+    -- coverage routines: setupSchema + parse-row/query exercises against a real
+    -- replica DB) WITHOUT the pure batch. The all-in-one runTests is omitted from
+    -- probing (too heavy → IC0502); this isolates the IO coverage so its paths
+    -- (parseRow / query functions, unreachable from pure tests) get recorded
+    -- without the pure-test weight. dfx-cov probes this as `runIoCoverage`.
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = do"
+    , "  TestModule.runTests"
+    , "  pure (1, 0)"
     ]
 
 ||| Generate test Main.idr content that imports the standardized shim module
 ||| This is written to /tmp, never touches the original Main.idr
 ||| One canister export `runTestBatchN` is generated per index; each runs an
 ||| 8-test slice (start = idx*8). Cover enough indices that the batches span the
-||| whole pure-test list (0..15 -> up to 128 tests) so chunked probing records
+||| whole pure-test list (0..31 -> up to 256 tests) so chunked probing records
 ||| hits for every test without a single all-tests call (which can overflow the
 ||| IC native stack / crash the replica). Must stay in sync with the dfx-cov
-||| probe's batchProbeIndexes.
+||| probe's batchProbeIndexes. Extended 16->32 batches: GlobalRegistry's
+||| pureTestThunks grew past 128 (now ~145 with the path-coverage subsuites), so
+||| tests beyond index 15 were never executed on the replica and their paths never
+||| recorded (numerator under-counted, run-to-run unstable). Empty batches past the
+||| list end are harmless no-ops (runTestRange clamps).
 testBatchIndexes : List Int
 testBatchIndexes =
-  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+   16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 
 generateTestBatchExport : Int -> List String
 generateTestBatchExport idx =
@@ -445,6 +462,10 @@ generateTestMainContent =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = TestHarness.runTrivialTest"
+    , ""
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = TestHarness.runIoCoverage"
     ]
     ++ generateTestBatchExports
     ++
@@ -459,6 +480,7 @@ generateTestMainContent =
     , "      _ <- Main.runTests"
     , "      _ <- Main.runMinimalTests"
     , "      _ <- Main.runTrivialTest"
+    , "      _ <- Main.runIoCoverage"
     ]
     ++ map (\idx => "      _ <- Main.runTestBatch" ++ show idx) testBatchIndexes
     ++
@@ -491,6 +513,7 @@ isTestHarnessExport name =
   name == "runTests" ||
   name == "runMinimalTests" ||
   name == "runTrivialTest" ||
+  name == "runIoCoverage" ||
   isPrefixOf "runTestBatch" name
 
 ||| RefC-level arity for generated top-level symbols.
@@ -1341,12 +1364,16 @@ findExtraCSources ic0Support = do
     "case \"$b\" in sqlite_bridge.c|sqlite_vfs_bridge.c|sqlite_stable.c|wasi_polyfill.c) [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ] && continue ;; esac; " ++
     "echo \"$f\"; " ++
     "done; " ++
+    -- bulletproof_vfs.c DEFINES sqlite3_os_init (the SQLITE_OS_OTHER app-supplied
+    -- VFS init); WITHOUT it the WASM imports sqlite3_os_init from env unresolved →
+    -- deploy fails IC0505 "invalid import section". The canonical build
+    -- (build-canister-from-config.sh) links it as $VFS_IMPL_C — mirror that here.
     "if [ -d \"$sqlite_ic0\" ] && [ \"$same_sqlite_ic0\" -eq 0 ]; then " ++
-    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c legacy/sqlite_stable.c sqlite/libsqlite3.a; do " ++
+    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c bulletproof_vfs.c legacy/sqlite_stable.c sqlite/libsqlite3.a; do " ++
     "[ -f \"$sqlite_ic0/$rel\" ] && echo \"$sqlite_ic0/$rel\"; " ++
     "done; " ++
     "elif [ -d \"$indexer_ic0\" ] && [ \"$same_indexer_ic0\" -eq 0 ]; then " ++
-    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c sqlite_stable.c wasi_polyfill.c ic_http_outcall.c sqlite/libsqlite3.a; do " ++
+    "for rel in sqlite_bridge.c sqlite_vfs_bridge.c bulletproof_vfs.c sqlite_stable.c wasi_polyfill.c ic_http_outcall.c sqlite/libsqlite3.a; do " ++
     "[ -f \"$indexer_ic0/$rel\" ] && echo \"$indexer_ic0/$rel\"; " ++
     "done; " ++
     "fi; }"

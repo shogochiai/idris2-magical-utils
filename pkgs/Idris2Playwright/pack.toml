@@ -1,0 +1,4 @@
+[custom.all.idris2playwright]
+type = "local"
+path = "."
+ipkg = "idris2-playwright.ipkg"

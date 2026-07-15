@@ -262,8 +262,17 @@ runDumppathsJson ipkgPath = do
        let outPath = "/tmp/idris2_evm_cov_paths_" ++ show t ++ ".json"
        let logPath = "/tmp/idris2_evm_cov_paths_" ++ show t ++ ".log"
        let partsPath = outPath ++ ".parts"
+       -- When measuring with the fork-yul stack, the denominator build must resolve
+       -- the project's custom local deps (e.g. idris2-subcontract) from the fork
+       -- build-prefix, exactly like the YulInstrumentor codegen path. EVM_PATHCOV_PREFIX
+       -- (the fork build-prefix) is exported as IDRIS2_PREFIX so the fork compiler finds
+       -- its fork-built libs. IDRIS2_PREFIX and IDRIS2_PACKAGE_PATH must NOT both be set
+       -- (they conflict), so the prefix mode wins when present.
+       mPathcovPrefix <- getEnv "EVM_PATHCOV_PREFIX"
        pkgPath <- discoverPackagePath
-       let envPrefix = if null pkgPath then "" else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
+       let envPrefix = case mPathcovPrefix of
+                         Just p => "IDRIS2_PREFIX=\"" ++ p ++ "\" "
+                         Nothing => if null pkgPath then "" else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
        let cmd = "cd " ++ projectDir ++ " && "
               ++ envPrefix ++ idris2Cmd ++ " --dumppaths-json " ++ outPath ++ " --build " ++ ipkgName
               ++ " > " ++ logPath ++ " 2>&1"
@@ -383,7 +392,9 @@ obligationClassName ReachableObligation = "ReachableObligation"
 obligationClassName LogicallyUnreachable = "LogicallyUnreachable"
 obligationClassName UserAdmittedPartialGap = "UserAdmittedPartialGap"
 obligationClassName CompilerInsertedArtifact = "CompilerInsertedArtifact"
+obligationClassName ExternalEffectBoundary = "ExternalEffectBoundary"
 obligationClassName UnknownClassification = "UnknownClassification"
+obligationClassName StubbedReach = "StubbedReach"
 
 pathToFullJson : PathObligation -> String
 pathToFullJson path =
@@ -607,12 +618,20 @@ runPaths opts = do
                 (Nothing, Just _) => pure $ Left "--runtime-labels requires --runtime-trace for path mode"
                 (Nothing, Nothing) => pure $ Right []
           pure $ map (\hits => (content, hits)) hitsResult
+  -- HONEST DENOMINATOR: when the source was instrumented with the FORK-yul
+  -- (EVM_PATHCOV_YUL), every source CaseTree leaf carries a log1 marker and is
+  -- directly observable, so the released-yul "branch-label collapse" /
+  -- "constant-false" exclusions that previously hid real product branches
+  -- (Tally/Tokenomics/Members) MUST be suppressed — otherwise the denominator is
+  -- the narrow released-yul artifact, not the full source-branch set.
+  mHonest <- getEnv "EVM_PATHCOV_YUL"
+  let honestObservable = isJust mHonest
   case artifactsResult of
     Left err => do
       putStrLn $ "Error: " ++ err
       exitWith (ExitFailure 1)
     Right (content, hits) =>
-      case analyzePathCoverageFromContent defaultPathExclusions content hits of
+      case analyzePathCoverageFromContentMode honestObservable defaultPathExclusions content hits of
         Left err => do
           putStrLn $ "Error: " ++ err
           exitWith (ExitFailure 1)

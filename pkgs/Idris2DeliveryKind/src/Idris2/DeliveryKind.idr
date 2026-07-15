@@ -96,20 +96,20 @@ Eq DeliveryKind where
 ||| The COVERAGE family this delivery is measured under — the AXIS A → AXIS B map,
 ||| now landing on the typed `CoverageFamily` (not a string), so a TOTAL dispatch
 ||| over the result forces every family to declare its coverage story. A parity run
-||| keys on this: Android & iOS fold to `WebMVU` (the pure MVU layer, no forked
-||| compiler), CLI to `CoreLib`. Lossy by design (Web/Android/iOS → WebMVU), which is
-||| why it is SEPARATE from the lossless `deliveryTag`. The on-device `AndroidDevice`
-||| family is reached explicitly by the device runner, not via this default map (an
-||| Android delivery's DEFAULT measurement is the pure MVU layer). `integration` is
-||| NOT producible here — it is a coverage unit with no delivery.
+||| keys on this: iOS folds to `WebMVU` (the pure MVU layer under node, no forked
+||| compiler), CLI to `CoreLib`. **Android maps to `AndroidDevice`, NOT `WebMVU`**:
+||| only a real on-device run is honest Android coverage; re-running the MVU logic
+||| under node is a surrogate runtime, not the APK on a phone, so it would over-claim.
+||| Lossy where genuinely the same runtime (Web/iOS → WebMVU); Android is kept distinct
+||| precisely to refuse the node surrogate. `integration` is NOT producible here.
 public export
 coverageFamilyOf : DeliveryKind -> CoverageFamily
 coverageFamilyOf EVM          = EvmHash
 coverageFamilyOf (ICP _)      = DfxWasm
 coverageFamilyOf CLI          = CoreLib
 coverageFamilyOf Web          = WebMVU
-coverageFamilyOf Android      = WebMVU      -- MVU dumppaths path coverage over the pure layer
-coverageFamilyOf IOS          = WebMVU      -- same MVU layer as Android/Web → same coverage
+coverageFamilyOf Android      = AndroidDevice  -- ONLY real-device coverage is honest for Android (no node surrogate)
+coverageFamilyOf IOS          = WebMVU      -- iOS MVU layer measured under node (same as Web)
 coverageFamilyOf (Humanoid _) = Humanoid
 coverageFamilyOf Core         = CoreLib
 

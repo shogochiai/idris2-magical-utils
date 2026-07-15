@@ -93,86 +93,54 @@ isSingleConstructorDestructurePath path =
      path.terminalKind == "reached_clause"
   && maybe False isSingleConstructorDestructureLabel (lastBranchLabel path)
 
-isKnownConstantUnreachableEvmPath : PathObligation -> Bool
-isKnownConstantUnreachableEvmPath path =
-     isInfixOf "Tokenomics.IBCO.case block in calcTokensForEth" path.functionName
-  && lastBranchLabel path == Just "False"
-
-isKnownYulBranchLabelMismatch : PathObligation -> Bool
-isKnownYulBranchLabelMismatch path =
-     isTextDaoTallyOutcomeWrapper path
-  || isTokenomicsOutcomeWrapper path
-  || isTokenomicsFixedBlockCheckpointPath path
-  where
-    hasLabel : List String -> Bool
-    hasLabel labels = maybe False (\label => elem label labels) (lastBranchLabel path)
-
-    isTextDaoTallyOutcomeWrapper : PathObligation -> Bool
-    isTextDaoTallyOutcomeWrapper path =
-         (   isInfixOf "TextDAO.Functions.Tally.Tally.case block in tallyAndExecute" path.functionName
-          || isInfixOf "TextDAO.Functions.Tally.Tally.case block in case block in tallyAndExecute" path.functionName
-          || isInfixOf "TextDAO.Functions.Tally.Tally.case block in tally" path.functionName
-          || isInfixOf "TextDAO.Functions.Tally.Tally.case block in case block in tally" path.functionName
-          || isInfixOf "TextDAO.Functions.Tally.Tally.case block in tallyAndFinalize" path.functionName
-          || isInfixOf "TextDAO.Functions.Tally.Tally.case block in case block in tallyAndFinalize" path.functionName)
-      && hasLabel ["False", "Fail"]
-
-    isTokenomicsOutcomeWrapper : PathObligation -> Bool
-    isTokenomicsOutcomeWrapper path =
-         (   isInfixOf "Tokenomics.Token.case block in transferInternal" path.functionName
-          || isInfixOf "Tokenomics.Token.case block in case block in transferInternal" path.functionName
-          || isInfixOf "Tokenomics.Token.case block in transferFrom" path.functionName
-          || isInfixOf "Tokenomics.Token.case block in case block in transferFrom" path.functionName
-          || isInfixOf "Tokenomics.Token.case block in mint" path.functionName
-          || isInfixOf "Tokenomics.VotingEscrow.case block in initialize" path.functionName
-          || isInfixOf "Tokenomics.IBCO.case block in ibcoInitialize" path.functionName)
-      && hasLabel ["True", "False", "Fail"]
-
-    isTokenomicsFixedBlockCheckpointPath : PathObligation -> Bool
-    isTokenomicsFixedBlockCheckpointPath path =
-         isInfixOf "Tokenomics.VotingEscrow.case block" path.functionName
-      && isInfixOf "findCheckpoint" path.functionName
-      && hasLabel ["False"]
-
 shouldExcludePath : List ExclPattern -> PathObligation -> Bool
 shouldExcludePath patterns path =
      isExcluded path.functionName patterns
   || isNonProductEvmFunction path.functionName
   || isBareRecordProjectionPath path
   || isUninstrumentedStraightLinePath path
-  || isKnownConstantUnreachableEvmPath path
-  || isKnownYulBranchLabelMismatch path
 
-||| Classify an EVM exclusion into the shared ObligationClass taxonomy WITH a
-||| recorded reason, instead of silently deleting the path from the denominator.
-||| This is the anti-"hallucinated perfection" rule: every source path stays in
-||| the set with an honest classification (so denominator + excluded + unknown
-||| == total source paths), rather than vanishing and inflating coverage %.
-|||   - non-product (test/schema/storage), generated record projection,
-|||     uninstrumented straight-line, known Yul branch-label collapse
-|||       → CompilerInsertedArtifact (genuinely outside the product coverage model)
-|||   - known constant-false guard → LogicallyUnreachable
-||| Returns the target class + a human reason, or Nothing if the path is a
-||| normal product obligation (left as-is).
+||| Classify an EVM exclusion into the CANONICAL `ExclusionReason` taxonomy,
+||| instead of silently deleting the path from the denominator OR inventing an
+||| ad-hoc `(ObligationClass, String)`. This is the anti-"hallucinated perfection"
+||| rule: every source path stays in the set with an honest classification (so
+||| denominator + excluded + unknown == total source paths). The legitimate
+||| categories are enumerated ONCE in Coverage.Standardization.Types.ExclusionReason,
+||| so this classifier CANNOT express "exclude an observable product branch" — the
+||| type has no constructor for it.
+|||   - config/dependency exclusion, non-product (Tests/Storages/Schema/wrapper)
+|||       → NonProductModule
+|||   - standard library / prelude                  → StandardLibrary
+|||   - generated record projection (bare form)     → GeneratedProjection
+|||   - single-constructor destructure (irrefutable) → SingleCtorDestructure
+|||   - straight-line clause, no branch obligation  → StraightLineClause
+||| Returns the reason, or Nothing if the path is a normal product obligation.
+|||
+||| REMOVED (the narrow-denominator dishonesty the user caught): the former
+||| `isKnownYulBranchLabelMismatch` and `isKnownConstantUnreachableEvmPath`
+||| exclusions. Both were RELEASED-YUL-ERA observability proxies keyed on a
+||| function-name + branch-label heuristic, classifying REAL product branches
+||| (Tally/Vote/Members True/False/Fail, Tokenomics transfer/mint outcomes) as
+||| compiler artifacts so they vanished from the denominator. Under fork-yul
+||| source-level `log1` markers EVERY such branch carries its own marker and IS
+||| observable, so those paths return to the denominator as Reachable-or-Missing
+||| (honest: covered if driven, Missing if not yet). There is no honest
+||| "product branch we cannot observe" category — hence no ctor for it.
 export
-classifyEvmExclusion : List ExclPattern -> PathObligation -> Maybe (ObligationClass, String)
+classifyEvmExclusion : List ExclPattern -> PathObligation -> Maybe Types.ExclusionReason
 classifyEvmExclusion patterns path =
   if isExcluded path.functionName patterns
-    then Just (CompilerInsertedArtifact, "config/dependency exclusion")
+    then Just NonProductModule
   else if isNonProductEvmFunction path.functionName
-    then Just (CompilerInsertedArtifact, "non-product function (test/schema/storage/wrapper)")
+    then Just NonProductModule
   else if isStandardLibraryEvmFunction path.functionName
-    then Just (CompilerInsertedArtifact, "standard library / prelude")
-  else if isKnownConstantUnreachableEvmPath path
-    then Just (LogicallyUnreachable, "constant-false guard (logically unreachable)")
+    then Just StandardLibrary
   else if isBareRecordProjectionPath path
-    then Just (CompilerInsertedArtifact, "generated record projection")
-  else if isKnownYulBranchLabelMismatch path
-    then Just (CompilerInsertedArtifact, "Yul branch-label collapse (compiler artifact)")
+    then Just GeneratedProjection
   else if isSingleConstructorDestructurePath path
-    then Just (CompilerInsertedArtifact, "single-constructor destructure (irrefutable, not a branch)")
+    then Just SingleCtorDestructure
   else if isUninstrumentedStraightLinePath path
-    then Just (CompilerInsertedArtifact, "straight-line clause, no branch obligation")
+    then Just StraightLineClause
   else Nothing
 
 export
@@ -186,18 +154,19 @@ defaultPathExclusions = evmFullExclusions
 ||| ReachableObligation, so a re-parse of already-classified content (Main.idr's
 ||| observability classifier round-trip) never resets a non-Reachable class back
 ||| to Reachable.
+||| Reclassify excluded paths via the shared `reclassifyByClassifier`, applying the
+||| canonical `reasonClass` to the evm classifier's `ExclusionReason`. The `Bool`
+||| (formerly `honestObservable`, toggling the dishonest released-yul exclusions) is
+||| now a NO-OP: those exclusions were deleted, so honest and narrow modes coincide.
+||| The parameter is retained only so the Main.idr CLI surface is unchanged.
+export
+reclassifyPathObligationsMode : Bool -> List ExclPattern -> List PathObligation -> List PathObligation
+reclassifyPathObligationsMode _ patterns =
+  reclassifyByClassifier (classifyEvmExclusion patterns)
+
 export
 reclassifyPathObligations : List ExclPattern -> List PathObligation -> List PathObligation
-reclassifyPathObligations patterns = map reclassify
-  where
-    reclassify : PathObligation -> PathObligation
-    reclassify path =
-      case path.classification of
-        ReachableObligation =>
-          case classifyEvmExclusion patterns path of
-            Just (cls, _) => { classification := cls } path
-            Nothing       => path
-        _ => path
+reclassifyPathObligations = reclassifyPathObligationsMode False
 
 ||| Deprecated delete-filter; kept for callers that explicitly want the pruned
 ||| list. The coverage path uses reclassifyPathObligations (no silent deletion).
@@ -207,10 +176,14 @@ filterPathObligations patterns =
   filter (\path => not (shouldExcludePath patterns path))
 
 export
-parseProjectDumppathsJson : List ExclPattern -> String -> Either String (List PathObligation)
-parseProjectDumppathsJson patterns content = do
+parseProjectDumppathsJsonMode : Bool -> List ExclPattern -> String -> Either String (List PathObligation)
+parseProjectDumppathsJsonMode honestObservable patterns content = do
   paths <- parseDumppathsJson content
-  pure $ reclassifyPathObligations patterns paths
+  pure $ reclassifyPathObligationsMode honestObservable patterns paths
+
+export
+parseProjectDumppathsJson : List ExclPattern -> String -> Either String (List PathObligation)
+parseProjectDumppathsJson = parseProjectDumppathsJsonMode False
 
 export
 loadProjectDumppathsJson : String -> List ExclPattern -> IO (Either String (List PathObligation))
@@ -220,13 +193,21 @@ loadProjectDumppathsJson path patterns = do
   pure $ parseProjectDumppathsJson patterns content
 
 export
+analyzePathCoverageFromContentMode : Bool
+                                  -> List ExclPattern
+                                  -> String
+                                  -> List PathRuntimeHit
+                                  -> Either String PathCoverageResult
+analyzePathCoverageFromContentMode honestObservable patterns content hits = do
+  paths <- parseProjectDumppathsJsonMode honestObservable patterns content
+  pure $ buildPathCoverageResultFromHits paths hits
+
+export
 analyzePathCoverageFromContent : List ExclPattern
                               -> String
                               -> List PathRuntimeHit
                               -> Either String PathCoverageResult
-analyzePathCoverageFromContent patterns content hits = do
-  paths <- parseProjectDumppathsJson patterns content
-  pure $ buildPathCoverageResultFromHits paths hits
+analyzePathCoverageFromContent = analyzePathCoverageFromContentMode False
 
 export
 analyzePathCoverageFromFile : String

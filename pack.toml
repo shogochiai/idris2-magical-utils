@@ -3,6 +3,21 @@ type = "local"
 path = "pkgs/Idris2CoverageCore"
 ipkg = "idris2-coverage-core.ipkg"
 
+[custom.all.idris2playwright]
+type = "local"
+path = "pkgs/Idris2Playwright"
+ipkg = "idris2-playwright.ipkg"
+
+[custom.all.idris2-html-verifier]
+type = "local"
+path = "pkgs/Idris2HtmlVerifier"
+ipkg = "idris2-html-verifier.ipkg"
+
+[custom.all.idris2-html-verifier-tests]
+type = "local"
+path = "pkgs/Idris2HtmlVerifier"
+ipkg = "idris2-html-verifier-tests.ipkg"
+
 [custom.all.idris2-evm]
 type = "local"
 path = "pkgs/Idris2Evm"

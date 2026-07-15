@@ -1,0 +1,14 @@
+[custom.all.idris2playwright]
+type = "local"
+path = "../Idris2Playwright"
+ipkg = "idris2-playwright.ipkg"
+
+[custom.all.idris2-html-verifier]
+type = "local"
+path = "."
+ipkg = "idris2-html-verifier.ipkg"
+
+[custom.all.idris2-html-verifier-tests]
+type = "local"
+path = "."
+ipkg = "idris2-html-verifier-tests.ipkg"

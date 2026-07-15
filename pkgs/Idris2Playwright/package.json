@@ -1,0 +1,14 @@
+{
+  "name": "idris2-playwright",
+  "version": "0.1.0",
+  "description": "Minimal Playwright bindings for Idris2",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  },
+  "keywords": ["idris2", "playwright", "coverage", "testing"],
+  "license": "MIT"
+}

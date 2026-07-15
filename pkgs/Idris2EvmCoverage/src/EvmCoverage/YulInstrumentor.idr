@@ -1113,6 +1113,147 @@ runDispatchSelectors binPath traceOutput selectors = do
       _ <- system cmd
       pure ()
     _ => for_ flagged runOne
+  -- STATEFUL DRIVING (covers the state/arg-dependent True/Ok sides that a fresh
+  -- all-zero single call can never reach, e.g. checkMember True, requireMemberProof
+  -- Just, propose Ok, vote Ok, finalTally). The per-selector runs above each start
+  -- from EMPTY state, so they only ever exercise the "not registered / nothing
+  -- exists yet" guard (False/Fail/Nothing). To reach the True side we run a SINGLE
+  -- persistent sequence (revm --calls-file uses transact_commit, so state from one
+  -- call is visible to the next):
+  --   * arg0 of every call is the revm CALLER address word (0x20*20). Any
+  --     `addMember(address,...)`-style registration thus registers the caller, and
+  --     every later member/owner-gated call made BY that caller then passes its
+  --     gate (the handler reads `caller`, which is the same 0x20*20 address).
+  --   * we run each selector with a few representative arg vectors (caller-addr in
+  --     arg0, then 0/1/2 small ids) so index/id-dependent branches (getMember(0),
+  --     tally(0), rcvPoints 0/1/2) are reached.
+  -- All markers fired across the whole sequence are appended to the aggregate trace.
+  let callerWord : String   -- 32-byte word: 12 zero bytes ++ the revm CALLER
+      -- address, which is the byte 0x20 repeated 20 times => hex "20" x 20.
+      -- (NOT 40 '2' chars — that would be 0x2222..22, a different address that no
+      -- handler's `caller` ever equals, so member/owner gates would never pass.)
+      callerWord = pack (replicate 24 '0') ++ concat (replicate 20 "20")
+  let zeroWord : String
+      zeroWord = pack (replicate 64 '0')
+  let smallWord : Char -> String
+      smallWord c = pack (replicate 63 '0') ++ pack [c]
+  let oneWord : String
+      oneWord = smallWord '1'
+  -- A "stranger" address word: 0x11 repeated 20 times. It is NEVER the revm CALLER
+  -- (0x20*20) and is never registered by a callerWord-arg0 registration, so any
+  -- member/owner lookup for THIS address takes the NOT-found side: checkMemberLoop's
+  -- `memberAddr == target` False (mismatch → keep looping) and its `idx >= count`
+  -- True (loop exhausted → return False), and requireMember's Fail / checkMember's
+  -- Nothing. These not-member branches are unreachable with caller-arg0 alone (after
+  -- registration every lookup of the caller matches at idx 0), which is exactly the
+  -- gap that left Members/AccessControl member-gate False sides Missing.
+  let strangerWord : String
+      strangerWord = pack (replicate 24 '0') ++ concat (replicate 20 "11")
+  -- A large value word (2^256-1). Used in the value/duration positions so that
+  -- threshold comparisons take their OTHER side: setExpiryDuration(huge) makes a
+  -- later proposal's `expiration = createdAt + huge` satisfy `now < expiration`
+  -- (checkNotExpired Just / not-expired side); a large rep/approvedHeader value
+  -- flips `rep > threshold` / `approvedHeader > 0` (checkRep Just, checkApproved
+  -- Just). The all-zero/small vectors already cover the False/Nothing sides; this
+  -- bigWord vector covers the True/Just sides that need a value above a threshold.
+  let bigWord : String
+      bigWord = pack (replicate 64 'f')
+  -- For each selector emit several stateful calldatas with distinct argument
+  -- vectors. The Decoder monad threads the offset, so multi-arg handlers now read
+  -- each word distinctly; giving them DISTINCT small ids (0/1/2/3) lets id- and
+  -- index-dependent branches (header/command ids in vote, getMember/tally indices,
+  -- rcvPoints 0/1/2) be reached. arg0 = caller addr word so membership/owner gates
+  -- pass once a registration selector has run earlier in the persistent sequence.
+  let argsFor : String -> List String
+      argsFor sel =
+        [ sel ++ callerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+        , sel ++ zeroWord    ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord
+        , sel ++ oneWord     ++ smallWord '1' ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+        -- arg0 = stranger addr → drives the NOT-member side of member/owner gates.
+        , sel ++ strangerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+        -- caller arg0 + BIG values in the value positions → drives the threshold-
+        -- exceeded True/Just side (checkNotExpired not-expired, checkRep, checkApproved).
+        , sel ++ callerWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord ++ bigWord
+        -- arg0 = small pid 0 → pid-keyed handlers (tally/tallyAndFinalize/vote) act on
+        -- proposal 0 (the one Phase A/B create), reaching pid-dependent tally paths
+        -- like finalTally→findTopScorer (empty scoremap [] on a proposal with no votes).
+        , sel ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord
+        , sel ++ oneWord  ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord ++ zeroWord
+        ]
+  -- A stranger-address vector for a single selector (used in the pre-registration
+  -- pass, where even the caller is not yet a member → count==0 exhaustion branch).
+  let strangerVec : String -> String
+      strangerVec sel = sel ++ strangerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+  -- Build the calls-file. We do NOT know which selector is the registration
+  -- (addMember-style) one, and the selectors run in an arbitrary (sorted) order,
+  -- so a single pass may run a gated selector (propose/vote) BEFORE the
+  -- registration selector and miss the member-gated True side. To make ordering
+  -- irrelevant we run the whole selector set MULTIPLE times: by the 2nd/3rd pass
+  -- any registration call has already committed, so every later member-gated call
+  -- (made by the same caller) takes its True/Ok branch. Each pass also re-runs the
+  -- varied arg vectors so accumulated state (proposals/headers) deepens.
+  let callerVec : String -> String
+      callerVec sel = sel ++ callerWord ++ oneWord ++ smallWord '2' ++ smallWord '3' ++ smallWord '1' ++ smallWord '2' ++ smallWord '3'
+  let onePass : List String
+      onePass = concatMap argsFor selectors
+  let allCalls : List String
+      allCalls =
+        -- Phase 0 (FRESH state, BEFORE any registration): run every selector once
+        -- with the caller arg and once with the stranger arg. With zero members yet,
+        -- member-gated lookups take the count==0 exhaustion / not-found side
+        -- (checkMemberLoop idx>=count True → False; requireMember Fail; checkMember
+        -- Nothing). This is the member-gate FALSE side that Phase A/B (which register
+        -- first) can never reach. MUST come before Phase A.
+        map callerVec selectors ++ map strangerVec selectors
+        -- Phase A: register membership up-front (every selector with caller arg0,
+        -- run twice so addMember(caller) definitely precedes the gated selectors).
+        ++ map callerVec selectors ++ map callerVec selectors
+        -- Phase B: three full varied passes (state deepens; member-gated True sides
+        -- now reachable since the caller is registered). argsFor now also includes a
+        -- stranger-arg0 vector, so the mismatch (memberAddr != target) branch fires
+        -- even with ≥1 member registered (lookup of a non-member among members).
+        ++ onePass ++ onePass ++ onePass
+  -- Phase C (OPTIONAL, project-supplied happy-path): the generic vectors above are
+  -- selector-blind, so they cannot thread a contract's multi-step happy-path whose
+  -- later calls depend on EXACT argument values produced by earlier ones (e.g. a vote
+  -- that must rank only the header/command ids a fresh proposal actually has, so that a
+  -- subsequent tally produces a winner and execute's requireApproved/requireNotExecuted
+  -- become reachable). A project can supply that exact, ordered call list as a file of
+  -- one calldata hex per line via EVM_COV_HAPPYPATH; its calls run AFTER Phase B against
+  -- the accumulated (member-registered, proposal-bearing) state. Absent/unreadable env
+  -- → no effect (the generic phases are unchanged).
+  mHappyPath <- getEnv "EVM_COV_HAPPYPATH"
+  happyCalls <- case mHappyPath of
+                  Nothing => pure []
+                  Just hp => do
+                    Right content <- readFile hp
+                      | Left _ => pure []
+                    pure (filter (not . null) (map trim (lines content)))
+  let callsFile = "/tmp/dispatch-stateful-calls.txt"
+  -- The GENERIC phases run first against a shared DB. The project-supplied
+  -- happy-path, however, must run from a FRESH state in its OWN revm invocation:
+  -- otherwise its proposal id is N (the generic phases already created 0..N-1),
+  -- while its vote/tally/execute calldata targets pid 0 — so the votes/reps it
+  -- writes never align with the proposal it tallies, finalTally finds no winner,
+  -- and execute's requireApproved-gated arms stay unreachable. Running happyCalls
+  -- separately makes pid 0 the proposal the happy-path itself creates, so the
+  -- full propose→vote→tally(approve)→execute chain (and its guard arms) is reached.
+  _ <- writeFile callsFile (unlines allCalls)
+  let seqTrace = "/tmp/dispatch-stateful-trace.csv"
+  let seqCmd = runner ++ " --calls-file " ++ callsFile
+            ++ " --gas 400000000 " ++ runtimePath
+            ++ " > " ++ seqTrace ++ " 2>/dev/null"
+  _ <- system seqCmd
+  _ <- system ("cat " ++ seqTrace ++ " >> " ++ traceOutput ++ " 2>/dev/null")
+  -- Second, independent run for the happy-path (fresh DB → pid 0 is its own).
+  let hpCallsFile = "/tmp/dispatch-happypath-calls.txt"
+  _ <- writeFile hpCallsFile (unlines happyCalls)
+  let hpTrace = "/tmp/dispatch-happypath-trace.csv"
+  let hpCmd = runner ++ " --calls-file " ++ hpCallsFile
+           ++ " --gas 400000000 " ++ runtimePath
+           ++ " > " ++ hpTrace ++ " 2>/dev/null"
+  _ <- if null happyCalls then pure 0 else system hpCmd
+  _ <- if null happyCalls then pure 0 else system ("cat " ++ hpTrace ++ " >> " ++ traceOutput ++ " 2>/dev/null")
   Right _ <- readFile traceOutput
     | Left _ => pure $ Left "Cannot read aggregated dispatch trace"
   pure $ Right traceOutput

@@ -6,6 +6,8 @@ module Tests.AllTests
 import Data.List
 
 import Coverage.Core.DumppathsJson
+import Coverage.Boundary.Canonical
+import Idris2.CoverageFamily
 import Coverage.Core.PathCoverage
 import Coverage.Core.Backend
 import Coverage.Core.Exclusions
@@ -394,6 +396,63 @@ test_PATH_001 () =
                    && p.classification == UserAdmittedPartialGap
                    && p.terminalKind == "partial_gap") paths
 
+||| A function the compiler tagged effect_boundary=ProcessSpawn (reaches popen2),
+||| plus a PureComputation control. The consumer must reclassify the ProcessSpawn
+||| ReachableObligation to ExternalEffectBoundary (a RECOGNISED, non-blocking
+||| exclusion — the harness cannot spawn the process) while leaving the pure one in
+||| the denominator — fact-grounded, not an observer judgment. Note: only an
+||| UNRECOGNISED foreign hole (UnclassifiedForeign) becomes UnknownClassification.
+boundaryDumppathsJson : String
+boundaryDumppathsJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"App.spawnIt\",\"effect_boundary\":\"ProcessSpawn\",\"paths\":[{\"path_id\":\"App.spawnIt#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"App.pureCalc\",\"effect_boundary\":\"PureComputation\",\"paths\":[{\"path_id\":\"App.pureCalc#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+
+||| The canonical per-family boundary policy: the SAME concept differs by backend
+||| and runner. core ProcessSpawn is harness-unexecutable (Chez can't spawn) →
+||| excludable; evm's call boundary is RUNNABLE under revm → NOT excludable (stays
+||| in the denominator); web's process hole matches a DIFFERENT cc (child_process,
+||| not popen2). Pluggability: forks add their own EffectBoundarySpec for new
+||| backends; this table is the canonical Totality-anchored set.
+test_BOUNDARY_PERFAMILY_001 : () -> Bool
+test_BOUNDARY_PERFAMILY_001 () =
+  let coreSpecs = boundarySpecsFor CoreLib
+      evmSpecs  = boundarySpecsFor EvmHash
+      webSpecs  = boundarySpecsFor WebMVU
+      -- core: ProcessSpawn present AND excludable
+      coreProcExcl = any (\s => s.boundary == ProcessSpawn && s.excludable) coreSpecs
+      -- evm: has a boundary that is NOT excludable (revm runs it)
+      evmNotExcl   = any (\s => not s.excludable) evmSpecs
+      -- web: its process hole matches child_process, NOT popen2 (backend-specific cc)
+      webChildProc = any (\s => elem "child_process" s.ccSubstrings) webSpecs
+      coreNotChild = not (any (\s => elem "child_process" s.ccSubstrings) coreSpecs)
+  in coreProcExcl && evmNotExcl && webChildProc && coreNotChild
+
+test_PATH_BOUNDARY_001 : () -> Bool
+test_PATH_BOUNDARY_001 () =
+  case parseDumppathsJson boundaryDumppathsJson of
+    Left _ => False
+    Right paths =>
+      any (\p => p.pathId == "App.spawnIt#p0"
+              && p.classification == ExternalEffectBoundary) paths
+        && any (\p => p.pathId == "App.pureCalc#p0"
+                   && p.classification == ReachableObligation) paths
+
+||| Soundness guarantee: an UNRECOGNISED foreign hole (effect_boundary=
+||| UnclassifiedForeign(<cc>)) must STAY UnknownClassification — it blocks the claim
+||| so a new external call is triaged onto the benign or boundary list, never
+||| silently counted as pure. (Recognised holes get ExternalEffectBoundary above;
+||| this is the OTHER side of that split.)
+unclassifiedBoundaryJson : String
+unclassifiedBoundaryJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"App.mystery\",\"effect_boundary\":\"UnclassifiedForeign(C:some_new_prim, libwhatever)\",\"paths\":[{\"path_id\":\"App.mystery#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+
+test_PATH_BOUNDARY_002 : () -> Bool
+test_PATH_BOUNDARY_002 () =
+  case parseDumppathsJson unclassifiedBoundaryJson of
+    Left _ => False
+    Right paths =>
+      any (\p => p.pathId == "App.mystery#p0"
+              && p.classification == UnknownClassification) paths
+
 test_PATH_002 : () -> Bool
 test_PATH_002 () =
   case parseDumppathsJson sampleDumppathsJson of
@@ -418,6 +477,25 @@ test_PATH_003 () =
           Nothing
           1
       result = buildPathCoverageResult [unknownPath] []
+  in not result.claimAdmissible
+
+||| STUBBED_001: a StubbedReach obligation (a path whose only hit was a stub/spy
+||| read) blocks the coverage claim, exactly like UnknownClassification — counting
+||| a meaningless hit as covered is the covering-direction denominator trick.
+test_PATH_STUBBED_001 : () -> Bool
+test_PATH_STUBBED_001 () =
+  let stubbedPath =
+        MkPathObligation
+          "Main.stubbed#p0"
+          "Main.stubbed"
+          "Main"
+          StubbedReach
+          "stubbed"
+          Nothing
+          [MkPathStep "Main.stubbed#0:0" 0 "stubbed" Nothing (Just "default") Nothing]
+          Nothing
+          1
+      result = buildPathCoverageResult [stubbedPath] []
   in not result.claimAdmissible
      && result.measurement.unknownIds == ["Main.unknown#p0"]
 
@@ -561,8 +639,12 @@ allTests =
 
   -- Path coverage
   , test "PATH_001" "parse dumppaths json" test_PATH_001
+  , test "PATH_BOUNDARY_001" "effect_boundary reclassifies ProcessSpawn to ExternalEffectBoundary, keeps Pure" test_PATH_BOUNDARY_001
+  , test "PATH_BOUNDARY_002" "unrecognised UnclassifiedForeign boundary stays UnknownClassification (soundness)" test_PATH_BOUNDARY_002
+  , test "BOUNDARY_PERFAMILY_001" "canonical boundary policy differs per family (core vs evm vs web)" test_BOUNDARY_PERFAMILY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003
+  , test "PATH_STUBBED_001" "stubbed (stub/spy) path blocks admissible claim" test_PATH_STUBBED_001
   , test "PATH_004" "path obligations use path granularity" test_PATH_004
   -- Backend (unified abstraction)
   , test "BACKEND_001" "coveredByKey string-identity join" test_BACKEND_001

@@ -10,14 +10,15 @@ tagRoundTrips : Bool
 tagRoundTrips =
   all (\d => deliveryKindFromString (deliveryTag d) == d) allDeliveryKinds
 
--- coverage maps preserved (android→web, cli→core), delivery tags stay distinct.
--- coverageFamilyOf now lands on the typed CoverageFamily; coverageFamilyTagOf is the
--- string projection that the old callers used.
+-- coverage maps: android→android-device (real-device ONLY, no node surrogate),
+-- iOS→web, cli→core; delivery tags stay distinct. coverageFamilyOf lands on the typed
+-- CoverageFamily; coverageFamilyTagOf is the string projection the old callers used.
 coverageMapsPreserved : Bool
 coverageMapsPreserved =
-  coverageFamilyOf Android == WebMVU
+  coverageFamilyOf Android == AndroidDevice
+  && coverageFamilyOf IOS == WebMVU
   && coverageFamilyOf CLI == CoreLib
-  && coverageFamilyTagOf Android == "web"
+  && coverageFamilyTagOf Android == "android-device"
   && coverageFamilyTagOf CLI == "core"
   && deliveryTag Android == "android"
   && deliveryTag CLI == "cli"

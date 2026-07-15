@@ -54,11 +54,30 @@ const CALLER: [u8; 20] = [0x20; 20];
 #[derive(Default)]
 struct LogCapture {
     logs: Vec<Log>,
+    /// When REVM_TRACE_REVERT is set: the PC of every REVERT/INVALID opcode that
+    /// executes, in order. The LAST entry of a reverting call is the revert site.
+    /// Lets us locate WHICH revert in the dispatched handler fired (e.g. the
+    /// Fail-arm REVERT of a guard vs a deeper one) instead of guessing.
+    revert_pcs: Vec<usize>,
+    /// Whether REVM_TRACE_REVERT is active (read once).
+    trace_revert: bool,
 }
 
 impl<DB: Database> Inspector<DB> for LogCapture {
     fn log(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>, log: &Log) {
         self.logs.push(log.clone());
+    }
+
+    fn step(&mut self, interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
+        if !self.trace_revert {
+            return;
+        }
+        // current_opcode() is the byte at the program counter about to execute.
+        let op = interp.current_opcode();
+        // 0xFD REVERT, 0xFE INVALID — both abort the frame.
+        if op == 0xFD || op == 0xFE {
+            self.revert_pcs.push(interp.program_counter());
+        }
     }
 }
 
@@ -138,7 +157,14 @@ fn load_calldata(args: &Args) -> Result<Vec<u8>, String> {
 
 /// Parse the sequence of calldata from --calls-file (one hex line each).
 /// Blank lines and `#` comments are skipped. Returns Ok(None) when no file.
-fn load_calls(args: &Args) -> Result<Option<Vec<Vec<u8>>>, String> {
+/// Each call is (optional per-call caller, calldata). A line may carry an
+/// optional `caller:0x<40hex>|` prefix to override the default CALLER for that
+/// one call — this lets a sequence include a genuine NON-MEMBER call (needed to
+/// reach a require*-style guard's failing arm) without faking it. Absent prefix
+/// → default CALLER.
+type Call = (Option<[u8; 20]>, Vec<u8>);
+
+fn load_calls(args: &Args) -> Result<Option<Vec<Call>>, String> {
     let path = match &args.calls_file {
         None => return Ok(None),
         Some(p) => p,
@@ -151,9 +177,26 @@ fn load_calls(args: &Args) -> Result<Option<Vec<Vec<u8>>>, String> {
         if t.is_empty() || t.starts_with('#') {
             continue;
         }
-        let stripped = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
-        let bytes = hex::decode(stripped).map_err(|e| format!("Invalid calls hex '{t}': {e}"))?;
-        calls.push(bytes);
+        let (caller_opt, data_str) = if let Some(rest) = t.strip_prefix("caller:") {
+            match rest.split_once('|') {
+                Some((addr_hex, data)) => {
+                    let ah = addr_hex.strip_prefix("0x").or_else(|| addr_hex.strip_prefix("0X")).unwrap_or(addr_hex);
+                    let ab = hex::decode(ah).map_err(|e| format!("Invalid caller hex '{addr_hex}': {e}"))?;
+                    if ab.len() != 20 {
+                        return Err(format!("caller must be 20 bytes, got {}", ab.len()));
+                    }
+                    let mut a = [0u8; 20];
+                    a.copy_from_slice(&ab);
+                    (Some(a), data)
+                }
+                None => return Err(format!("caller: prefix needs '|' separator: '{t}'")),
+            }
+        } else {
+            (None, t)
+        };
+        let stripped = data_str.strip_prefix("0x").or_else(|| data_str.strip_prefix("0X")).unwrap_or(data_str);
+        let bytes = hex::decode(stripped).map_err(|e| format!("Invalid calls hex '{data_str}': {e}"))?;
+        calls.push((caller_opt, bytes));
     }
     Ok(Some(calls))
 }
@@ -228,7 +271,10 @@ fn main() {
 
     let mut evm = Evm::builder()
         .with_db(db)
-        .with_external_context(LogCapture::default())
+        .with_external_context(LogCapture {
+            trace_revert: std::env::var("REVM_TRACE_REVERT").is_ok(),
+            ..Default::default()
+        })
         .append_handler_register(inspector_handle_register)
         .modify_tx_env(|tx| {
             tx.caller = caller;
@@ -253,13 +299,117 @@ fn main() {
         // sequence; we print the aggregate at the end.
         Some(seq) => {
             let mut last: Option<ExecutionResult> = None;
-            for data in &seq {
+            // Optional per-call block.timestamp advance (REVM_TIME_STEP seconds).
+            // Some flows need time to pass BETWEEN calls within one sequence: e.g. a
+            // proposal must be voted on while NOT expired, then tallied AFTER it expires
+            // (finalTally only approves an expired proposal). With a constant timestamp
+            // that is impossible. Advancing the block timestamp per call lets the
+            // sequence simulate elapsed time, making the vote→(expire)→tally→execute
+            // approval path reachable. Default 0 (unchanged behaviour) when unset.
+            let time_step: u64 = std::env::var("REVM_TIME_STEP")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            // Per-caller nonce: each distinct caller address has its own nonce
+            // sequence, so an injected non-member call (different caller) doesn't
+            // desync the default caller's nonce.
+            use std::collections::HashMap;
+            let mut nonces: HashMap<[u8; 20], u64> = HashMap::new();
+            let default_caller: [u8; 20] = caller.into();
+            // Cursor into the accumulated marker log, advanced per call so we can
+            // print only the markers that fired during the current call.
+            let mut percall_marker_cursor: usize = 0;
+            // Same, for revert-PC traces (REVM_TRACE_REVERT).
+            let mut percall_revert_cursor: usize = 0;
+            for (ci, (caller_opt, data)) in seq.iter().enumerate() {
                 evm.tx_mut().data = Bytes::from(data.clone());
+                let this_caller = caller_opt.unwrap_or(default_caller);
+                evm.tx_mut().caller = Address::from(this_caller);
+                // Advance the per-caller nonce to match committed account state,
+                // otherwise revm rejects calls after the first with a nonce
+                // mismatch (so addMember's sstore never commits and member-gated
+                // True branches stay unreachable).
+                let n = nonces.entry(this_caller).or_insert(0);
+                evm.tx_mut().nonce = Some(*n);
+                *n += 1;
+                let _ = ci;
+                if time_step > 0 {
+                    evm.block_mut().timestamp = evm.block_mut().timestamp
+                        .saturating_add(U256::from(time_step));
+                }
+                if std::env::var("REVM_DEBUG").is_ok() {
+                    eprintln!("[call {ci}] ts={}", evm.block_mut().timestamp);
+                }
                 match evm.transact_commit() {
-                    Ok(r) => last = Some(r),
+                    Ok(r) => {
+                        if std::env::var("REVM_DEBUG").is_ok() {
+                            match &r {
+                                ExecutionResult::Success { output, .. } => {
+                                    let ob = match output { Output::Call(b) => b.as_ref(), Output::Create(b, _) => b.as_ref() };
+                                    eprintln!("[call {ci}] SUCCESS out=0x{}", hex::encode(ob));
+                                }
+                                ExecutionResult::Revert { output, .. } => eprintln!("[call {ci}] REVERT out=0x{}", hex::encode(output.as_ref())),
+                                ExecutionResult::Halt { reason, .. } => eprintln!("[call {ci}] HALT {reason:?}"),
+                            }
+                        }
+                        last = Some(r);
+                    }
                     Err(_e) => {
-                        // Environment error on one call: keep going; markers from
-                        // earlier calls are still captured.
+                        if std::env::var("REVM_DEBUG").is_ok() {
+                            eprintln!("[call {ci}] ENV-ERR {_e:?}");
+                        }
+                    }
+                }
+                // Per-call path-marker topics. The inspector captures every
+                // log1(0,0,<path-id>) marker AS IT EXECUTES (before any revert
+                // rolls it back), accumulating into context.external.logs. Print
+                // the marker topics that fired DURING this call (the slice past
+                // the previous call's end) so a reverting handler still reveals
+                // exactly how far its control flow got — e.g. whether
+                // requireRepProof's Ok-marker fired (rep passed, fail is later)
+                // or only its Fail-marker fired. This is the observable signal
+                // that replaces guessing which guard a revert came from.
+                if std::env::var("REVM_PERCALL_MARKERS").is_ok() {
+                    let total = evm.context.external.logs.len();
+                    let start = percall_marker_cursor;
+                    eprintln!("[call {ci}] markers this call: {}", total - start);
+                    for lg in &evm.context.external.logs[start..total] {
+                        for t in lg.topics() {
+                            eprintln!("    marker 0x{}", hex::encode(t.as_slice()));
+                        }
+                    }
+                    percall_marker_cursor = total;
+                }
+                // Per-call REVERT/INVALID opcode PCs. The LAST one is where the
+                // dispatched handler aborted — pinpointing which revert site
+                // (which guard's Fail-arm, or a deeper one) fired.
+                if std::env::var("REVM_TRACE_REVERT").is_ok() {
+                    let total = evm.context.external.revert_pcs.len();
+                    let start = percall_revert_cursor;
+                    let pcs = &evm.context.external.revert_pcs[start..total];
+                    if let Some(last_pc) = pcs.last() {
+                        eprintln!(
+                            "[call {ci}] revert/invalid opcodes: {} (last PC = {} / 0x{:x})",
+                            pcs.len(), last_pc, last_pc
+                        );
+                    } else {
+                        eprintln!("[call {ci}] revert/invalid opcodes: 0 (no abort)");
+                    }
+                    percall_revert_cursor = total;
+                }
+                if std::env::var("REVM_DUMP_STORAGE").is_ok() {
+                    let callee_addr = Address::from(CALLEE);
+                    if let Some(acc) = evm.context.evm.db.accounts.get(&callee_addr) {
+                        let mut n = 0;
+                        let mut slots: Vec<(U256, U256)> = acc.storage.iter().map(|(k, v)| (*k, *v)).collect();
+                        slots.sort_by_key(|(k, _)| *k);
+                        for (k, v) in &slots {
+                            if *v != U256::ZERO {
+                                n += 1;
+                                eprintln!("    slot 0x{k:x} = 0x{v:x}");
+                            }
+                        }
+                        eprintln!("[call {ci}] non-zero storage slots: {n}");
                     }
                 }
             }
@@ -308,9 +458,14 @@ fn print_trace_with_logs(result: Option<&ExecutionResult>, logs: &[Log]) {
         None => {}
         Some(ExecutionResult::Success { gas_used, output, .. }) => {
             println!("Result: SUCCESS (gas used: {gas_used})");
-            if let Output::Call(bytes) = output {
-                // coverage parser ignores return data; omitting keeps parity
-                let _ = bytes;
+            // Coverage parsing ignores return data (kept off by default for parity
+            // with idris2-evm-run), but a CONFORMANCE check needs the actual RETURN
+            // value to assert revm-run computes the right answer. REVM_SHOW_RETURN
+            // surfaces it on stdout without disturbing the default coverage output.
+            if std::env::var("REVM_SHOW_RETURN").is_ok() {
+                if let Output::Call(bytes) = output {
+                    println!("Return: 0x{}", hex::encode(bytes.as_ref()));
+                }
             }
         }
         Some(ExecutionResult::Revert { gas_used, .. }) => {
