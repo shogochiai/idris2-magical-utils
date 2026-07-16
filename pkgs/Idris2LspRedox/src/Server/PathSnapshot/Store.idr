@@ -383,6 +383,14 @@ computeDiffJSON oldPayload newPayload =
           , ("fallbackFacts", factsObject (mapPairs fallbackMap))
           , ("impactDirect", directImpactJSON)
           , ("impactClosed", closedImpactJSON)
+          -- DRIFT vs GAP split (Redox: drift = a path that DISAPPEARED, only
+          -- observable with the retained before-snapshot; gap = a path present in
+          -- the after side, which any reader of the current tree can notice). The
+          -- caller re-equilibrates test/spec/docs to a vanished path (drift) vs
+          -- fills a spec/test/doc for a new-or-changed path (gap). specId stays
+          -- opaque — this only groups the SAME specs the diff already computed.
+          , ("impactDrift", specsArray (specsOfFacts (mapValues removedPairs)))
+          , ("impactGap", specsArray (specsOfFacts (mapValues addedPairs ++ mapValues modifiedAfterPairs)))
           , ("pathImpactDirect", directImpactJSON)
           , ("pathImpactClosed", closedImpactJSON)
           , ("pathImpactDigest", JString impactDigest)
