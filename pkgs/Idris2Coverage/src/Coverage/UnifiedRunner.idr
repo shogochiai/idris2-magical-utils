@@ -1538,6 +1538,46 @@ parsePathHitLineLocal line =
 intraSliceLimit : Nat
 intraSliceLimit = 100
 
+||| Free system memory in MiB, best-effort (Nothing if it can't be read). macOS:
+||| `vm_stat` free+inactive pages × page size. Linux: /proc/meminfo MemAvailable.
+||| Used ONLY to auto-shrink the slice size on a low-memory host; a read failure
+||| falls back to the fixed default (never blocks a run).
+freeMemMiB : IO (Maybe Nat)
+freeMemMiB = do
+  let out = "/tmp/idris2cov-freemem.txt"
+  -- macOS: (free+inactive) pages * 4096 / 1MiB. Linux: MemAvailable kB / 1024.
+  -- One portable pipeline; whichever branch the host supports writes the MiB int.
+  _ <- system $
+    "{ if command -v vm_stat >/dev/null 2>&1; then "
+      ++ "vm_stat | awk '/Pages free/{f=$3} /Pages inactive/{i=$3} "
+      ++ "END{gsub(/\\./,\"\",f); gsub(/\\./,\"\",i); print int((f+i)*4096/1048576)}'; "
+    ++ "elif [ -r /proc/meminfo ]; then "
+      ++ "awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; "
+    ++ "else echo ''; fi; } > " ++ out ++ " 2>/dev/null"
+  r <- readFile out
+  pure $ case r of
+    Right s => parsePositive {a = Nat} (trim s)
+    Left _  => Nothing
+
+||| The per-slice test window size, resolved at run time so a caller can control it
+||| and a low-memory host is never overrun:
+|||   1. IDRIS2COV_SLICE_LIMIT (explicit override — a tool/LUCICONF sets this) wins.
+|||   2. else AUTO from free memory: each slice builds+runs one chunk's transitive
+|||      closure, so on a tight host a big slice can OOM. Shrink the window when free
+|||      memory is low (<1GiB → 25, <2GiB → 50, else the 100 default). A read failure
+|||      keeps the default (no worse than before this change).
+||| Clamped to >=1 so a bogus 0 can't stall the walk.
+resolveSliceLimit : IO Nat
+resolveSliceLimit = do
+  ov <- getEnv "IDRIS2COV_SLICE_LIMIT"
+  case ov >>= (parsePositive {a = Nat}) . trim of
+    Just n  => pure (if n < 1 then 1 else n)
+    Nothing => do
+      mfree <- freeMemMiB
+      pure $ case mfree of
+        Just mb => if mb < 1024 then 25 else if mb < 2048 then 50 else intraSliceLimit
+        Nothing => intraSliceLimit
+
 ||| Safety ceiling on the offset walk (slices), so a runner that neither honours
 ||| nor signals end can't loop forever. 200 slices × 100 = 20k tests.
 intraSliceMaxSlices : Nat
@@ -1578,7 +1618,14 @@ parseResultsPF out =
 |||   * the offset walk is bounded by intraSliceMaxSlices.
 runExeSlices : (projectDir : String) -> (relExecPath : String) -> (pathHitsPath : String)
             -> IO (List PathRuntimeHit)
-runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceMaxSlices
+runExeSlices projectDir relExecPath pathHitsPath = do
+  -- Resolve the per-slice window ONCE (explicit IDRIS2COV_SLICE_LIMIT, else auto
+  -- from free memory). Threaded into `go` so every slice uses the same value.
+  sliceLimit <- resolveSliceLimit
+  when (sliceLimit /= intraSliceLimit) $
+    putStrLn ("    [slice] per-slice test window = " ++ show sliceLimit
+              ++ " (default " ++ show intraSliceLimit ++ "; set IDRIS2COV_SLICE_LIMIT to override)")
+  go sliceLimit 0 0 Nothing [] intraSliceMaxSlices
   where
     -- Env-gated per-slice trace. Set IDRIS2COV_SLICE_DEBUG=1 to diagnose a
     -- non-deterministic numerator: prints offset, exit code, parsed (passed,
@@ -1591,10 +1638,11 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
         Just v => if trim v == "" || trim v == "0" then pure () else putStrLn ("    [slice] " ++ msg)
         Nothing => pure ()
 
-    -- offset, sliceIdx, firstCount (passed+failed of slice 0), accHits, fuel
-    go : Nat -> Nat -> Maybe Nat -> List PathRuntimeHit -> Nat -> IO (List PathRuntimeHit)
-    go _ _ _ acc Z = pure acc
-    go offset idx firstCount acc (S fuel) = do
+    -- sliceLimit (resolved once), offset, sliceIdx, firstCount (passed+failed of
+    -- slice 0), accHits, fuel
+    go : Nat -> Nat -> Nat -> Maybe Nat -> List PathRuntimeHit -> Nat -> IO (List PathRuntimeHit)
+    go _ _ _ _ acc Z = pure acc
+    go sliceLimit offset idx firstCount acc (S fuel) = do
       removeFileIfExists pathHitsPath
       let outPath = pathHitsPath ++ ".out"
       -- Per-slice timeout + stdin from /dev/null. A test in some window can block
@@ -1608,7 +1656,7 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
       -- but-progressing slices finish well under the limit.
       sliceExit <- system $ "cd " ++ projectDir
                  ++ " && IDRIS2COV_TEST_OFFSET=" ++ show offset
-                 ++ " IDRIS2COV_TEST_LIMIT=" ++ show intraSliceLimit
+                 ++ " IDRIS2COV_TEST_LIMIT=" ++ show sliceLimit
                  ++ " perl -e 'alarm " ++ show intraSliceTimeoutSecs
                  ++ "; exec @ARGV' " ++ relExecPath
                  ++ " < /dev/null > " ++ outPath ++ " 2>&1"
@@ -1661,31 +1709,31 @@ runExeSlices projectDir relExecPath pathHitsPath = go 0 0 Nothing [] intraSliceM
                 ++ " crashedMidSlice=" ++ show crashedMidSlice
       if timedOut || crashedMidSlice
         then do sliceDebug "branch=ADVANCE(timeout/crash)"
-                go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+                go sliceLimit (offset + sliceLimit) (S idx) firstCount acc' fuel
         else if count == 0
           then do sliceDebug "branch=STOP(clean-empty past-the-end)"; pure acc'  -- clean empty slice → past the end → done
           else case firstCount of
                Nothing =>
                  -- Slice 0. Distinguish env-AWARE from env-IGNORING by slice-0's
                  -- count: an env-aware exe returns exactly the window size
-                 -- (intraSliceLimit) when there are ≥ that many tests; an exe that
+                 -- (sliceLimit) when there are ≥ that many tests; an exe that
                  -- ignores the window runs the WHOLE suite, so count > limit.
                  -- (A suite SMALLER than one window gives count < limit and the
                  --  next slice returns 0 → natural stop.)
-                 if count > intraSliceLimit
+                 if count > sliceLimit
                    then do sliceDebug "branch=STOP(slice0 count>limit env-ignored)"; pure acc'  -- exe ignored window, ran everything: slice-0 IS the full set
                    else do sliceDebug "branch=ADVANCE(slice0 env-aware)"
-                           go (offset + intraSliceLimit) (S idx) (Just count) acc' fuel
+                           go sliceLimit (offset + sliceLimit) (S idx) (Just count) acc' fuel
                Just _ =>
                  -- Env-aware: keep walking windows until an empty slice (count==0,
                  -- handled above) or a short final slice (count < limit) ends it.
-                 -- Each full slice legitimately has count == intraSliceLimit, so we
+                 -- Each full slice legitimately has count == sliceLimit, so we
                  -- must NOT treat "count == firstCount" as the ignore signal (that
                  -- false-positived and stopped after one window — undercounting).
-                 if count < intraSliceLimit
+                 if count < sliceLimit
                    then do sliceDebug "branch=STOP(short final window)"; pure acc'  -- last (partial) window consumed → done
                    else do sliceDebug "branch=ADVANCE(env-aware full window)"
-                           go (offset + intraSliceLimit) (S idx) firstCount acc' fuel
+                           go sliceLimit (offset + sliceLimit) (S idx) firstCount acc' fuel
 
 ||| Test-module count above which the runtime path-coverage exe is built and run
 ||| in sequential chunks instead of one whole-suite process. A single exe that
