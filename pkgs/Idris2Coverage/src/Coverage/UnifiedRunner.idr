@@ -72,6 +72,28 @@ removeFileIfExistsSafe path = do
   _ <- removeFile path
   pure ()
 
+||| Resolve the instrumented (forked) compiler: IDRIS2_BIN if set, else the
+||| conventional fork checkout location if it exists. This makes the
+||| pack-independent fork route the DEFAULT: a host only needs the fork cloned
+||| and built at ~/code/idrislang-idris2 for `pull + rebuild` to yield a working
+||| instrument — no env setup, no reliance on pack's app-path/package-path
+||| (which, on a host with a broken pack store, made the numerator silently 0).
+||| The pack prelude remains the last-resort fallback only when no fork exists.
+export
+resolveIdris2Override : IO (Maybe String)
+resolveIdris2Override = do
+  menv <- getEnv "IDRIS2_BIN"
+  case menv of
+    Just b => pure (Just b)
+    Nothing => do
+      mhome <- getEnv "HOME"
+      case mhome of
+        Nothing => pure Nothing
+        Just home => do
+          let conv = home ++ "/code/idrislang-idris2/build/exec/idris2"
+          rc <- system ("test -x " ++ conv)
+          pure (if rc == 0 then Just conv else Nothing)
+
 buildPrelude : Maybe String -> String
 buildPrelude idris2Override =
   case idris2Override of
@@ -92,7 +114,7 @@ buildPrelude idris2Override =
 ||| Returns captured failure logs so downstream callers can surface the real cause.
 buildIpkgWithClean : Bool -> String -> String -> IO (Either String ())
 buildIpkgWithClean cleanFirst projectDir ipkgName = do
-  idris2Override <- getEnv "IDRIS2_BIN"
+  idris2Override <- resolveIdris2Override
   absProjectDir <- toAbsolutePath projectDir
   let directLog = absProjectDir ++ "/.idris2-coverage-build-direct.log"
   let packLog = absProjectDir ++ "/.idris2-coverage-build-pack.log"
@@ -389,7 +411,7 @@ coverageStackDeps =
 export
 installNeededDepsIntoFork : (projectDepends : List String) -> (packTomlContent : String) -> IO ()
 installNeededDepsIntoFork projectDepends packTomlContent = do
-  Just idris2 <- getEnv "IDRIS2_BIN"
+  Just idris2 <- resolveIdris2Override
     | Nothing => pure ()
   let wanted = projectDepends ++ coverageStackDeps
   let deps = filter (\(n, _, _) => elem n wanted) (localDepEntries packTomlContent)
@@ -749,7 +771,7 @@ runStaticDumppathsJsonWhole : String -> IO (Either String String)
 runStaticDumppathsJsonWhole ipkgPath = do
   let (projectDir, ipkgName) = splitPath ipkgPath
   uid <- getUniqueId
-  idris2Override <- getEnv "IDRIS2_BIN"
+  idris2Override <- resolveIdris2Override
   absProjectDir <- toAbsolutePath projectDir
   let dumppathsPath = "/tmp/idris2_static_dumppaths_" ++ uid ++ ".json"
   let logPath = "/tmp/idris2_static_dumppaths_" ++ uid ++ ".log"
@@ -779,7 +801,7 @@ runStaticDumppathsJsonWhole ipkgPath = do
 runStaticDumppathsJsonChunk : String -> String -> String -> List String -> String -> List String -> Nat -> IO (Either String (List PathObligation))
 runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends packTomlContent modules idx = do
   uid <- getUniqueId
-  idris2Override <- getEnv "IDRIS2_BIN"
+  idris2Override <- resolveIdris2Override
   absProjectDir <- toAbsolutePath projectDir
   let tempModName = "TempStaticDumppaths_" ++ uid ++ "_" ++ show idx
   let tempExecName = "temp-static-dumppaths-" ++ uid ++ "-" ++ show idx

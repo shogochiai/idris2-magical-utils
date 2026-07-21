@@ -801,11 +801,27 @@ runDumpcasesAndParse ipkgPath outputPath = do
   -- DEBUG: Don't cleanup temp files to inspect them
   -- _ <- system $ "rm -f " ++ tempMainPath ++ " " ++ tempIpkgPath
 
-  -- Check if dumpcases output exists (may succeed even if codegen fails)
-  Right content <- readFile actualOutputPath
+  -- Check if dumpcases output exists (may succeed even if codegen fails).
+  -- Tolerant read: the writer's flag/suffix choice comes from a runtime probe
+  -- (supportsDumpcasesJson) that can drift from what the compiler that ran the
+  -- ipkg build actually did (fork vs pack idris2, probe failing for an
+  -- unrelated env reason, a stale binary…). Whichever of <out> / <out>.json
+  -- exists is the dump — parseStaticExport sniffs the format by content, so
+  -- reading the "other" variant is always safe. This healed alice's
+  -- "fork wrote dumpcases-paths.txt.json, reader wanted dumpcases-paths.txt"
+  -- File-Not-Found outage without guessing which side drifted.
+  let altOutputPath = if actualOutputPath == outputPath
+                        then outputPath ++ ".json"
+                        else outputPath
+  contentE <- readFile actualOutputPath
+  contentE2 <- the (IO (Either FileError String)) $ case contentE of
+                 Right c => pure (Right c)
+                 Left _  => readFile altOutputPath
+  Right content <- pure contentE2
     | Left err => do
         logTail <- readLogTail buildLog
-        pure $ Left $ "Failed to read dumpcases: " ++ show err
+        pure $ Left $ "Failed to read dumpcases (tried " ++ actualOutputPath
+                   ++ " and " ++ altOutputPath ++ "): " ++ show err
                    ++ (if null logTail then "" else "\nBuild log tail:\n" ++ logTail)
   if null (trim content)
     then do
