@@ -636,17 +636,47 @@ initUndefinedVars params body =
       undefined = filter (\i => i >= 0 && not (contains i paramSet)) allVars
   in map (\i => yulLet (varName i) (yulNum 0)) undefined
 
+-- Does this Yul statement (transitively) ASSIGN to `ptr`? Inline constructor
+-- allocation (allocWords via compileANFExprWithStmts ACon) emits
+-- `ptr := mload(64)` and expects `ptr` to be pre-declared. Inside MkACon /
+-- closure-allocator functions `ptr` is a RETURN variable (auto-declared by the
+-- Yul function signature), but inside a plain MkAFun body nothing declares it —
+-- solc strict assembly rejects the function ("variable ptr used before
+-- declaration"), which broke the whole instrumented-Yul pipeline for ANY
+-- function containing an inline constructor (alice's evm measurement outage).
+mutual
+  stmtAssignsPtr : YulStmt -> Bool
+  stmtAssignsPtr (YBlock ss)       = any stmtAssignsPtr ss
+  stmtAssignsPtr (YComment _)      = False
+  stmtAssignsPtr (YLet _ _)        = False
+  stmtAssignsPtr (YAssign vs _)    = elem "ptr" vs
+  stmtAssignsPtr (YIf _ b)         = stmtAssignsPtr b
+  stmtAssignsPtr (YSwitch _ cs md) = any caseAssignsPtr cs || maybe False stmtAssignsPtr md
+  stmtAssignsPtr (YFor i _ p b)    = stmtAssignsPtr i || stmtAssignsPtr p || stmtAssignsPtr b
+  stmtAssignsPtr YBreak            = False
+  stmtAssignsPtr YContinue         = False
+  stmtAssignsPtr YLeave            = False
+  stmtAssignsPtr (YExprStmt _)     = False
+
+  caseAssignsPtr : YulCase -> Bool
+  caseAssignsPtr (MkCase _ b) = stmtAssignsPtr b
+
 ||| Compile an ANF definition to a Yul function (with context)
 compileDefCtx : CompileCtx -> (Name, ANFDef) -> Core (Maybe YulFun)
 compileDefCtx ctx (n, MkAFun args body) = do
   let initStmts = initUndefinedVars args body
   bodyStmts <- compileANFStmtCtx ctx body
+  -- Inline constructor allocation assigns `ptr` without declaring it (see
+  -- stmtAssignsPtr above) — declare it in the preamble iff the body needs it.
+  let ptrPreamble = if any stmtAssignsPtr bodyStmts
+                      then [yulLet "ptr" (yulNum 0)]
+                      else []
   -- The body already assigns to 'result' via compileANFStmt, no need to append extra assignment
   pure $ Just $ MkYulFun
     { name = mangleName n
     , params = map varName args
     , returns = ["result"]
-    , body = YBlock (initStmts ++ bodyStmts)
+    , body = YBlock (initStmts ++ ptrPreamble ++ bodyStmts)
     , sourceLoc = nameToSourceLoc n
     }
 
