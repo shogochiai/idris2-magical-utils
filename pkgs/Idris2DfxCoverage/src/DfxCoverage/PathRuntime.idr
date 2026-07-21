@@ -163,6 +163,34 @@ stripCandidText s =
                   _ => tc
   in pack noQuote
 
+||| Strip the enterTest attribution label from a recorded entry. pathcov.c
+||| interns "<label>\t<pathId>" (label is "" outside enterTest, so every entry
+||| still carries the TAB). In the dfx text reply that TAB arrives as the
+||| LITERAL two-character escape `\t` (dfx renders control chars escaped), so
+||| plain `trim` never removes it and the identity join matched nothing — the
+||| dfx soundness fixture's calibration surfaced exactly this (70 recorded ids,
+||| 0 joined). Take the part after the LAST tab, in both encodings.
+stripLabelPrefix : String -> String
+stripLabelPrefix tok =
+  pack (lastSuffixAfterTab (lastSuffixAfterEsc (unpack tok)))
+  where
+    -- suffix after the LAST literal backslash-t escape sequence
+    lastSuffixAfterEsc : List Char -> List Char
+    lastSuffixAfterEsc cs = go cs cs
+      where
+        go : List Char -> List Char -> List Char
+        go acc [] = acc
+        go acc ('\\' :: 't' :: rest) = go rest rest
+        go acc (_ :: rest) = go acc rest
+    -- suffix after the LAST real TAB character
+    lastSuffixAfterTab : List Char -> List Char
+    lastSuffixAfterTab cs = go cs cs
+      where
+        go : List Char -> List Char -> List Char
+        go acc [] = acc
+        go acc ('\t' :: rest) = go rest rest
+        go acc (_ :: rest) = go acc rest
+
 ||| Split a comma-separated reply into trimmed, non-empty path-id tokens.
 parsePathIdList : String -> List String
 parsePathIdList s =
@@ -174,7 +202,7 @@ parsePathIdList s =
   -- WASM that still comma-joined (no ';' present in the reply).
   let sep   = if isInfixOf ";" s then ';' else ','
       raw    = forget (split (== sep) s)
-  in filter (/= "") (map trim raw)
+  in filter (/= "") (map (stripLabelPrefix . trim) raw)
 
 ||| Query the live canister's __get_path_hits and return the recorded canonical
 ||| path-ids. A trailing "__TRUNCATED__" token (pathcov saturation marker) is

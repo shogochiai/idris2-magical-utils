@@ -219,6 +219,16 @@ generateTestHarnessShimContent ExistingHarness testModuleName directTestNames =
      , "export"
      , "runTrivialTest : IO (Int, Int)"
      , "runTrivialTest = runBatch 0 1"
+     , ""
+     -- Fallback IO-coverage runner: dfx-cov unconditionally probes
+     -- `runIoCoverage` and the generated Main references
+     -- TestHarness.runIoCoverage, so EVERY shim variant must define it.
+     -- Packages without a dedicated IO/SQL-fixture routine (e.g. the dfx
+     -- soundness fixture) get a no-op — the batches carry the real hits.
+     -- (Missing it was an undefined-name RefC crash for any such package.)
+     , "export"
+     , "runIoCoverage : IO (Int, Int)"
+     , "runIoCoverage = pure (0, 0)"
      ])
 generateTestHarnessShimContent TupleHarness testModuleName _ =
   unlines
@@ -253,6 +263,10 @@ generateTestHarnessShimContent TupleHarness testModuleName _ =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
+    , ""
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = pure (0, 0)"
     ]
 generateTestHarnessShimContent TupleHarnessWithRunner testModuleName _ =
   unlines
@@ -289,6 +303,10 @@ generateTestHarnessShimContent TupleHarnessWithRunner testModuleName _ =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
+    , ""
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = pure (0, 0)"
     ]
 generateTestHarnessShimContent RecordHarness testModuleName _ =
   unlines
@@ -323,6 +341,10 @@ generateTestHarnessShimContent RecordHarness testModuleName _ =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
+    , ""
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = pure (0, 0)"
     ]
 generateTestHarnessShimContent PureRunAllHarness testModuleName _ =
   unlines
@@ -357,6 +379,10 @@ generateTestHarnessShimContent PureRunAllHarness testModuleName _ =
     , "export"
     , "runTrivialTest : IO (Int, Int)"
     , "runTrivialTest = runBatch 0 1"
+    , ""
+    , "export"
+    , "runIoCoverage : IO (Int, Int)"
+    , "runIoCoverage = pure (0, 0)"
     ]
 generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
   unlines

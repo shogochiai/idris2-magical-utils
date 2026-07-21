@@ -1287,7 +1287,20 @@ runNumeratorSubprocess opts ipkgPath dumppathsContent = do
                                    Left _ => ""
                    pure $ Left $ "phase-2 numerator subprocess failed (rc=" ++ show rc
                               ++ ")\n" ++ tailMsg
-    Left _ => pure (Right [])  -- no hits file → empty numerator (denominator still real)
+    Left _ => do
+      -- The child never produced a hits file. That is NOT "zero coverage" —
+      -- it is an UNFINISHED numerator (build/deploy failure). The old
+      -- `Right []` here turned instrument failures into a silent 0/N
+      -- measurement (the dfx soundness fixture's first calibration surfaced
+      -- exactly this: a phase-2 icwasm resolution failure reported 0/8 with
+      -- claim_admissible True instead of refusing). Unmeasured must never
+      -- pretty-print as a number.
+      logTail <- readFile logFile
+      let tailMsg = case logTail of
+                      Right c => unlines (reverse (take 15 (reverse (lines c))))
+                      Left _ => ""
+      pure $ Left $ "phase-2 numerator produced no hits file (rc=" ++ show rc
+                 ++ ") — instrument failure, not zero coverage\n" ++ tailMsg
 
 runPathFullPipelineArtifacts : Options -> IO (Either String (String, List PathRuntimeHit))
 runPathFullPipelineArtifacts opts = do

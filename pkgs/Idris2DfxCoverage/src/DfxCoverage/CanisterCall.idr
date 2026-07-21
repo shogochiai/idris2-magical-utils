@@ -226,11 +226,17 @@ resolveMainModulePath projectDir = do
        pure $ sourcedir ++ "/" ++ moduleToPath mainModule
 
 probeIc0SupportDir : String -> IO (Maybe String)
-probeIc0SupportDir projectDir = go candidates
+probeIc0SupportDir projectDir = do
+  mHome <- getEnv "HOME"
+  let homeVal = fromMaybe "" mHome
+  go (candidates homeVal)
   where
-    candidates : List String
-    candidates =
+    candidates : String -> List String
+    candidates homeVal =
       [ projectDir ++ "/lib/ic0"
+      -- HOME-anchored conventional checkout: resolves from ANY projectDir
+      -- (soundness probe dirs, worktrees) where the relative candidates miss.
+      , homeVal ++ "/code/idris2-magical-utils/pkgs/Idris2IcWasm/support/ic0"
       , projectDir ++ "/../idris2-icwasm/support/ic0"
       , projectDir ++ "/../Idris2IcWasm/support/ic0"
       , projectDir ++ "/../../Idris2IcWasm/support/ic0"
@@ -370,10 +376,18 @@ resolveIcWasmExecutable : String -> IO (Maybe String)
 resolveIcWasmExecutable projectDir = do
   mEnv <- getEnv "IDRIS2_ICWASM_BIN"
   cwd <- currentDir
+  mHome <- getEnv "HOME"
   let envCandidate = fromMaybe "" mEnv
   let cwdVal = fromMaybe "." cwd
+  let homeVal = fromMaybe "" mHome
   let candidates =
         [ envCandidate
+        -- HOME-anchored conventional checkout: works from ANY cwd/projectDir
+        -- (a soundness probe dir, a worktree, /tmp) — the relative candidates
+        -- below only resolve when projectDir sits inside the monorepo layout,
+        -- and the ~/.local/bin pack WRAPPER resolves per-cwd and dies outside
+        -- a pack.toml context (the fixture calibration hit exactly that).
+        , homeVal ++ "/code/idris2-magical-utils/pkgs/Idris2IcWasm/build/exec/idris2-icwasm"
         -- Prefer the freshly-built local idris2-icwasm (with current fixes) over a
         -- stale `~/.local/bin/idris2-icwasm` (pack install-app does not refresh the
         -- ~/.local/bin copy, so it can lag behind source). The canonical monorepo
