@@ -76,10 +76,16 @@ buildPrelude : Maybe String -> String
 buildPrelude idris2Override =
   case idris2Override of
     Just app =>
+      -- Fork override: the fork resolves its OWN prefix (deps are installed
+      -- into it by installNeededDepsIntoFork). Do NOT export pack's
+      -- IDRIS2_PACKAGE_PATH/LIBS/DATA here: on a host whose pack toolchain is
+      -- stock upstream (no dumppaths runtime), that mixes the fork compiler
+      -- with stock support — the build succeeds and the denominator is
+      -- emitted, but the path-hit runtime never fires, so the numerator is
+      -- silently 0 (alice's 0/185 regression). The web PathRunner's fork
+      -- build never exported pack paths, which is why web measured correctly
+      -- on the same host.
       "APP=\"" ++ app ++ "\""
-      ++ " && export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
-      ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
-      ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
     Nothing => installedIdrisPrelude
 
 ||| Build an ipkg, preferring direct Idris2 and falling back to pack.
