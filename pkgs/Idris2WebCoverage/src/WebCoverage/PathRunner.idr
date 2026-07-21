@@ -168,11 +168,17 @@ runWebPathCoverage projectDir = do
     Right result => pure $ Right (result, recordedPath)
 
 ||| Render the Step 4 contract from a PathCoverageResult (same surface as
-||| core/evm/dfx).
+||| core/evm/dfx). v2: raw evidence counts only — no percent to fabricate; the
+||| consumer divides hit/(denominator+unknown) itself.
 export
 resultToStep4Contract : PathCoverageResult -> Step4Contract
 resultToStep4Contract result =
-  MkStep4Contract
-    (fromMaybe 100.0 result.coveragePercent)
-    result.claimAdmissible
-    (length result.missingPaths)
+  let c = evidenceCounts result
+  in MkStep4Contract
+       c.pathsTotal
+       c.pathsDenominator
+       c.pathsHit
+       c.pathsExcluded
+       c.pathsUnknown
+       result.claimAdmissible
+       (length result.missingPaths)

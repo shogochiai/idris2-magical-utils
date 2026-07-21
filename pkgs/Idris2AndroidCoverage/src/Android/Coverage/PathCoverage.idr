@@ -78,38 +78,44 @@ record PathCov where
   constructor MkPathCov
   denomTotal : Nat        -- denominator: app path obligations after exclusions
   covered : Nat        -- of those, hit on-device
+  excludedCount : Nat  -- module-scoped ids dropped by isExcluded (kept for conservation)
   missing : List String
 
 ||| Compute device path coverage from the raw id lists the harness collected.
 ||| `denomIds` = every dumppaths path_id; `hitIds` = every on-device hit path_id;
 ||| `modPrefix` = the app's module prefix ("" = all). Exclusions are applied to the
-||| denominator, then it is intersected with the (deduped) hit set.
+||| denominator, then it is intersected with the (deduped) hit set. The excluded
+||| count is carried in the report so the consumer can check conservation
+||| (paths_total = denominator + excluded + unknown).
 export
 pathCoverage : (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
 pathCoverage denomIds hitIds modPrefix =
-  let denom   = nub (filter (\p => inModule modPrefix p && not (isExcluded p)) denomIds)
+  let scoped  = nub (filter (inModule modPrefix) denomIds)
+      denom   = filter (not . isExcluded) scoped
+      excl    = length scoped `minus` length denom
       hits    = nub hitIds
       missing = filter (\p => not (elem p hits)) denom
-  in MkPathCov (length denom) (length denom `minus` length missing) missing
-
-||| Percentage (integer), 100 when there are no obligations.
-export
-percent : PathCov -> Nat
-percent c = case c.denomTotal of
-              Z   => 100
-              t   => integerToNat ((natToInteger c.covered * 100) `div` natToInteger t)
+  in MkPathCov (length denom) (length denom `minus` length missing) excl missing
 
 ||| The parity-ti-shaped report text (same keys host step4 emits, so parity-ti's
 ||| step4Pass parses it identically). PASS ⟺ Missing paths: 0.
+|||
+||| v2 raw-evidence contract: RAW COUNTS only — this producer computes no
+||| percentage (the old `percent` helper reported 100 on zero obligations, the
+||| exact unmeasured→100% deception the v2 contract exists to kill). The
+||| consumer (luci) computes hit/(denominator+unknown) in one place.
 export
 report : PathCov -> String
 report c =
   unlines $
     [ "# Device PATH Coverage (dumppaths denominator, on-device hit numerator)"
+    , "coverage_model: raw_evidence_v2"
     , "claim_admissible: " ++ (if c.missing == [] then "True" else "False")
-    , "coverage_percent: " ++ show (percent c) ++ ".0"
-    , "total_paths: " ++ show c.denomTotal
-    , "covered_paths: " ++ show c.covered
+    , "paths_total: " ++ show (c.denomTotal + c.excludedCount)
+    , "paths_denominator: " ++ show c.denomTotal
+    , "paths_hit: " ++ show c.covered
+    , "paths_excluded: " ++ show c.excludedCount
+    , "paths_unknown: 0"
     , "Missing paths: " ++ show (length c.missing)
     , "evidence_kind: device_dumppaths_path_coverage"
     , ""

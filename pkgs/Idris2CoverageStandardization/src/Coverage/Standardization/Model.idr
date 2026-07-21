@@ -78,15 +78,38 @@ isCoverageClaimAdmissible standard obligations =
         then False
         else allKnown rest
 
+||| The one honest divide over raw evidence counts, for consumers that parsed
+||| `paths_hit` / `paths_denominator` / `paths_unknown` out of a v2 report:
+||| percent = hit / (denominator + unknown). Nothing when there is nothing to
+||| measure — an empty measurement is UNMEASURED, not 100%.
+public export
+evidencePercent : (hit : Nat) -> (denominator : Nat) -> (unknown : Nat) -> Maybe Double
+evidencePercent hit denominator unknown =
+  case denominator + unknown of
+    Z          => Nothing
+    honest@(S _) => Just (100.0 * cast hit / cast honest)
+
+||| THE canonical percentage — computed by CONSUMERS, never emitted by producers.
+||| Honest denominator: admissible obligations PLUS untriaged (unknown-limbo)
+||| ones. An untriaged path counts AGAINST coverage until it is either covered
+||| or justified into an excluded class — so "classify as Unknown to shrink the
+||| denominator" (the live evm incident: 4-of-158 admissible, reported 50% for
+||| an honest 1.2%) is self-defeating rather than an over-report. `unknownIds`
+||| is the claim-blocking set and CONTAINS StubbedReach, which already sits in
+||| the denominator — subtract the overlap so nothing is double-counted.
+||| Nothing = nothing to measure (0 obligations), which is NOT 100%: renderers
+||| must surface it as unmeasured, never default it.
 public export
 coveragePct : CoverageMeasurement -> Maybe Double
 coveragePct measurement =
-  case denominatorSize of
-    Z => Nothing
-    S _ => Just (100.0 * cast coveredSize / cast denominatorSize)
+  evidencePercent coveredSize denominatorSize limboSize
   where
     denominatorSize : Nat
     denominatorSize = length (denominatorIds measurement)
 
     coveredSize : Nat
     coveredSize = length (coveredIds measurement)
+
+    limboSize : Nat
+    limboSize = length (filter (\i => not (elem i (denominatorIds measurement)))
+                               (unknownIds measurement))

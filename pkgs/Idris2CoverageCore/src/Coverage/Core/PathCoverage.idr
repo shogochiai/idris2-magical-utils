@@ -87,6 +87,15 @@ pathObligationToCoverageObligation path =
     (Just path.functionName)
     path.classification
 
+||| The path-coverage result a producer may report. DELIBERATELY carries NO
+||| percentage field: a producer that could write its own percent could also lie
+||| with it (live incidents: dfx smoke echoed `coverage_percent: 100.0` with no
+||| path denominator at all; evm shrank the denominator to a 4-of-158 admissible
+||| subset and reported 50% for what is honestly 1.2%; several renderers turned
+||| an unmeasurable `Nothing` into 100.0 via `fromMaybe`). Producers emit RAW
+||| EVIDENCE (path lists + bucket counts, below); the CONSUMER computes any
+||| percentage in one place from those counts. Deception by percent is now
+||| unrepresentable in this record rather than merely discouraged.
 public export
 record PathCoverageResult where
   constructor MkPathCoverageResult
@@ -94,7 +103,6 @@ record PathCoverageResult where
   coveredPaths    : List PathObligation
   missingPaths    : List PathObligation
   measurement     : CoverageMeasurement
-  coveragePercent : Maybe Double
   coverageModel   : String
   claimAdmissible : Bool
 
@@ -102,7 +110,7 @@ renderPathCoverageResult : PathCoverageResult -> String
 renderPathCoverageResult result =
   "PathCoverage: " ++ show (length (coveredIds result.measurement))
     ++ "/" ++ show (length (denominatorIds result.measurement))
-    ++ " (" ++ show (fromMaybe 100.0 result.coveragePercent) ++ "%)"
+    ++ " of " ++ show (length result.allPaths) ++ " paths"
 
 public export
 Show PathCoverageResult where
@@ -170,7 +178,6 @@ buildPathCoverageResult paths hitPathIds =
        covered
        missing
        measurement
-       (coveragePct measurement)
        (standardName semanticPathObligationStandard)
        (isCoverageClaimAdmissible semanticPathObligationStandard obligations)
 
@@ -190,3 +197,99 @@ missingPathSummaries result = map pathSummary result.missingPaths
 public export
 parseQualifiedFunction : String -> (String, String)
 parseQualifiedFunction = parseFullName
+
+-- =============================================================================
+-- Canonical raw-evidence report (the ONE step4 path contract emitter)
+-- =============================================================================
+
+||| Bucket counts derived from a result. The buckets PARTITION the enumerated
+||| paths by ObligationClass — denominator {Reachable, UserAdmittedPartialGap,
+||| StubbedReach}, excluded {LogicallyUnreachable, CompilerInsertedArtifact,
+||| ExternalEffectBoundary}, unknown-limbo {UnknownClassification} — so the
+||| conservation law `total = denominator + excluded + unknown` holds BY
+||| CONSTRUCTION and a consumer can verify it at parse time. `unknown` here is
+||| the limbo bucket (untriaged), NOT the claim-blocking set: StubbedReach
+||| blocks the claim but sits in the denominator, so using `unknownIds`
+||| (= blocksClaim set) directly would double-count it.
+public export
+record EvidenceCounts where
+  constructor MkEvidenceCounts
+  pathsTotal       : Nat
+  pathsDenominator : Nat
+  pathsHit         : Nat
+  pathsExcluded    : Nat
+  pathsUnknown     : Nat
+
+public export
+evidenceCounts : PathCoverageResult -> EvidenceCounts
+evidenceCounts result =
+  let denomIds = denominatorIds result.measurement
+      exclIds  = excludedIds result.measurement
+      limbo    = filter
+                   (\p => not (elem p.pathId denomIds) && not (elem p.pathId exclIds))
+                   result.allPaths
+  in MkEvidenceCounts
+       (length result.allPaths)
+       (length denomIds)
+       (length (coveredIds result.measurement))
+       (length exclIds)
+       (length limbo)
+
+||| The conservation law a consumer re-checks after parsing: buckets partition
+||| the enumeration and the hits fit inside the denominator. Exported so tests
+||| (and the soundness preflight) can assert it against any produced result.
+public export
+evidenceConserved : EvidenceCounts -> Bool
+evidenceConserved c =
+     c.pathsTotal == c.pathsDenominator + c.pathsExcluded + c.pathsUnknown
+  && c.pathsHit <= c.pathsDenominator
+
+||| THE canonical textual step4 path-evidence report. Every path-coverage
+||| producer (core/evm/web/dfx cov Mains) renders through here — no hand-rolled
+||| putStrLn blocks — so no producer code path can emit a `coverage_percent`
+||| line (there is none). The consumer computes any percentage from the counts.
+||| `headerLabel` names the family surface ("", "EVM ", "Web ", "DFX ").
+public export
+renderPathEvidence : (headerLabel : String) -> PathCoverageResult -> String
+renderPathEvidence headerLabel result =
+  let c = evidenceCounts result
+      unknownPaths = filter
+                       (\p => not (elem p.pathId (denominatorIds result.measurement))
+                           && not (elem p.pathId (excludedIds result.measurement)))
+                       result.allPaths
+  in joinBy "\n" $
+       [ "# " ++ headerLabel ++ "Path Coverage Report"
+       , "coverage_model:   " ++ result.coverageModel
+       , "claim_admissible: " ++ show result.claimAdmissible
+       , "paths_total: " ++ show c.pathsTotal
+       , "paths_denominator: " ++ show c.pathsDenominator
+       , "paths_hit: " ++ show c.pathsHit
+       , "paths_excluded: " ++ show c.pathsExcluded
+       , "paths_unknown: " ++ show c.pathsUnknown
+       , ""
+       , "Missing paths: " ++ show (length result.missingPaths)
+       ]
+       ++ map (\p => "- " ++ p.pathId ++ " :: " ++ pathSummary p) result.missingPaths
+       ++ (if null unknownPaths
+             then []
+             else ("Unknown paths: " ++ show (length unknownPaths))
+                  :: map (\p => "- " ++ p.pathId ++ " :: " ++ pathSummary p) unknownPaths)
+
+||| Canonical JSON form of the same evidence (again: counts and lists only, no
+||| percent field to fake).
+public export
+pathEvidenceToJson : PathCoverageResult -> String
+pathEvidenceToJson result =
+  let c = evidenceCounts result
+  in joinBy "\n"
+       [ "{"
+       , "  \"coverage_model\": " ++ show result.coverageModel ++ ","
+       , "  \"claim_admissible\": " ++ (if result.claimAdmissible then "true" else "false") ++ ","
+       , "  \"paths_total\": " ++ show c.pathsTotal ++ ","
+       , "  \"paths_denominator\": " ++ show c.pathsDenominator ++ ","
+       , "  \"paths_hit\": " ++ show c.pathsHit ++ ","
+       , "  \"paths_excluded\": " ++ show c.pathsExcluded ++ ","
+       , "  \"paths_unknown\": " ++ show c.pathsUnknown ++ ","
+       , "  \"missing_path_ids\": [" ++ joinBy ", " (map (show . (.pathId)) result.missingPaths) ++ "]"
+       , "}"
+       ]

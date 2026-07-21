@@ -493,11 +493,17 @@ coverageMeasurementToJson m = unlines
   ]
 
 pathCoverageReportToJson : PathCoverageResult -> String
-pathCoverageReportToJson result = unlines
+pathCoverageReportToJson result =
+  -- v2 contract: RAW COUNTS only — no coverage_percent field exists to fake.
+  let c = evidenceCounts result in unlines
   [ "{"
   , "  \"coverage_model\": \"" ++ escapeJson result.coverageModel ++ "\","
   , "  \"claim_admissible\": " ++ boolToJson result.claimAdmissible ++ ","
-  , "  \"coverage_percent\": " ++ show (fromMaybe 100.0 result.coveragePercent) ++ ","
+  , "  \"paths_total\": " ++ show c.pathsTotal ++ ","
+  , "  \"paths_denominator\": " ++ show c.pathsDenominator ++ ","
+  , "  \"paths_hit\": " ++ show c.pathsHit ++ ","
+  , "  \"paths_excluded\": " ++ show c.pathsExcluded ++ ","
+  , "  \"paths_unknown\": " ++ show c.pathsUnknown ++ ","
   , "  \"measurement\": " ++ indentJson (coverageMeasurementToJson result.measurement) ++ ","
   , "  \"missing_paths\": " ++ pathsToJsonArray result.missingPaths
   , "}"
@@ -639,19 +645,16 @@ runPaths opts = do
           case opts.format of
             JSON => putStrLn $ pathCoverageReportToJson result
             _ => do
-              putStrLn "# EVM Path Coverage Report"
-              putStrLn $ "coverage_model:   " ++ result.coverageModel
-              putStrLn $ "claim_admissible: " ++ show result.claimAdmissible
-              putStrLn $ "coverage_percent: " ++ show (fromMaybe 100.0 result.coveragePercent)
-              putStrLn ""
+              -- v2: canonical evidence renderer — raw counts, unknown paths in
+              -- the denominator-adjacent limbo bucket, NO percent to fake. The
+              -- 4-of-158 admissible-subset over-report ("50%" for an honest
+              -- 1.2%) is unrepresentable: the consumer divides hit by
+              -- (denominator + unknown) itself.
+              putStrLn $ renderPathEvidence "EVM " result
               putStrLn $ pathMeasurementSummary result.measurement
-              putStrLn $ "Missing paths: " ++ show (length result.missingPaths)
-              traverse_ (\p => putStrLn $ "- " ++ p.pathId ++ " :: " ++ pathSummary p) result.missingPaths
-              -- List UnknownClassification paths too (they flip claim_admissible
-              -- False under the BlockCoverageClaim policy). Listing them avoids
-              -- silent truncation and makes them inspectable for classification.
+              -- EVM-specific diagnostic: terminal nodeIds of untriaged paths,
+              -- cross-referencable against the *-labels.csv observable set.
               let unknownPaths = filter (\p => p.classification == UnknownClassification) result.allPaths
-              putStrLn $ "Unknown paths: " ++ show (length unknownPaths)
               traverse_ (\p => putStrLn $ "? " ++ p.pathId
                             ++ " [term=" ++ fromMaybe "-" (terminalBranchId p) ++ "]"
                             ++ " :: " ++ pathSummary p) unknownPaths
@@ -914,7 +917,8 @@ runFullPipelineMode opts =
                   putStrLn ("branch_hits=" ++ show analysis.branchHits)
                   putStrLn ("functions_hit=" ++ show analysis.functionsHit)
                   putStrLn ("total_functions=" ++ show analysis.totalFunctions)
-                  putStrLn ("coverage_percent=" ++ show analysis.coveragePercent)
+                  -- (no percent line: raw counts above are the contract; any
+                  -- percentage is the consumer's division, not the producer's)
                   putStrLn ("covered_branch_ids=" ++ joinField analysis.coveredBranchIds)
                   putStrLn ("unobservable_branch_ids=" ++ joinField analysis.unobservableBranchIds)
                   putStrLn ("materialized_branch_ids=" ++ joinField analysis.materializedBranchIds)

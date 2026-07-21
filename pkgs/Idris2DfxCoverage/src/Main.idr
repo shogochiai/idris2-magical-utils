@@ -1115,11 +1115,17 @@ coverageMeasurementToJson m = unlines
   ]
 
 pathCoverageReportToJson : PathCoverageResult -> String
-pathCoverageReportToJson result = unlines
+pathCoverageReportToJson result =
+  -- v2 contract: RAW COUNTS only — no coverage_percent field exists to fake.
+  let c = evidenceCounts result in unlines
   [ "{"
   , "  \"coverage_model\": \"" ++ escapeJson result.coverageModel ++ "\","
   , "  \"claim_admissible\": " ++ boolToJson result.claimAdmissible ++ ","
-  , "  \"coverage_percent\": " ++ show (fromMaybe 100.0 result.coveragePercent) ++ ","
+  , "  \"paths_total\": " ++ show c.pathsTotal ++ ","
+  , "  \"paths_denominator\": " ++ show c.pathsDenominator ++ ","
+  , "  \"paths_hit\": " ++ show c.pathsHit ++ ","
+  , "  \"paths_excluded\": " ++ show c.pathsExcluded ++ ","
+  , "  \"paths_unknown\": " ++ show c.pathsUnknown ++ ","
   , "  \"measurement\": " ++ indentJson (coverageMeasurementToJson result.measurement) ++ ","
   , "  \"missing_paths\": " ++ pathsToJsonArray result.missingPaths
   , "}"
@@ -1385,14 +1391,9 @@ runPaths opts = do
           case opts.format of
             JSON => putStrLn $ pathCoverageReportToJson result
             Text => do
-              putStrLn "# DFX Path Coverage Report"
-              putStrLn $ "coverage_model:   " ++ result.coverageModel
-              putStrLn $ "claim_admissible: " ++ show result.claimAdmissible
-              putStrLn $ "coverage_percent: " ++ show (fromMaybe 100.0 result.coveragePercent)
-              putStrLn ""
+              -- v2: canonical evidence renderer — raw counts, no percent to fake.
+              putStrLn $ renderPathEvidence "DFX " result
               putStrLn $ pathMeasurementSummary result.measurement
-              putStrLn $ "Missing paths: " ++ show (length result.missingPaths)
-              traverse_ (\p => putStrLn $ "- " ++ p.pathId ++ " :: " ++ pathSummary p) result.missingPaths
 
 main : IO ()
 main = do

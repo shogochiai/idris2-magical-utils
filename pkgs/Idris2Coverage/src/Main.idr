@@ -304,11 +304,18 @@ pathsToJsonArray paths =
   "[\n" ++ fastConcat (intersperse ",\n" (map pathToJson paths)) ++ "\n  ]"
 
 pathCoverageReportToJson : PathCoverageResult -> String
-pathCoverageReportToJson result = unlines
+pathCoverageReportToJson result =
+  -- v2 contract: RAW COUNTS only — no coverage_percent field exists to fake
+  -- (the consumer computes any percent; see renderPathEvidence's rationale).
+  let c = evidenceCounts result in unlines
   [ "{"
   , "  \"coverage_model\": \"" ++ escapeJson result.coverageModel ++ "\","
   , "  \"claim_admissible\": " ++ boolToJson result.claimAdmissible ++ ","
-  , "  \"coverage_percent\": " ++ show (fromMaybe 100.0 result.coveragePercent) ++ ","
+  , "  \"paths_total\": " ++ show c.pathsTotal ++ ","
+  , "  \"paths_denominator\": " ++ show c.pathsDenominator ++ ","
+  , "  \"paths_hit\": " ++ show c.pathsHit ++ ","
+  , "  \"paths_excluded\": " ++ show c.pathsExcluded ++ ","
+  , "  \"paths_unknown\": " ++ show c.pathsUnknown ++ ","
   , "  \"measurement\": " ++ indentJson (coverageMeasurementToJson result.measurement) ++ ","
   , "  \"missing_paths\": " ++ pathsToJsonArray result.missingPaths
   , "}"
@@ -430,14 +437,9 @@ runPaths opts = do
               if opts.jsonOutput
                  then putStrLn $ pathCoverageReportToJson result
                  else do
-                   putStrLn "# Path Coverage Report"
-                   putStrLn $ "coverage_model:   " ++ result.coverageModel
-                   putStrLn $ "claim_admissible: " ++ show result.claimAdmissible
-                   putStrLn $ "coverage_percent: " ++ show (fromMaybe 100.0 result.coveragePercent)
-                   putStrLn ""
+                   -- v2: the canonical evidence renderer — counts, no percent.
+                   putStrLn $ renderPathEvidence "" result
                    putStrLn $ pathMeasurementSummary result.measurement
-                   putStrLn $ "Missing paths: " ++ show (length result.missingPaths)
-                   traverse_ (\p => putStrLn $ "- " ++ p.pathId ++ " :: " ++ pathSummary p) result.missingPaths
 
 -- =============================================================================
 -- Branches Command
