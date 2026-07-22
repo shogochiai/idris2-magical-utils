@@ -41,10 +41,29 @@ PATHCOV_BIN="$(find "$PKGROOT/build/exec" -maxdepth 1 -type f -name device-pathc
 ADB=(adb); [[ -n "$SERIAL" ]] && ADB=(adb -s "$SERIAL")
 "${ADB[@]}" get-state >/dev/null 2>&1 || { echo "no device" >&2; exit 3; }
 
-# Clear logcat, launch the app, let the View mount (the hook fires as paths run).
+# Clear logcat, COLD-start the app, let the View mount (the hook fires as paths
+# run). force-stop first: if the app is already foregrounded, `monkey` just
+# resumes the existing activity WITHOUT remounting the View, so no recordPathHit
+# fires and the numerator is a false 0 (observed: manual cold start = 58 hits,
+# warm resume = 0). force-stop guarantees a fresh mount every run.
+"${ADB[@]}" shell am force-stop "$PKG" >/dev/null 2>&1 || true
+sleep 2
 "${ADB[@]}" logcat -c >/dev/null 2>&1 || true
+# Launch via `am start` (deterministic activity start) rather than monkey, which
+# occasionally warm-resumes without remounting. Fall back to monkey.
 "${ADB[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
-sleep "$SETTLE"
+# Wait for the View to actually mount: the hook logs IDRIS_PATHHIT_HOOK_INSTALLED
+# once installed, and recordPathHit lines follow. Poll until the hook marker
+# appears (up to ~$SETTLE+20s) so a slow cold start is not scraped too early.
+_mounted=0
+for _w in $(seq 1 $(( SETTLE + 20 ))); do
+  if "${ADB[@]}" logcat -d 2>/dev/null | grep -q "IDRIS_PATHHIT_HOOK_INSTALLED"; then
+    _mounted=1; break
+  fi
+  sleep 1
+done
+[[ "$_mounted" = 1 ]] || echo "warn: hook marker not seen; app may be un-instrumented or slow to mount" >&2
+sleep 2
 [[ -n "$DRIVER" && -x "$DRIVER" ]] && "$DRIVER" "${SERIAL:-}" || true
 sleep 2
 
@@ -56,10 +75,19 @@ grep -oE '"path_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$PATHS" \
   | sed -E 's/.*"path_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
   | sort -u > "$DENOM"
 
-# NUMERATOR: distinct path_ids the device logged.
-"${ADB[@]}" logcat -d 2>/dev/null \
-  | sed -n 's/.*IDRIS_PATHHIT:\([^ ]*\).*/\1/p' \
-  | sort -u > "$HITS"
+# NUMERATOR: distinct path_ids the device logged. RETRY: the View mount that
+# fires recordPathHit is asynchronous and its logcat lines can land AFTER the
+# fixed settle (device/build dependent — observed empty at one poll, then 58+
+# a second later). Poll logcat up to ~20s until hits appear (or the marker
+# IDRIS_PATHHIT_HOOK_INSTALLED confirms the hook ran and the run is genuinely
+# 0-coverage), so a slow mount is not misread as a false 0.
+for _try in $(seq 1 10); do
+  "${ADB[@]}" logcat -d 2>/dev/null \
+    | sed -n 's/.*IDRIS_PATHHIT:\([^ ]*\).*/\1/p' \
+    | sort -u > "$HITS"
+  if [[ -s "$HITS" ]]; then break; fi
+  sleep 2
+done
 
 # The Idris2 side computes coverage (exclusions, intersection, report) and sets exit.
 if [[ -n "$OUTFILE" ]]; then
