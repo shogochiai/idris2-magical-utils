@@ -71,11 +71,6 @@ resolveIdris2Command = do
   mcmd <- getEnv "IDRIS2_BIN"
   pure $ fromMaybe "idris2" mcmd
 
-hasExplicitIdris2Override : IO Bool
-hasExplicitIdris2Override = do
-  mcmd <- getEnv "IDRIS2_BIN"
-  pure $ isJust mcmd
-
 supportsDumpcasesJson : String -> IO Bool
 supportsDumpcasesJson cmd = do
   t <- time
@@ -83,6 +78,62 @@ supportsDumpcasesJson cmd = do
   exitCode <- system $ cmd ++ " --dumpcases-json " ++ probe ++ " --version >/dev/null 2>&1"
   _ <- system $ "rm -f " ++ probe
   pure $ exitCode == 0
+
+||| Plain `--dumpcases` is an upstream flag (predates the fork); every compiler
+||| that can build the ipkg at all should accept it. Probing anyway keeps the
+||| refusal message sharp when even that is missing (truly ancient binary).
+supportsDumpcasesPlain : String -> IO Bool
+supportsDumpcasesPlain cmd = do
+  t <- time
+  let probe = "/tmp/idris2-dumpcases-plain-probe-" ++ show t ++ ".txt"
+  exitCode <- system $ cmd ++ " --dumpcases " ++ probe ++ " --version >/dev/null 2>&1"
+  _ <- system $ "rm -f " ++ probe
+  pure $ exitCode == 0
+
+||| How the dumpcases denominator build will run. The builder and the flag are
+||| resolved TOGETHER: the flag baked into the temp ipkg must be one the
+||| compiler that executes the build actually understands. The historical bug
+||| (alice's evm outage): the probe interrogated IDRIS2_BIN-or-PATH idris2 (the
+||| fork, json OK) while the build fell through to `pack build` (pack's stock
+||| compiler, no --dumpcases-json) — the build died on an unknown flag and BOTH
+||| output names were absent.
+data DumpcasesBuilder
+  = DirectBuilder String Bool   -- run `<cmd> --build`; True = use --dumpcases-json
+  | PackBuilder                 -- run `pack build`; always plain --dumpcases
+
+||| Resolve the builder coherently. Precedence:
+|||   1. IDRIS2_BIN (the forked compiler per the measurement contract) — direct
+|||      build; refuse loudly if it supports neither dumpcases flag.
+|||   2. `idris2` on PATH, IF it supports --dumpcases-json (a fork on PATH) —
+|||      direct build with it. This is the compiler the old probe interrogated;
+|||      now the build actually uses it too.
+|||   3. `pack build` with plain --dumpcases (upstream flag — pack's stock
+|||      compiler understands it even when it predates the fork).
+||| The denominator dump NEVER uses idris2-yul: the yul backend is only the
+||| codegen stage (YulInstrumentor), and old pack-built idris2-yul binaries
+||| report a base compiler with no dumpcases support at all.
+resolveDumpcasesBuilder : IO (Either String DumpcasesBuilder)
+resolveDumpcasesBuilder = do
+  mbin <- getEnv "IDRIS2_BIN"
+  case mbin of
+    Just bin => do
+      json <- supportsDumpcasesJson bin
+      if json
+        then pure $ Right $ DirectBuilder bin True
+        else do
+          plain <- supportsDumpcasesPlain bin
+          if plain
+            then pure $ Right $ DirectBuilder bin False
+            else pure $ Left $
+              "IDRIS2_BIN (" ++ bin ++ ") supports neither --dumpcases-json nor "
+              ++ "--dumpcases; point IDRIS2_BIN at the forked compiler "
+              ++ "(~/code/idrislang-idris2 build) and rebuild. The dumpcases "
+              ++ "denominator never uses idris2-yul."
+    Nothing => do
+      json <- supportsDumpcasesJson "idris2"
+      if json
+        then pure $ Right $ DirectBuilder "idris2" True
+        else pure $ Right PackBuilder
 
 findPackInstallBase : IO (Maybe String)
 findPackInstallBase = do
@@ -705,8 +756,11 @@ preferCoverageEntrypoints funcs =
         ]
   in if null preferred then funcs else preferred
 
-||| Run idris2-yul --dumpcases and parse output
-||| EVM coverage requires idris2-yul compiler for EVM FFI support
+||| Run the Idris2 dumpcases dump (denominator) and parse the output.
+||| The builder is the FORKED idris2 (IDRIS2_BIN, or a fork on PATH), falling
+||| back to `pack build` with the upstream plain --dumpcases flag — NEVER
+||| idris2-yul, which is only the codegen backend and may embed an old base
+||| compiler without any dumpcases support.
 ||| Creates a temporary executable ipkg since --dumpcases only works with executables
 |||
 ||| AUTO-GENERATION STRATEGY:
@@ -718,9 +772,11 @@ runDumpcasesAndParse : String -> String -> IO (Either String (List ClassifiedBra
 runDumpcasesAndParse ipkgPath outputPath = do
   let (projectDir, ipkgName) = splitPath ipkgPath
   uid <- generateUid
-  idris2Cmd <- resolveIdris2Command
-  explicitOverride <- hasExplicitIdris2Override
-  preferJson <- supportsDumpcasesJson idris2Cmd
+  Right builder <- resolveDumpcasesBuilder
+    | Left err => pure $ Left err
+  let preferJson = case builder of
+                     DirectBuilder _ json => json
+                     PackBuilder => False
   let actualOutputPath = if preferJson then outputPath ++ ".json" else outputPath
   let dumpcasesFlag = if preferJson then "--dumpcases-json " else "--dumpcases "
 
@@ -787,12 +843,14 @@ runDumpcasesAndParse ipkgPath outputPath = do
   pkgPath <- discoverPackagePath
   let envPrefix = if null pkgPath then "" else "IDRIS2_PACKAGE_PATH=\"" ++ pkgPath ++ "\" "
   let cmd =
-        if explicitOverride
-           then "mkdir -p " ++ projectDir ++ "/build/exec"
+        case builder of
+          DirectBuilder builderCmd _ =>
+            "mkdir -p " ++ projectDir ++ "/build/exec"
              ++ " && cd " ++ projectDir
-             ++ " && " ++ envPrefix ++ idris2Cmd ++ " --build " ++ tempIpkgName
+             ++ " && " ++ envPrefix ++ builderCmd ++ " --build " ++ tempIpkgName
              ++ " > " ++ buildLog ++ " 2>&1"
-           else "mkdir -p " ++ projectDir ++ "/build/exec"
+          PackBuilder =>
+            "mkdir -p " ++ projectDir ++ "/build/exec"
              ++ " && cd " ++ projectDir
              ++ " && pack build " ++ tempIpkgName
              ++ " > " ++ buildLog ++ " 2>&1"

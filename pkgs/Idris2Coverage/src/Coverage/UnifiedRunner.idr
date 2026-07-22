@@ -418,7 +418,9 @@ installNeededDepsIntoFork projectDepends packTomlContent = do
   -- Multi-round (no topo-sort): a dep whose own deps aren't installed yet fails
   -- this round but succeeds once they land in a later round (installs idempotent).
   let rounds = 4
-  putStrLn $ "    [dep-install] " ++ show (length deps) ++ " local deps for forked compiler"
+  -- Progress goes to STDERR: producer stdout is a parsed evidence stream (the
+  -- v2 raw-count contract / soundness fixture output) and must not carry logs.
+  ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length deps) ++ " local deps for forked compiler"
   for_ (replicate rounds ()) $ \_ => traverse_ (installOne idris2) deps
   where
     installOne : String -> (String, String, String) -> IO ()
@@ -1651,7 +1653,7 @@ runExeSlices projectDir relExecPath pathHitsPath = do
   -- from free memory). Threaded into `go` so every slice uses the same value.
   sliceLimit <- resolveSliceLimit
   when (sliceLimit /= intraSliceLimit) $
-    putStrLn ("    [slice] per-slice test window = " ++ show sliceLimit
+    ignore $ fPutStrLn stderr ("    [slice] per-slice test window = " ++ show sliceLimit
               ++ " (default " ++ show intraSliceLimit ++ "; set IDRIS2COV_SLICE_LIMIT to override)")
   go sliceLimit 0 0 Nothing [] intraSliceMaxSlices
   where
@@ -1663,7 +1665,7 @@ runExeSlices projectDir relExecPath pathHitsPath = do
     sliceDebug msg = do
       dbg <- getEnv "IDRIS2COV_SLICE_DEBUG"
       case dbg of
-        Just v => if trim v == "" || trim v == "0" then pure () else putStrLn ("    [slice] " ++ msg)
+        Just v => if trim v == "" || trim v == "0" then pure () else ignore (fPutStrLn stderr ("    [slice] " ++ msg))
         Nothing => pure ()
 
     -- sliceLimit (resolved once), offset, sliceIdx, firstCount (passed+failed of
