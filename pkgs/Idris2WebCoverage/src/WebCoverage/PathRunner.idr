@@ -99,13 +99,14 @@ shellQuote s = "'" ++ pack (concatMap esc (unpack s)) ++ "'"
         esc '\'' = unpack "'\\''"
         esc c = [c]
 
-||| Run the full web path-coverage pipeline on a project directory; returns the
-||| Step 4 contract (coverage_percent / claim_admissible / Missing paths). Honest
-||| failure: a toolchain failure returns the unavailable contract (claim False),
-||| never a silent 100%.
+||| Fork-build the instrumented node bundle and return (dumppaths JSON content,
+||| executable path). Split out of runWebPathCoverage so a DIFFERENT numerator
+||| transport (the android on-device runner, which needs the SAME denominator
+||| universe but collects hits from logcat instead of node) can reuse the
+||| denominator production without paying for or implying a node run.
 export
-runWebPathCoverage : (projectDir : String) -> IO (Either String (PathCoverageResult, String))
-runWebPathCoverage projectDir = do
+buildWebInstrumented : (projectDir : String) -> IO (Either String (String, String))
+buildWebInstrumented projectDir = do
   idris2 <- resolveForkIdris2
   -- 1. resolve test ipkg + deps + pack.toml, install deps into the fork
   Just ipkgPath <- findTestIpkg projectDir
@@ -135,10 +136,18 @@ runWebPathCoverage projectDir = do
         pure $ Left $ "Instrumented build produced no dumppaths JSON (exit "
                    ++ show buildExit ++ ").\n"
                    ++ either (const "") (\c => unlines (reverse (take 20 (reverse (lines c))))) log
-
-  -- locate the produced executable
   let execName = fromMaybe "web-cov-tests" (parseIpkgExecutable ipkgContent)
-  let execPath = projectDir ++ "/build/exec/" ++ execName
+  pure (Right (dumppathsContent, projectDir ++ "/build/exec/" ++ execName))
+
+||| Run the full web path-coverage pipeline on a project directory; returns the
+||| Step 4 contract (coverage_percent / claim_admissible / Missing paths). Honest
+||| failure: a toolchain failure returns the unavailable contract (claim False),
+||| never a silent 100%.
+export
+runWebPathCoverage : (projectDir : String) -> IO (Either String (PathCoverageResult, String))
+runWebPathCoverage projectDir = do
+  Right (dumppathsContent, execPath) <- buildWebInstrumented projectDir
+    | Left err => pure (Left err)
   Right _ <- readFile execPath
     | Left _ => pure $ Left $ "Instrumented executable not found at " ++ execPath
 
