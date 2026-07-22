@@ -55,39 +55,50 @@ sleep 2
 # Wait for the View to actually mount: the hook logs IDRIS_PATHHIT_HOOK_INSTALLED
 # once installed, and recordPathHit lines follow. Poll until the hook marker
 # appears (up to ~$SETTLE+20s) so a slow cold start is not scraped too early.
-_mounted=0
-for _w in $(seq 1 $(( SETTLE + 20 ))); do
-  if "${ADB[@]}" logcat -d 2>/dev/null | grep -q "IDRIS_PATHHIT_HOOK_INSTALLED"; then
-    _mounted=1; break
-  fi
-  sleep 1
-done
-[[ "$_mounted" = 1 ]] || echo "warn: hook marker not seen; app may be un-instrumented or slow to mount" >&2
-sleep 2
-[[ -n "$DRIVER" && -x "$DRIVER" ]] && "$DRIVER" "${SERIAL:-}" || true
-sleep 2
-
+# NOTE: `grep -q` closes the pipe on first match, sending SIGPIPE up to
+# `adb logcat -d`; under `set -o pipefail` that both trips errexit AND can leave
+# the adb client in a state where the NEXT logcat -d returns nothing (the false
+# 0 that dogged this harness). Dump to a var and match with a non-short-circuit
+# test instead — no pipe into a truncating consumer.
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-DENOM="$WORK/denom.txt"; HITS="$WORK/hits.txt"
+DENOM="$WORK/denom.txt"; HITS="$WORK/hits.txt"; RAW="$WORK/rawlog.txt"
 
 # DENOMINATOR: every dumppaths path_id, one per line. Plain grep/sed (no jq).
 grep -oE '"path_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$PATHS" \
   | sed -E 's/.*"path_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' \
   | sort -u > "$DENOM"
 
-# NUMERATOR: distinct path_ids the device logged. RETRY: the View mount that
-# fires recordPathHit is asynchronous and its logcat lines can land AFTER the
-# fixed settle (device/build dependent — observed empty at one poll, then 58+
-# a second later). Poll logcat up to ~20s until hits appear (or the marker
-# IDRIS_PATHHIT_HOOK_INSTALLED confirms the hook ran and the run is genuinely
-# 0-coverage), so a slow mount is not misread as a false 0.
-for _try in $(seq 1 10); do
-  "${ADB[@]}" logcat -d 2>/dev/null \
-    | sed -n 's/.*IDRIS_PATHHIT:\([^ ]*\).*/\1/p' \
-    | sort -u > "$HITS"
-  if [[ -s "$HITS" ]]; then break; fi
-  sleep 2
+# NUMERATOR: poll the device logcat until the recordPathHit lines appear (the
+# View mount that fires them is async; a slow cold start would otherwise be
+# scraped too early and misread as a false 0). Each poll dumps logcat to a file
+# and greps THAT file — the earlier one-liner piped `adb logcat -d | grep`
+# where a SIGPIPE / errexit / locale-backref interaction under `set -euo
+# pipefail` left the extraction empty even though the dump held 58-67 hits.
+# Robust extraction: fixed-string prefix, cut the id up to whitespace.
+: > "$HITS"
+# Disable errexit/pipefail for the poll: an early iteration legitimately finds
+# ZERO hits (grep exits 1), and under `set -e`/`pipefail` that first empty grep
+# killed the whole harness before the View had mounted — the real cause of the
+# persistent false 0 (the dump held 58-67 hits, but the script had already
+# exited on the first, still-empty poll). A single all-in-one awk does the
+# fixed-string match + id extraction so there is no grep-in-pipe to trip on.
+set +e +o pipefail
+for _try in $(seq 1 $(( SETTLE + 20 ))); do
+  # Pipe adb logcat straight into awk (the form proven to recover 58-67 ids in
+  # this same shell). The prior `> "$RAW"` redirect produced an empty file under
+  # this script's execution context while an identical interactive command did
+  # not — cause never isolated, so avoid the intermediate file entirely.
+  "${ADB[@]}" logcat -d 2>/dev/null | awk '
+    /IDRIS_PATHHIT:/ && !/IDRIS_PATHHIT_HOOK_INSTALLED/ {
+      i = index($0, "IDRIS_PATHHIT:")
+      rest = substr($0, i + length("IDRIS_PATHHIT:"))
+      split(rest, a, /[ \t]/)
+      if (a[1] != "") print a[1]
+    }' | sort -u > "$HITS"
+  if [ -s "$HITS" ]; then break; fi
+  sleep 1
 done
+set -e -o pipefail
 
 # The Idris2 side computes coverage (exclusions, intersection, report) and sets exit.
 if [[ -n "$OUTFILE" ]]; then
