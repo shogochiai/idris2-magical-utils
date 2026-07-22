@@ -95,7 +95,13 @@ for _try in $(seq 1 $(( SETTLE + 20 ))); do
       split(rest, a, /[ \t]/)
       if (a[1] != "") print a[1]
     }' | sort -u > "$HITS"
-  if [ -s "$HITS" ]; then break; fi
+  # Keep polling a few more rounds after the first hits appear: recordPathHit
+  # lines land incrementally as the View renders, so an early break undercounts
+  # the numerator. Stop once the count stops growing (2 stable rounds) or the
+  # window closes.
+  _n="$(wc -l < "$HITS" | tr -d ' ')"
+  if [ "$_n" -gt 0 ] && [ "$_n" = "${_prev_n:-}" ]; then break; fi
+  _prev_n="$_n"
   sleep 1
 done
 set -e -o pipefail
