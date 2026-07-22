@@ -1612,9 +1612,16 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
       putStrLn $ "        Output: " ++ outputWasm
       pure $ Right ()
 
-||| Step 4: Stub WASI imports using wabt tools
+||| Step 4: Stub WASI imports (wabt preferred, binaryen fallback)
 |||
 ||| IC doesn't support WASI, so we replace WASI imports with stubs.
+||| Tooling: wabt (wasm2wat/wat2wasm) when present; otherwise binaryen
+||| (wasm-dis/wasm-as) — emsdk bundles binaryen under upstream/bin (sibling of
+||| upstream/emscripten where emcc lives), so any host that ran the emcc build
+||| step has the fallback even without wabt (alice-class: wabt release
+||| binaries die on a homebrew-openssl dependency). Skipping the stub is NOT
+||| benign: the replica rejects an unstubbed module outright ("invalid import
+||| section: proc_exit from wasi_snapshot_preview1").
 ||| @inputWasm Input WASM with WASI imports
 ||| @outputWasm Output WASM with stubs
 public export
@@ -1622,24 +1629,39 @@ stubWasi : String -> String -> IO (Either String ())
 stubWasi inputWasm outputWasm = do
   putStrLn "      Step 4: WASI stubbing"
 
-  -- Check if wabt tools available
-  (code, _, _) <- executeCommand "which wasm2wat wat2wasm python3"
-  if code /= 0
-    then do
-      -- Missing tools, just copy
-      putStrLn "        wabt/python3 not found, skipping WASI stub"
+  (pyCode, _, _)   <- executeCommand "which python3"
+  (wabtCode, _, _) <- executeCommand "which wasm2wat wat2wasm"
+  mTools <- the (IO (Maybe (String, String))) $
+    if pyCode /= 0 then pure Nothing
+    else if wabtCode == 0
+      then pure (Just ("wasm2wat", "wat2wasm --debug-names"))
+      else do
+        (_, probeOut, _) <- executeCommand binaryenProbe
+        case filter (not . null) (map trim (lines probeOut)) of
+          [dis, as] => do
+            putStrLn "        wabt not found — falling back to binaryen (wasm-dis/wasm-as)"
+            -- -all: emcc output uses post-MVP features (bulk memory
+            -- memory.copy/fill, sign-ext, …); wasm-as defaults to MVP and
+            -- rejects them (verified on the real GlobalRegistry module).
+            pure (Just ("\"" ++ dis ++ "\"", "\"" ++ as ++ "\" -all"))
+          _ => pure Nothing
+  case mTools of
+    Nothing => do
+      putStrLn "        neither wabt (wasm2wat/wat2wasm) nor binaryen (wasm-dis/wasm-as) with python3 found — skipping WASI stub"
+      putStrLn "        WARNING: the replica will REJECT an unstubbed module (wasi_snapshot_preview1 imports)"
       _ <- system $ "cp " ++ inputWasm ++ " " ++ outputWasm
       pure $ Right ()
-    else do
+    Just (toWat, toWasm) => do
       let watFile = inputWasm ++ ".wat"
       let stubbedWat = inputWasm ++ "_stubbed.wat"
 
-      -- Convert to WAT
-      (c1, _, e1) <- executeCommand $ "wasm2wat " ++ inputWasm ++ " -o " ++ watFile
+      -- Convert to WAT (wasm2wat and wasm-dis share the `<in> -o <out>` shape)
+      (c1, _, e1) <- executeCommand $ toWat ++ " " ++ inputWasm ++ " -o " ++ watFile
       if c1 /= 0
-        then pure $ Left $ "wasm2wat failed: " ++ e1
+        then pure $ Left $ "wasm->wat (" ++ toWat ++ ") failed: " ++ e1
         else do
-          -- Use stub_wasi.py script from idris2-icwasm/support/tools
+          -- stub_wasi.py handles BOTH WAT dialects: wabt's type-indexed
+          -- imports and binaryen's inline-signature imports.
           -- (HOME-anchored conventional checkout, same convention as the
           -- ic0-support probe — no /Users/<user> literal)
           let scriptFile = "\"$HOME/code/idris2-magical-utils/pkgs/Idris2IcWasm/support/tools/stub_wasi.py\""
@@ -1652,20 +1674,37 @@ stubWasi inputWasm outputWasm = do
               _ <- system $ "cp " ++ inputWasm ++ " " ++ outputWasm
               pure $ Right ()
             else do
-              -- Convert back to WASM (--debug-names preserves function names)
-              (c3, _, e3) <- executeCommand $ "wat2wasm --debug-names " ++ stubbedWat ++ " -o " ++ outputWasm
+              -- Convert back to WASM (wat2wasm --debug-names / wasm-as both
+              -- accept `<in> -o <out>`)
+              (c3, _, e3) <- executeCommand $ toWasm ++ " " ++ stubbedWat ++ " -o " ++ outputWasm
               _ <- system $ "rm -f " ++ watFile ++ " " ++ stubbedWat
 
               if c3 /= 0
                 then do
-                  putStrLn $ "        wat2wasm failed: " ++ e3 ++ ", using original"
+                  putStrLn $ "        wat->wasm (" ++ toWasm ++ ") failed: " ++ e3 ++ ", using original"
                   _ <- system $ "cp " ++ inputWasm ++ " " ++ outputWasm
                   pure $ Right ()
                 else do
-                  -- Verify no WASI imports remain
-                  (_, wasiCheck, _) <- executeCommand $ "wasm2wat " ++ outputWasm ++ " 2>/dev/null | grep -c wasi_snapshot_preview1 || echo 0"
+                  -- Verify no WASI imports remain (both tools print WAT to
+                  -- stdout when -o is omitted)
+                  (_, wasiCheck, _) <- executeCommand $ toWat ++ " " ++ outputWasm ++ " 2>/dev/null | grep -c wasi_snapshot_preview1 || echo 0"
                   putStrLn $ "        WASI imports stubbed (remaining: " ++ trim wasiCheck ++ ")"
                   pure $ Right ()
+  where
+    -- Echo "<wasm-dis path>\n<wasm-as path>" iff a usable binaryen pair
+    -- exists: PATH first, then the emsdk-bundled copy next to emcc
+    -- (<emsdk>/upstream/emscripten/emcc → <emsdk>/upstream/bin/wasm-dis).
+    binaryenProbe : String
+    binaryenProbe =
+      "d=\"$(command -v wasm-dis 2>/dev/null || true)\"; "
+      ++ "if [ -z \"$d\" ] && command -v emcc >/dev/null 2>&1; then "
+      ++   "e=\"$(dirname \"$(command -v emcc)\")/../bin/wasm-dis\"; "
+      ++   "[ -x \"$e\" ] && d=\"$e\"; "
+      ++ "fi; "
+      ++ "a=\"${d%wasm-dis}wasm-as\"; "
+      ++ "if [ -n \"$d\" ] && [ -x \"$d\" ] && [ -x \"$a\" ]; then "
+      ++   "printf '%s\\n%s\\n' \"$d\" \"$a\"; "
+      ++ "fi"
 
 -- =============================================================================
 -- Main Build Function

@@ -60,6 +60,29 @@ def main():
             func_idx += 1
             continue
 
+        # Match WASI imports with INLINE signature (binaryen wasm-dis dialect):
+        #   (import "wasi_snapshot_preview1" "fd_write"
+        #     (func $fimport$1 (param i32 i32 i32 i32) (result i32)))
+        # No type-index table lookup needed — params/result are on the line.
+        m = re.search(
+            r'\(import "wasi_snapshot_preview1" "\w+" '
+            r'\(func (\$[\w.$\-]+)((?:\s*\((?:type|param|result)[^()]*\))*)\)\)\s*$',
+            line)
+        if m:
+            func_name, sig = m.groups()
+            if '(result i32)' in sig:
+                ret = ' (i32.const 0)'
+            elif '(result i64)' in sig:
+                ret = ' (i64.const 0)'
+            elif '(result f32)' in sig:
+                ret = ' (f32.const 0)'
+            elif '(result f64)' in sig:
+                ret = ' (f64.const 0)'
+            else:
+                ret = ''
+            output.append(f' (func {func_name}{sig}{ret})')
+            continue
+
         # Match WASI imports with index only: (func (;N;) (type M))
         m = re.search(r'\(import "wasi_snapshot_preview1" "(\w+)" \(func \(;(\d+);\) \(type (\d+)\)\)\)', line)
         if m:

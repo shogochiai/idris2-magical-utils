@@ -277,8 +277,13 @@ resolvePathcovForkBin : IO String
 resolvePathcovForkBin = do
   mFork <- getEnv "IDRIS2_PATHCOV_FORK_BIN"
   mBin  <- getEnv "IDRIS2_BIN"
-  pure $ fromMaybe "/Users/bob/code/idrislang-idris2/build/exec/idris2"
-                   (nonEmpty mFork <|> nonEmpty mBin)
+  let (bin, source) = case (nonEmpty mFork, nonEmpty mBin) of
+        (Just f, _)        => (f, "env IDRIS2_PATHCOV_FORK_BIN")
+        (Nothing, Just b)  => (b, "env IDRIS2_BIN")
+        (Nothing, Nothing) => ( "/Users/bob/code/idrislang-idris2/build/exec/idris2"
+                              , "legacy literal — Bob-only last resort, WRONG on any other host")
+  putStrLn $ "    [pathcov-fork] " ++ bin ++ " (source: " ++ source ++ ")"
+  pure bin
   where
     nonEmpty : Maybe String -> Maybe String
     nonEmpty m = do

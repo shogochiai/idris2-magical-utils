@@ -74,7 +74,7 @@ invariant = "wasi_snapshot_preview1.fd_seek replaced with stub returning 0"
 [[spec]]
 id = "${prefix}_WASI_004"
 title = "Handle missing wabt gracefully"
-invariant = "If wasm2wat/wat2wasm unavailable, copy original WASM"
+invariant = "If wabt (wasm2wat/wat2wasm) unavailable, fall back to binaryen (wasm-dis/wasm-as -all, PATH or emsdk upstream/bin next to emcc); only when neither toolchain exists copy original WASM with a replica-rejection warning"
 
 [[spec_area]]
 name = "Build Pipeline"
