@@ -1263,9 +1263,25 @@ prepareRefCRuntime = do
   where
     findLocalRefcRuntime : IO (Maybe String)
     findLocalRefcRuntime = do
+      -- Fork-first: the forked compiler's support/refc carries the path-hit
+      -- runtime the released copies lack. Resolve the fork ROOT from env
+      -- (IDRIS2_PATHCOV_FORK_BIN / IDRIS2_BIN = <root>/build/exec/idris2),
+      -- machine-portable — no /Users/<user> literal.
+      mFork <- getEnv "IDRIS2_PATHCOV_FORK_BIN"
+      mBin  <- getEnv "IDRIS2_BIN"
+      let binSuffix = "/build/exec/idris2"
+      let forkCandidate = case map trim (mFork <|> mBin) of
+            Just bin =>
+              if isSuffixOf binSuffix bin
+                 then let rootLen = cast {to=Int} (length bin)
+                                  - cast {to=Int} (length binSuffix)
+                      in "\"" ++ strSubstr 0 rootLen bin ++ "/support/refc\" "
+                 else ""
+            Nothing => ""
       (_, output, _) <- executeCommand $
         "for d in " ++
-        "/Users/bob/code/idrislang-idris2/support/refc " ++
+        forkCandidate ++
+        "\"$HOME/code/idrislang-idris2/support/refc\" " ++
         "\"$HOME/.idris2/idris2-0.8.0/support/refc\" " ++
         "$(ls -td \"$HOME\"/.local/state/pack/install/*/idris2/idris2-0.8.0/support/refc 2>/dev/null); do " ++
         "if [ -f \"$d/runtime.c\" ] && [ -f \"$d/cBackend.h\" ] && [ -f \"$d/_datatypes.h\" ]; then echo \"$d\"; break; fi; " ++
@@ -1624,7 +1640,9 @@ stubWasi inputWasm outputWasm = do
         then pure $ Left $ "wasm2wat failed: " ++ e1
         else do
           -- Use stub_wasi.py script from idris2-icwasm/support/tools
-          let scriptFile = "/Users/bob/code/idris2-magical-utils/pkgs/Idris2IcWasm/support/tools/stub_wasi.py"
+          -- (HOME-anchored conventional checkout, same convention as the
+          -- ic0-support probe — no /Users/<user> literal)
+          let scriptFile = "\"$HOME/code/idris2-magical-utils/pkgs/Idris2IcWasm/support/tools/stub_wasi.py\""
 
           (c2, _, e2) <- executeCommand $ "python3 " ++ scriptFile ++ " " ++ watFile ++ " " ++ stubbedWat
 

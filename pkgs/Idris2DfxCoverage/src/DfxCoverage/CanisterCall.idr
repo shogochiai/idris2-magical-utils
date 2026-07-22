@@ -268,6 +268,23 @@ ensureProjectIc0Support projectDir = do
                  pure ()
   pure ()
 
+||| Resolve the forked idris2 compiler binary (path-hits codegen needs the
+||| fork's --dumppathshits CompileExpr pass). Machine-portable resolution:
+||| IDRIS2_PATHCOV_FORK_BIN wins, then IDRIS2_BIN (pathcov machines export the
+||| fork there). The /Users/bob literal is a legacy last resort ONLY — any
+||| non-Bob machine (alice) MUST reach the fork via env, never this literal.
+resolvePathcovForkBin : IO String
+resolvePathcovForkBin = do
+  mFork <- getEnv "IDRIS2_PATHCOV_FORK_BIN"
+  mBin  <- getEnv "IDRIS2_BIN"
+  pure $ fromMaybe "/Users/bob/code/idrislang-idris2/build/exec/idris2"
+                   (nonEmpty mFork <|> nonEmpty mBin)
+  where
+    nonEmpty : Maybe String -> Maybe String
+    nonEmpty m = do
+      s <- map trim m
+      if null s then Nothing else Just s
+
 ||| Ensure the canister's custom (non-stdlib) deps are pack-installed so the
 ||| numerator WASM build's `idris2 -p <dep>` resolves them. The build uses the
 ||| pack-wrapper idris2 (IDRIS2_BIN/IDRIS2_PACKAGE_PATH unset → wrapper runs
@@ -294,7 +311,7 @@ installCanisterDepsViaPack instrumentPathHits projectDir = do
          -- resolves them. (pack-built TTCs are released-compiler and would be
          -- rejected by the fork as "older compiler version".)
          putStrLn $ "    [dep-install] fork-installing deps for path-hits build: " ++ show deps
-         let forkBin = "/Users/bob/code/idrislang-idris2/build/exec/idris2"
+         forkBin <- resolvePathcovForkBin
          let installLog = "/tmp/dfxcov-dep-install.log"
          rc <- system $ "cd \"" ++ projectDir ++ "\""
                      ++ " && IDRIS2_BIN=" ++ forkBin
@@ -511,9 +528,7 @@ buildWasmViaIcWasmCli opts mainModulePath testModPath = do
       -- and give it the pack-computed IDRIS2_PACKAGE_PATH so `-p idris2-icwasm` still
       -- resolves (the fork's own package path lacks it). For non-instrumented builds
       -- keep the original pack-wrapper path (env -u both).
-      forkBin <- getEnv "IDRIS2_PATHCOV_FORK_BIN"
-      let forkPath = fromMaybe "/Users/bob/code/idrislang-idris2/build/exec/idris2"
-                              (map trim forkBin)
+      forkPath <- resolvePathcovForkBin
       let unsetPrefix =
             if opts.instrumentPathHits
                then [ "env"
