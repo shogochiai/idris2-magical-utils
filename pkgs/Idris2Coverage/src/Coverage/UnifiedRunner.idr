@@ -864,6 +864,27 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
                 Left err => pure $ Left $ "Static chunk " ++ show idx ++ " produced unparsable dumppaths JSON: " ++ err
                 Right paths => pure $ Right paths
 
+||| Cheap topological proxy for leaf-first chunk ordering: a module's import
+||| count. Root modules (Main, Commands.*) import many project modules; leaf
+||| modules import few — sorting ascending puts leaves in the early chunks so
+||| the shared temp build dir accumulates their TTCs before any root compiles.
+||| An unreadable module file sorts LAST (treated as maximally root-like): a
+||| parse miss can only make the ordering conservative, never wrong.
+sortModulesLeafFirst : (projectDir, sourcedir : String) -> List String -> IO (List String)
+sortModulesLeafFirst projectDir sourcedir mods = do
+  counted <- traverse withCount mods
+  pure $ map snd (sortBy (\a, b => compare (fst a) (fst b)) counted)
+  where
+    modFile : String -> String
+    modFile m = projectDir ++ "/" ++ sourcedir ++ "/"
+             ++ pack (map (\c => if c == '.' then '/' else c) (unpack m)) ++ ".idr"
+    withCount : String -> IO (Nat, String)
+    withCount m = do
+      r <- readFile (modFile m)
+      pure $ case r of
+        Right c => (length (filter (isPrefixOf "import ") (map trim (lines c))), m)
+        Left _  => (1000, m)
+
 runStaticDumppathsJsonChunks : String -> String -> IO (Either String String)
 runStaticDumppathsJsonChunks ipkgPath wholeErr = do
   let (projectDir, _) = splitPath ipkgPath
@@ -890,8 +911,30 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        let tempBuildDir = ".idris2-static-dumppaths-build-" ++ uid
        projectPackToml <- readProjectPackToml projectDir
        let packTomlContent = generateTempPackToml projectPackToml
-       putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules)..."
-       chunkResults <- runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent (chunkList 8 projectModules) 0 []
+       -- LEAF-FIRST ordering (OOM fix, 2026-07-23): ipkgs conventionally list
+       -- ROOT modules (Types/Main) first, so chunk 0 used to compile nearly
+       -- the package's ENTIRE dependency closure in one fork process — an
+       -- 8-module chunk in name only; the fork got SIGKILLed on an 8GB host
+       -- (pkgs/Luci, 150 modules). Sorting modules by ascending import count
+       -- (a cheap topological proxy) makes each chunk build on the previous
+       -- chunks' on-disk TTCs, so every process restart reclaims the heap and
+       -- peak memory really is one chunk's INCREMENTAL build — the bound the
+       -- chunking design always claimed.
+       sortedModules <- sortModulesLeafFirst projectDir sourcedir projectModules
+       -- TAIL SINGLETONS: leaf-first ordering pushes the import-heaviest
+       -- modules (Main, the Commands.*, a 19k-line AllTests) into the FINAL
+       -- chunk — verified live on pkgs/Luci: chunks 0..17 completed in
+       -- seconds each, then the 8-root terminal chunk alone ballooned swap
+       -- past 6GB on an 8GB host. Giving each of the heaviest modules its
+       -- own process (heap reclaimed between them, all lighter TTCs already
+       -- on disk) caps the peak at ONE heavy module's compile.
+       let n = length sortedModules
+       let tailCount = if n > 16 then 16 else n
+       let headMods = take (minus n tailCount) sortedModules
+       let tailMods = drop (minus n tailCount) sortedModules
+       let chunks = chunkList 8 headMods ++ map (\m => [m]) tailMods
+       putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons)..."
+       chunkResults <- runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent chunks 0 []
        _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
        case chunkResults of
          Left err => pure $ Left $ wholeErr ++ "\nChunked fallback failed: " ++ err
