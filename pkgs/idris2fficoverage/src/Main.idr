@@ -76,10 +76,10 @@ STEPS:
   4 trace coverage over declared Integration FFI paths
 
 DEFAULT TRACE PATHS:
-  .etherclaw/integration/traces/integration.jsonl
-  .etherclaw/integration/traces/integration.trace
+  .luci/integration/traces/integration.jsonl
+  .luci/integration/traces/integration.trace
   .lazy/integration-trace.txt
-  .etherclaw/integration-trace.txt
+  .luci/integration-trace.txt
 
 DEFAULT REGISTRY PATHS:
   ci/integration-registry.jsonl
@@ -115,10 +115,10 @@ readMany (path :: rest) = do
 defaultTracePath : String -> IO (Maybe String)
 defaultTracePath root = do
   let candidates =
-        [ root ++ "/.etherclaw/integration/traces/integration.jsonl"
-        , root ++ "/.etherclaw/integration/traces/integration.trace"
+        [ root ++ "/.luci/integration/traces/integration.jsonl"
+        , root ++ "/.luci/integration/traces/integration.trace"
         , root ++ "/.lazy/integration-trace.txt"
-        , root ++ "/.etherclaw/integration-trace.txt"
+        , root ++ "/.luci/integration-trace.txt"
         ]
   findFirst candidates
   where

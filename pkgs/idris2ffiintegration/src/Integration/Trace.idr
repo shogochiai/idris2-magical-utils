@@ -99,7 +99,14 @@ parseTraceEventLine line = do
 public export
 parsedTraceCovers : SomeIntegrationOp -> ParsedTraceEvent -> Bool
 parsedTraceCovers op event =
-  event.schema == "etherclaw.integration.trace.v1"
+  -- Accept BOTH the post-rename `luci.` schema and the legacy `etherclaw.`
+  -- one. The EtherClaw→Luci rename moved the producer to
+  -- `luci.integration.trace.v1`, but this gate still required the old string,
+  -- so EVERY luci-produced trace event was silently rejected → integration
+  -- Step-4 read 0% coverage regardless of input (rename residue, not a real
+  -- coverage gap).
+  (event.schema == "luci.integration.trace.v1"
+     || event.schema == "etherclaw.integration.trace.v1")
     && event.opId == somePathId op
     && someTrust op == ProofGrade
     && maybe True (== ProofGrade) event.trust

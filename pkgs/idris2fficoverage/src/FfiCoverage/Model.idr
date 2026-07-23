@@ -7,6 +7,17 @@ import Data.List
 import Data.Maybe
 import Data.String
 
+-- Only IntegrationRegistry.defaultRegistry is used qualified; hide the rest so
+-- its parse* exports stop clashing with this module's own parseRisk /
+-- parseBoundary / parseTrustLevel / parseRegistryLine / registryFromJsonLines.
+-- The clash had drifted into an ambiguous-elaboration BUILD BREAK, leaving the
+-- integration FFI-coverage binary stale at May 13 → integration Step-4 TI was
+-- silently unmeasurable (an instrument failure masquerading as NOT_MEASURED).
+%hide IntegrationRegistry.parseRisk
+%hide IntegrationRegistry.parseBoundary
+%hide IntegrationRegistry.parseRegistryLine
+%hide IntegrationRegistry.registryFromJsonLines
+
 %default covering
 
 public export
@@ -104,7 +115,7 @@ parseRegistryLine line = do
   boundaryText <- parseJsonStringField "boundary" line
   boundary <- parseBoundary boundaryText
   riskText <- parseJsonStringField "risk" line
-  risk <- parseRisk riskText
+  risk <- FfiCoverage.Model.parseRisk riskText
   adapter <- parseJsonStringField "adapter" line
   evidenceIds <- parseJsonStringArrayField "evidenceIds" line
   let evidence = map (\eid => evidenceKind eid eid) evidenceIds
