@@ -11,6 +11,7 @@ import EvmCoverage.Report
 import EvmCoverage.EvmCoverage
 import EvmCoverage.PathCoverage
 import EvmCoverage.PathRuntime
+import Coverage.Core.DumppathsJson
 import EvmCoverage.Runtime as Runtime
 import EvmCoverage.ProfileParserLinear
 import EvmCoverage.ProfileParserFSM
@@ -283,7 +284,12 @@ runDumppathsJson ipkgPath = do
          Left _ => do
            partsResult <- readFile partsPath
            case partsResult of
-             Right c => pure c
+             -- .parts is a per-module FRAGMENT stream, not the merged
+             -- document. Only accept it when it happens to be a complete
+             -- dumppaths JSON (single-module builds emit one whole object);
+             -- otherwise returning it upgrades a build failure into a
+             -- downstream "Failed to parse dumppaths JSON" with no build log.
+             Right c => if looksLikeDumppathsJson c then pure c else pure ""
              Left _ => pure $ ""
        logResult <- readFile logPath
        let logContent = either (const "") id logResult
@@ -304,6 +310,12 @@ runDumppathsJsonInIsolatedCopy ipkgPath = do
         ++ " && mkdir -p " ++ tempDir
         ++ " && cp -R " ++ projectDir ++ "/. " ++ tempDir
         ++ " && rm -rf " ++ tempDir ++ "/build"
+        -- A dumpcases temp ipkg bakes `opts = --dumpcases-json ./build/exec/…`;
+        -- with the build tree wiped (and the dedicated dumpcases builddir no
+        -- longer recreating build/), that write target must exist or the fork
+        -- dies mid-dump — leaving only .parts fragments for the caller to
+        -- mis-parse as the dumppaths document.
+        ++ " && mkdir -p " ++ tempDir ++ "/build/exec"
   copyExit <- system copyCmd
   if copyExit /= 0
      then pure $ Left $ "Failed to prepare isolated path dump copy for " ++ projectDir

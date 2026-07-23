@@ -818,10 +818,21 @@ runDumpcasesAndParse ipkgPath outputPath = do
   -- Get modules string for ipkg
   let modulesStr = concat $ intersperse "\n        , " modules
 
+  -- DEDICATED FRESH BUILDDIR (denominator-collapse fix, 2026-07-23):
+  -- --dumpcases(-json) only emits case trees for modules COMPILED IN THIS
+  -- BUILD — with the package's warm build/ TTCs, an incremental temp build
+  -- recompiles only the wrapper and the dump collapses to a handful of
+  -- functions (the "158 -> 4 denominator" class: a TTC-freshness-dependent,
+  -- NON-DETERMINISTIC denominator that classified honest branches straight
+  -- into claim-blocking unknown). A per-run builddir forces every module
+  -- through the compiler so the dump is total and deterministic; the dir is
+  -- removed after the parse.
+  let tempBuildDirName = ".dumpcases-build-" ++ uid
   let tempIpkgContent = unlines
         [ "package dumpcases-temp"
         , "version = \"0.0.1\""
         , sourcedirLine
+        , "builddir = \"" ++ tempBuildDirName ++ "\""
         , dependsSection
         , "main = " ++ tempMainName
         , "executable = \"dumpcases-temp\""
@@ -875,6 +886,8 @@ runDumpcasesAndParse ipkgPath outputPath = do
   contentE2 <- the (IO (Either FileError String)) $ case contentE of
                  Right c => pure (Right c)
                  Left _  => readFile altOutputPath
+  -- The per-run fresh builddir has served its purpose once the dump is read.
+  _ <- system $ "rm -rf " ++ projectDir ++ "/" ++ tempBuildDirName
   Right content <- pure contentE2
     | Left err => do
         logTail <- readLogTail buildLog

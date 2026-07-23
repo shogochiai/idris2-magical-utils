@@ -1,4 +1,4 @@
-package idris2-evm
+package idris2-yul
 
 version = "0.2.0"
 
@@ -37,4 +37,6 @@ modules = EVM.Word256
         , Main
         , YulMain
 
+main = YulMain
 
+executable = idris2-yul
