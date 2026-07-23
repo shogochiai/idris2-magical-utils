@@ -7,3 +7,8 @@ ipkg = "idris2-ffi-integration.ipkg"
 type = "local"
 path = "."
 ipkg = "idris2-ffi-coverage.ipkg"
+
+[custom.all.idris2-ffi-coverage-cli]
+type = "local"
+path = "."
+ipkg = "idris2-ffi-coverage-cli.ipkg"

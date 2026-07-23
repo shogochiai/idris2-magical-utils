@@ -9,7 +9,3 @@ depends = base, contrib, idris2-ffi-integration
 
 modules = FfiCoverage.Model
         , Tests.AllTests
-        , Main
-
-main = Main
-executable = idris2-ffi-cov

@@ -1,0 +1,14 @@
+package idris2-ffi-coverage-cli
+version = 0.1.0
+authors = "lazy-idris team"
+brief = "CLI executable (idris2-ffi-cov) for Integration FFI path coverage"
+
+sourcedir = "src"
+
+depends = base, contrib, idris2-ffi-integration
+
+modules = FfiCoverage.Model
+        , Main
+
+main = Main
+executable = idris2-ffi-cov
