@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build/exec/idris2-ffi-integration"
 
 if [[ ! -x "$BIN" ]]; then
-  (cd "$ROOT" && idris2 --build idris2-ffi-integration.ipkg >/dev/null)
+  (cd "$ROOT" && idris2 --build idris2-ffi-integration-cli.ipkg >/dev/null)
 fi
 
 self_json="$(mktemp -t idris2-ffi-integration-self.XXXXXX.json)"

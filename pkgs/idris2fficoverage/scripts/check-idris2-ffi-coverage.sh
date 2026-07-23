@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build/exec/idris2-ffi-cov"
 
 if [[ ! -x "$BIN" ]]; then
-  (cd "$ROOT" && pack build idris2-ffi-coverage >/dev/null)
+  (cd "$ROOT" && pack build idris2-ffi-coverage-cli >/dev/null)
 fi
 
 repo="$(mktemp -d -t idris2-ffi-cov.XXXXXX)"
