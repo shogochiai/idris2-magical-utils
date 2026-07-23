@@ -405,18 +405,75 @@ runProjectMethodRetry (S k) projectDir canisterRef method network = do
                           ++ show k ++ " left): " ++ err
                  runProjectMethodRetry k projectDir canisterRef method network
 
-||| Indices of the chunked `runTestBatchN` canister methods to probe. Each batch
-||| evaluates 8 tests (start = idx*8). Must stay in sync with the generated
-||| harness's batch exports (WasmBuilder.testBatchIndexes). 0..31 covers up to
-||| 256 tests in 8-test slices while keeping every IC update call small (avoids
-||| native-stack overflow / replica crash that a single all-tests call causes).
-||| Extended 16->32: GlobalRegistry's pureTestThunks grew past 128 (now ~145 with
-||| the path-coverage subsuites); batches 16+ were unprobed so the tail tests'
-||| paths never recorded (numerator under-counted, run-to-run unstable). Probing a
-||| batch with no tests is a harmless no-op.
-batchProbeIndexes : List Nat
-batchProbeIndexes = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
-                     16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
+||| Capacity of the generated harness's chunked `runTestBatchN` exports. MUST
+||| equal `length WasmBuilder.testBatchIndexes` (96 exports x 8 tests = 768).
+|||
+||| The prober does NOT enumerate a fixed index list any more. A fixed list
+||| silently under-counted every time a suite outgrew it (16 -> 32 -> 48:
+||| GlobalRegistry hit 145 then 305 thunks; each time the tail tests never ran
+||| on the replica and their path hits just vanished — a soundness hole the
+||| golden-fixture preflight cannot see, because the fixture has only a
+||| handful of thunks). Instead `probeBatchesDynamic` WALKS batches from 0
+||| until the past-the-end sentinel and treats reaching this capacity without
+||| a sentinel as an EvidenceViolation — outgrowth is LOUD, never silent.
+batchCapacity : Nat
+batchCapacity = 96
+
+||| Past-the-end detector for a batch reply. `runTestRange start count` on a
+||| start beyond the thunk list clamps to an EMPTY slice and returns (0,0); a
+||| batch inside the list always counts each of its tests into passed+failed,
+||| so a mid-list batch can never be all-zero.
+|||
+||| The captured output is stdout+stderr MERGED, and dfx prepends warnings
+||| whose text carries digits (canister ids, ports) — scanning the whole blob
+||| made the sentinel unreachable (walked to capacity, spurious
+||| EvidenceViolation). Only the Candid VALUE lines (trim starts with "(",
+||| e.g. `("0,0")` for the text wire protocol) are the reply; digits are
+||| taken from those lines alone. No value line = not a sentinel
+||| (conservative: keep walking).
+isEmptyBatchReply : String -> Bool
+isEmptyBatchReply reply =
+  let valueLines = filter (\l => isPrefixOf "(" (trim l)) (lines reply)
+      digitsOf = \s => words (pack (map (\c => if isDigit c then c else ' ') (unpack s)))
+      digitRuns = concatMap digitsOf valueLines
+  in not (null digitRuns) && all (all (== '0') . unpack) digitRuns
+
+||| Walk `runTestBatch0..` until the past-the-end sentinel. Every executed
+||| batch records its path hits cumulatively into canister state, so a batch
+||| that persistently fails (after retries) is WARNED and skipped — the walk
+||| continues so later batches still record. Exhausting `batchCapacity`
+||| without seeing the sentinel means pureTestThunks has outgrown the
+||| generated harness: that is an instrument-integrity failure, so we refuse
+||| to measure rather than silently under-count.
+probeBatchesDynamic : String -> String -> String -> IO (Either String ())
+probeBatchesDynamic projectDir canisterRef network = go 0
+  where
+    go : Nat -> IO (Either String ())
+    go idx =
+      if idx >= batchCapacity
+        then pure $ Left $
+          "EvidenceViolation: test-batch capacity exhausted — probed "
+          ++ show batchCapacity ++ " batches (" ++ show (batchCapacity * 8)
+          ++ " tests) without reaching the past-the-end (0,0) sentinel; "
+          ++ "pureTestThunks has outgrown the generated harness (the "
+          ++ "145/305-thunk silent-undercount bug class). Raise "
+          ++ "WasmBuilder.testBatchIndexes AND batchCapacity together."
+        else do
+          let method = "runTestBatch" ++ show idx
+          result <- runProjectMethodRetry 3 projectDir canisterRef method network
+          case result of
+            Left err => do
+              -- Loud but non-fatal: later batches still record their hits.
+              putStrLn $ "    [numerator] WARNING: " ++ method
+                       ++ " failed after retries (its 8 tests' hits are lost): " ++ err
+              go (S idx)
+            Right reply =>
+              if isEmptyBatchReply reply
+                then do
+                  putStrLn $ "    [numerator] batch walk complete: " ++ show idx
+                           ++ " batch(es) ran (past-the-end sentinel at " ++ method ++ ")"
+                  pure $ Right ()
+                else go (S idx)
 
 runProjectMethods : String -> String -> List String -> String -> IO (Either String (List String))
 runProjectMethods _ _ [] _ = pure $ Left "No test methods configured"
@@ -1177,42 +1234,51 @@ runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPa
           -- can overflow the IC native stack and even take the replica node down,
           -- which then blocks the path-hit query. The batches below cover the
           -- whole list (8 tests each), so no coverage is lost.
-          let batchMethods = map (\idx => "runTestBatch" ++ show idx) batchProbeIndexes
           -- runIoCoverage runs ONLY the IO/SQL-fixture coverage routines (parse-row
           -- / query exercises against a real replica DB) — small enough to probe in
           -- one call, recording paths unreachable from the pure batches.
-          let methods = "runMinimalTests" :: "runTrivialTest" :: "runIoCoverage" :: batchMethods
+          let methods = ["runMinimalTests", "runTrivialTest", "runIoCoverage"]
           callResult <- runProjectMethods projectDir canister methods opts.network
           case callResult of
             Left err => do
               cleanupGeneratedDumppathsIpkg staticIpkgPath
               pure $ Left err
             Right _ => do
-              _ <- runProjectProbeCalls projectDir canister opts.network
-              -- NUMERATOR (identity join): query the canister's recorded canonical
-              -- path-ids (__get_path_hits, from compiler-injected idris2_recordPathHit)
-              -- and intersect with dumppaths path_ids. No source-map / ordinal / span.
-              pathIdsResult <- getPathHitIds (Just projectDir) canister opts.network
-              hitsResult <- the (IO (Either String (List PathRuntimeHit))) $ case pathIdsResult of
-                Left err => do
-                  putStrLn $ "    [numerator] getPathHitIds FAILED: " ++ err
-                  pure $ Left err
-                Right recordedIds => do
-                  let res = analyzePathHitsFromPathIds dumppathsContent recordedIds
-                  putStrLn $ "    [numerator] recordedPathIds=" ++ show (length recordedIds)
-                          ++ " -> identity-joined hits=" ++ show (either (const 0) length res)
-                  pure res
-              cleanupGeneratedDumppathsIpkg staticIpkgPath
-              case hitsResult of
-                Left err => pure $ Left err
-                Right hits => do
-                  -- Persist covered path-ids for the orchestrator (phase-1) to read.
-                  case opts.hitsOut of
-                    Just hp => do
-                      _ <- writeFile hp (unlines (map (.pathId) hits))
-                      pure ()
-                    Nothing => pure ()
-                  pure $ Right (dumppathsContent, hits)
+              -- Pure-test batches: DYNAMIC walk to the (0,0) sentinel — never a
+              -- fixed index list (the silent-undercount bug class). A capacity
+              -- exhaustion here is an EvidenceViolation and ABORTS the
+              -- measurement: unmeasured must never pretty-print as a number.
+              batchWalk <- probeBatchesDynamic projectDir canister opts.network
+              case batchWalk of
+                Left violation => do
+                  cleanupGeneratedDumppathsIpkg staticIpkgPath
+                  pure $ Left violation
+                Right () => do
+                    _ <- runProjectProbeCalls projectDir canister opts.network
+                    -- NUMERATOR (identity join): query the canister's recorded canonical
+                    -- path-ids (__get_path_hits, from compiler-injected idris2_recordPathHit)
+                    -- and intersect with dumppaths path_ids. No source-map / ordinal / span.
+                    pathIdsResult <- getPathHitIds (Just projectDir) canister opts.network
+                    hitsResult <- the (IO (Either String (List PathRuntimeHit))) $ case pathIdsResult of
+                      Left err => do
+                        putStrLn $ "    [numerator] getPathHitIds FAILED: " ++ err
+                        pure $ Left err
+                      Right recordedIds => do
+                        let res = analyzePathHitsFromPathIds dumppathsContent recordedIds
+                        putStrLn $ "    [numerator] recordedPathIds=" ++ show (length recordedIds)
+                                ++ " -> identity-joined hits=" ++ show (either (const 0) length res)
+                        pure res
+                    cleanupGeneratedDumppathsIpkg staticIpkgPath
+                    case hitsResult of
+                      Left err => pure $ Left err
+                      Right hits => do
+                        -- Persist covered path-ids for the orchestrator (phase-1) to read.
+                        case opts.hitsOut of
+                          Just hp => do
+                            _ <- writeFile hp (unlines (map (.pathId) hits))
+                            pure ()
+                          Nothing => pure ()
+                        pure $ Right (dumppathsContent, hits)
 
 ||| Derive the chez WRAPPER script path from argv[0]. A Chez-backed Idris exe is
 ||| `<dir>/<name>` (wrapper, sets DYLD/LD_LIBRARY_PATH) and `<dir>/<name>_app/<name>.so`
@@ -1409,8 +1475,21 @@ runPaths opts = do
     Left err => do
       putStrLn $ "Error: " ++ err
       exitWith (ExitFailure 1)
-    Right (content, hits) =>
-      case analyzePathCoverageFromContent defaultPathExclusions content hits of
+    Right (content, hits) => do
+      -- Package-specific exclusions live in the PROJECT, not in the shared
+      -- instrument: icpDefaultExclusions is generic-ICP only, and letting
+      -- per-canister knowledge (GlobalRegistry SQL/outcall wrappers, ...)
+      -- accumulate there couples the shared meter to one consumer. Format
+      -- (Coverage.Core.Exclusions.loadExclusionFile):
+      --   <exact|prefix|suffix|contains>:<functionName> # reason
+      let projRoot = case opts.targetPath of
+                       Just t  => if isSuffixOf ".ipkg" t then fst (splitPath t) else t
+                       Nothing => maybe "." (fst . splitPath) opts.ipkgPath
+      projectExcl <- loadExclusionFile (projRoot ++ "/coverage-exclusions.txt")
+      unless (null projectExcl) $
+        putStrLn $ "    [exclusions] " ++ show (length projectExcl)
+                 ++ " project-local pattern(s) from coverage-exclusions.txt"
+      case analyzePathCoverageFromContent (defaultPathExclusions ++ projectExcl) content hits of
         Left err => do
           putStrLn $ "Error: " ++ err
           exitWith (ExitFailure 1)

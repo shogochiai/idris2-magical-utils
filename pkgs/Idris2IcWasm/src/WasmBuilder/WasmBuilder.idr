@@ -437,18 +437,22 @@ generateTestHarnessShimContent PureRunAllHarnessWithRunner testModuleName _ =
 ||| This is written to /tmp, never touches the original Main.idr
 ||| One canister export `runTestBatchN` is generated per index; each runs an
 ||| 8-test slice (start = idx*8). Cover enough indices that the batches span the
-||| whole pure-test list (0..31 -> up to 256 tests) so chunked probing records
-||| hits for every test without a single all-tests call (which can overflow the
-||| IC native stack / crash the replica). Must stay in sync with the dfx-cov
-||| probe's batchProbeIndexes. Extended 16->32 batches: GlobalRegistry's
-||| pureTestThunks grew past 128 (now ~145 with the path-coverage subsuites), so
-||| tests beyond index 15 were never executed on the replica and their paths never
-||| recorded (numerator under-counted, run-to-run unstable). Empty batches past the
-||| list end are harmless no-ops (runTestRange clamps).
+||| whole pure-test list so chunked probing records hits for every test without
+||| a single all-tests call (which can overflow the IC native stack / crash the
+||| replica). Empty batches past the list end are harmless no-ops (runTestRange
+||| clamps) and generating an export costs almost nothing, so this is a
+||| GENEROUS CEILING (96 x 8 = 768 tests), not a tuned size.
+|||
+||| History of the silent-undercount bug class this ceiling closes out:
+||| 16 batches (128) -> GlobalRegistry grew to ~145, tail unprobed; 32 (256)
+||| -> grew to 305, last 49 tests never ran (alice Round-5 differback). The
+||| prober no longer enumerates a fixed index list: it WALKS batches until the
+||| past-the-end sentinel ((0,0) from the clamped runTestRange) and raises an
+||| EvidenceViolation if it exhausts this capacity without seeing the
+||| sentinel — outgrowing the ceiling can never again be silent. MUST stay in
+||| sync with the dfx-cov prober's batchCapacity.
 testBatchIndexes : List Int
-testBatchIndexes =
-  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-   16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+testBatchIndexes = [0..95]
 
 generateTestBatchExport : Int -> List String
 generateTestBatchExport idx =
@@ -666,18 +670,30 @@ generateFuncEntry modulePrefix cArities ef didMethods typeDefs =
     -- Generate Candid reply code based on .did return type if available
     generateReplyCode : ExportedFunc -> List DidMethod -> List TypeDef -> String
     generateReplyCode func methods defs =
-      -- First try to find matching method in .did file
-      case lookupReturnType func.name methods of
-        Just candidType =>
-          -- Use dynamic Candid-aware stub generation with type definitions
-          generateReplyForType func.name candidType defs
-        Nothing =>
-          -- Fallback to heuristic based on Idris return type
-          if isInfixOf "(Int, Int)" func.returnType || isInfixOf "(Nat, Nat)" func.returnType
-            then "int32_t _passed = 0; int32_t _failed = 0; extract_int_pair(_result, &_passed, &_failed); reply_int_pair(_passed, _failed);"
-            else if isInfixOf "String" func.returnType
-              then "reply_text(\"ok\"); // String result"
-              else "reply_text(\"done\"); // Generic result (no .did match)"
+      -- A REAL Idris export with an (Int, Int)-shaped return must reply with
+      -- the ACTUAL runtime values (reply_int_pair reads _result). The
+      -- .did-driven generateReplyForType emits a STATIC placeholder blob —
+      -- correct only for fromDid stubs that have no Idris body. Routing real
+      -- exports through the did branch produced a malformed constant reply
+      -- (DIDL 00 01 00: value of type-index 0 with an empty type table) for
+      -- every did-declared test method (runTests/runMinimalTests/…) — masked
+      -- for months because runProjectMethods tolerated their call failures as
+      -- long as ANY sibling method call succeeded.
+      if not func.fromDid
+         && (isInfixOf "(Int, Int)" func.returnType || isInfixOf "(Nat, Nat)" func.returnType)
+        then "int32_t _passed = 0; int32_t _failed = 0; extract_int_pair(_result, &_passed, &_failed); reply_int_pair(_passed, _failed);"
+        else
+          -- .did-declared type: dynamic Candid-aware stub generation
+          case lookupReturnType func.name methods of
+            Just candidType =>
+              generateReplyForType func.name candidType defs
+            Nothing =>
+              -- Fallback to heuristic based on Idris return type
+              if isInfixOf "(Int, Int)" func.returnType || isInfixOf "(Nat, Nat)" func.returnType
+                then "int32_t _passed = 0; int32_t _failed = 0; extract_int_pair(_result, &_passed, &_failed); reply_int_pair(_passed, _failed);"
+                else if isInfixOf "String" func.returnType
+                  then "reply_text(\"ok\"); // String result"
+                  else "reply_text(\"done\"); // Generic result (no .did match)"
 
 ||| Generate complete canister_entry.c with all exported functions
 ||| @modulePrefix C function prefix (e.g., "Main" or "Tests_AllTests")
