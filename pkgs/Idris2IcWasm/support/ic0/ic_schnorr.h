@@ -31,4 +31,40 @@ int64_t ic_schnorr_get_last_error_byte(int64_t index);
 const char* icw_schnorr_sign_message_entry(const uint8_t* arg_buf, int32_t arg_buf_size);
 const char* icw_schnorr_get_pubkey_entry(const uint8_t* arg_buf, int32_t arg_buf_size);
 
+/* ---- Idris2-driven deferred-sign path (@defer_if_pending convention,
+ * same shape as ic_vetkd's getMemoryVetKey/CMD 314) ----
+ *
+ * Unlike icw_schnorr_sign_message_entry (which owns the WHOLE request —
+ * parses arg0 itself and signs it directly), THIS path lets an Idris2
+ * command handler do its own gating/DB-writes FIRST (e.g. joinBuilderFleet
+ * checking + writing builder_fleet_members), assemble a certificate body
+ * with SshCert.Core, hand that body to the CA signer via
+ * ic_schnorr_set_pending_cert_body, fire the async sign, and return
+ * control to gen-entry's generated dispatcher WITHOUT replying — the
+ * dispatcher's own auto-reply is then suppressed by
+ * ic_schnorr_consume_pending_cert_reply (wired via @defer_if_pending), and
+ * the ACTUAL reply (certificate body + signature, concatenated as one hex
+ * string) is sent by the reply callback once sign_with_schnorr returns.
+ * This keeps the whole join-and-certify flow as ONE client-visible
+ * canister call, matching docs/papers/builder-fleet-ca-join-design.md's
+ * "don't ask for auth twice" requirement. */
+
+/* Load the certificate BODY (everything up to and including the signature
+ * key, per PROTOCOL.certkeys/SshCert.Core.assembleCertBody) byte-at-a-time
+ * — same scalar-only FFI convention as ic_schnorr_set_message_byte. Call
+ * ic_schnorr_clear_pending_cert_body first. */
+void ic_schnorr_clear_pending_cert_body(void);
+void ic_schnorr_set_pending_cert_body_byte(int64_t idx, int64_t byte);
+
+/* Fire the async sign over the pending cert body (production key_1 only —
+ * the fleet has one CA key) and mark the deferred-reply flag. Returns 0 on
+ * successful call initiation, nonzero on failure (caller should reply an
+ * error synchronously in that case — nothing was deferred). */
+int64_t ic_schnorr_sign_pending_cert(void);
+
+/* Read + reset the deferred-reply flag (wired via @defer_if_pending): the
+ * generated entry calls this AFTER the Idris2 handler returns, and skips
+ * its own auto-reply iff this returns nonzero. */
+int32_t ic_schnorr_consume_pending_cert_reply(void);
+
 #endif

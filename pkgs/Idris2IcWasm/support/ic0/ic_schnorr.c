@@ -53,6 +53,16 @@ static uint32_t g_public_key_len = 0;
 static char g_last_error[256] = "";
 static int32_t g_last_error_len = 0;
 
+/* ---- Idris2-driven deferred-sign state (joinBuilderFleet path) ----
+ * A certificate BODY assembled by Idris2 (SshCert.Core.assembleCertBody),
+ * held here until the async sign_with_schnorr reply arrives, at which
+ * point the reply callback appends the signature and replies the whole
+ * thing — see ic_schnorr.h's "Idris2-driven deferred-sign path" doc. */
+#define SCHNORR_MAX_CERT_BODY 512
+static uint8_t g_pending_cert_body[SCHNORR_MAX_CERT_BODY];
+static uint32_t g_pending_cert_body_len = 0;
+static int32_t g_pending_cert_reply = 0;  /* consumed by @defer_if_pending */
+
 static uint32_t encode_leb128_unsigned(uint8_t* buf, uint64_t value) {
     uint32_t len = 0;
     do {
@@ -307,6 +317,11 @@ static void hook_sign_reply_callback(int32_t env);
 static void hook_sign_reject_callback(int32_t env);
 static void hook_pubkey_reply_callback(int32_t env);
 static void hook_pubkey_reject_callback(int32_t env);
+static void hook_cert_sign_reply_callback(int32_t env);
+static void hook_cert_sign_reject_callback(int32_t env);
+
+static ic_schnorr_callback_fn g_hook_cert_sign_reply  = &hook_cert_sign_reply_callback;
+static ic_schnorr_callback_fn g_hook_cert_sign_reject = &hook_cert_sign_reject_callback;
 
 static ic_schnorr_callback_fn g_ic_sign_reply = &ic_schnorr_sign_reply_callback;
 static ic_schnorr_callback_fn g_ic_sign_reject = &ic_schnorr_sign_reject_callback;
@@ -390,6 +405,80 @@ static void hook_sign_reject_callback(int32_t env) {
     callback_reply_text(err);
 }
 
+/* Append a hex-encoded big-endian uint32 (SSH wire "string" length prefix)
+ * to result[*pos], advancing *pos by 8 hex chars. */
+static void append_hex_u32(char* result, uint32_t* pos, uint32_t value) {
+    int shift;
+    for (shift = 28; shift >= 0; shift -= 4) {
+        result[(*pos)++] = HEX[(value >> shift) & 0xF];
+    }
+}
+
+/* Append a hex-encoded byte buffer to result[*pos], advancing *pos by
+ * 2*len hex chars. */
+static void append_hex_bytes(char* result, uint32_t* pos, const uint8_t* bytes, uint32_t len) {
+    uint32_t i;
+    for (i = 0; i < len; i++) {
+        result[(*pos)++] = HEX[(bytes[i] >> 4) & 0xF];
+        result[(*pos)++] = HEX[bytes[i] & 0xF];
+    }
+}
+
+/* Append one SSH wire "string" field (4-byte big-endian length + bytes),
+ * hex-encoded, to result[*pos]. */
+static void append_hex_sshstring(char* result, uint32_t* pos, const uint8_t* bytes, uint32_t len) {
+    append_hex_u32(result, pos, len);
+    append_hex_bytes(result, pos, bytes, len);
+}
+
+/* Cert-body variant of hook_sign_reply/reject: appends the signature to
+ * the Idris2-assembled body held in g_pending_cert_body and replies the
+ * WHOLE certificate (body + wire-format signature FIELD) as one hex
+ * string — this is the deferred reply for joinBuilderFleet, not for
+ * sshCaSign.
+ *
+ * The "signature" field itself is NOT the raw 64 bytes — per
+ * PROTOCOL.certkeys / SshCert.Core.appendSignature, it is:
+ *   sshString( sshText("ssh-ed25519") ++ sshString(sig64) )
+ * i.e. one more length-prefix wrapping [algo-name-string, sig-blob-string].
+ * An earlier version of this function forgot this wrapping entirely and
+ * appended the 64 raw signature bytes directly — every certificate byte
+ * before the signature parsed correctly (verified live via a standalone
+ * SSH-wire-format decoder + cryptography.Ed25519PublicKey.verify), but
+ * verification failed because sshd would never find a valid signature
+ * field there. Found + fixed 2026-07-28 by decoding a real joinBuilderFleet
+ * reply end-to-end and discovering the tail was 64 bytes short of what a
+ * correctly-wrapped signature field requires. */
+static void hook_cert_sign_reply_callback(int32_t env) {
+    uint8_t sig[64];
+    /* body (up to 512B -> 1024 hex) + signature field (~4+4+11+4+64=87B -> 174 hex) + margin */
+    char result[SCHNORR_MAX_CERT_BODY * 2 + 256];
+    uint32_t pos;
+    static const char SIG_ALGO[] = "ssh-ed25519";
+    uint32_t algo_len = (uint32_t)(sizeof(SIG_ALGO) - 1);
+    uint32_t inner_len = 4 + algo_len + 4 + 64;  /* algo string + sig string, both length-prefixed */
+    (void)env;
+    if (!parse_signature_reply(sig)) {
+        callback_reply_text("error:signature_not_found_in_reply");
+        return;
+    }
+    pos = 0;
+    append_hex_bytes(result, &pos, g_pending_cert_body, g_pending_cert_body_len);
+    /* outer sshString wrapping the [algo-string, sig-blob-string] pair */
+    append_hex_u32(result, &pos, inner_len);
+    append_hex_sshstring(result, &pos, (const uint8_t*)SIG_ALGO, algo_len);
+    append_hex_sshstring(result, &pos, sig, 64);
+    result[pos] = '\0';
+    callback_reply_text(result);
+}
+
+static void hook_cert_sign_reject_callback(int32_t env) {
+    char err[256];
+    (void)env;
+    format_reject_error(err, sizeof(err), "error:cert_sign_rejected:");
+    callback_reply_text(err);
+}
+
 static void hook_pubkey_reply_callback(int32_t env) {
     char result[70];
     int i, pos;
@@ -421,6 +510,51 @@ static void hook_pubkey_reject_callback(int32_t env) {
 
 void ic_schnorr_set_key(int64_t key_type) {
     set_key_name_from_type(key_type);
+}
+
+/* ---- Idris2-driven deferred-sign path (joinBuilderFleet) ----
+ * The cert body is loaded into BOTH g_pending_cert_body (kept verbatim for
+ * the reply) and g_schnorr_message (what actually gets signed) — they are
+ * the same bytes, held in two buffers because begin_sign_call signs
+ * g_schnorr_message unconditionally and the reply callback needs the body
+ * still available AFTER g_schnorr_message may have been reused/cleared by
+ * an unrelated concurrent call (a canister processes one message at a time,
+ * so "concurrent" here really means "a later message before this one's
+ * callback fires" — the copy makes that safe regardless). */
+void ic_schnorr_clear_pending_cert_body(void) {
+    g_pending_cert_body_len = 0;
+    memset(g_pending_cert_body, 0, sizeof(g_pending_cert_body));
+}
+
+void ic_schnorr_set_pending_cert_body_byte(int64_t idx, int64_t byte) {
+    if (idx >= 0 && idx < SCHNORR_MAX_CERT_BODY) {
+        g_pending_cert_body[(int32_t)idx] = (uint8_t)(byte & 0xFF);
+        if ((int32_t)idx + 1 > (int32_t)g_pending_cert_body_len) {
+            g_pending_cert_body_len = (uint32_t)((int32_t)idx + 1);
+        }
+    }
+}
+
+int64_t ic_schnorr_sign_pending_cert(void) {
+    int32_t perform_result;
+    uint32_t i;
+    ic_schnorr_clear_message();
+    for (i = 0; i < g_pending_cert_body_len; i++) {
+        ic_schnorr_set_message_byte((int64_t)i, (int64_t)g_pending_cert_body[i]);
+    }
+    set_key_name_from_type(0);  /* production key_1 — the fleet CA, one key */
+    perform_result = begin_sign_call((int32_t)(uintptr_t)g_hook_cert_sign_reply,
+                                      (int32_t)(uintptr_t)g_hook_cert_sign_reject);
+    if (perform_result == 0) {
+        g_pending_cert_reply = 1;
+    }
+    return (int64_t)perform_result;
+}
+
+int32_t ic_schnorr_consume_pending_cert_reply(void) {
+    int32_t v = g_pending_cert_reply;
+    g_pending_cert_reply = 0;
+    return v;
 }
 
 void ic_schnorr_clear_message(void) {
