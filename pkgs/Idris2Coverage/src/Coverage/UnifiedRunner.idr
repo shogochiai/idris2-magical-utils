@@ -957,11 +957,33 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
     runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
     runChunks projectDir sourcedir tempBuildDir deps packTomlContent (mods :: rest) idx acc = do
       result <- runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir deps packTomlContent mods idx
-      -- Clean ONLY the per-chunk temp build dir between chunks (bounds disk on
-      -- large packages). NEVER touch the project's real build/ — when chunks reuse
-      -- it (buildDirForChunk="build") deleting it would force a full recompile and
-      -- defeat the dependency-reuse that keeps each chunk's memory bounded.
-      _ <- system $ "rm -rf " ++ projectDir ++ "/" ++ tempBuildDir
+      -- Do NOT wipe tempBuildDir between chunks. Found 2026-07-28 (alice,
+      -- jiwph principal), root-caused from live artifacts on a stalled run:
+      -- when the project has no prebuilt build/ttc (hasPrebuilt=False,
+      -- runStaticDumppathsJsonChunk's buildDirForChunk falls back to
+      -- tempBuildDir — see that function's own comment on hasPrebuilt),
+      -- THIS tempBuildDir is exactly the shared, accumulating TTC cache the
+      -- leaf-first chunk ordering and tail-singleton design (see this
+      -- function's own doc comment above, and sortModulesLeafFirst's) are
+      -- built on: each later chunk is supposed to compile against the
+      -- ALREADY-ON-DISK TTCs of every earlier chunk, so a tail singleton
+      -- costs one module's compile, not the whole package's. Deleting it
+      -- after every chunk (the previous version of this line) discarded
+      -- that cache each time, so chunk N always recompiled the full
+      -- transitive closure of modules 1..N from scratch — on a 129-module
+      -- package this OOM-killed whichever chunk finally exceeded available
+      -- RAM (observed: SIGKILL after compiling 107/129 modules for a
+      -- SINGLE-MODULE chunk, confirmed via the raw build log's "Killed: 9"
+      -- — the caller only ever sees "File Not Found" for the missing
+      -- dumppaths JSON, since that SIGKILL is not distinguished from any
+      -- other producer failure at the read site above). The disk-bound
+      -- cleanup this line intended is still correct AFTER THE WHOLE
+      -- CHUNKED RUN completes — see the unconditional cleanup already
+      -- present where runChunks is invoked (this function, ~line 938,
+      -- run once, not per-chunk) — that is the right scope for "bound
+      -- disk usage on large packages" and this per-chunk delete was
+      -- simply redundant with it, at the cost of breaking the caching
+      -- the whole design exists for.
       case result of
         Left err => pure $ Left err
         Right paths => runChunks projectDir sourcedir tempBuildDir deps packTomlContent rest (idx + 1) (paths ++ acc)

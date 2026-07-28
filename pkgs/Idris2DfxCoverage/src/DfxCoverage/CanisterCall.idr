@@ -640,10 +640,23 @@ stripPrefix dir path =
 public export
 installWasm : DeployOptions -> String -> IO DeployResult
 installWasm opts wasmPath = do
-  -- Ensure canister exists (create if needed)
+  -- Ensure canister exists (create if needed). --no-wallet on a LOCAL network:
+  -- plain `dfx canister create` tries to resolve/deploy the identity's cycles
+  -- wallet first, and on a freshly-reset replica (`dfx start --clean`) that
+  -- resolution can point at a wallet canister id from a PRIOR replica
+  -- instance that no longer exists ("reject code DestinationInvalid,
+  -- Canister ... not found, error code IC0301") — this create silently fails
+  -- (caught by `|| true` below) and the LATER canister-install step then
+  -- fails with the much more confusing "Cannot find canister id". Found
+  -- 2026-07-28 root-causing a soundness-fixture failure. --no-wallet skips
+  -- the wallet entirely for a plain create, which is exactly what the local
+  -- development-replica / test-fixture path needs (no cycles wallet
+  -- involved in canister creation on a system-subnet local replica); NOT
+  -- added for --network ic, where a real cycles wallet is required.
+  let noWalletFlag = if opts.network == "local" then " --no-wallet" else ""
   let createCmd = "cd " ++ opts.projectDir ++ " && " ++
                   opts.dfxPath ++ " canister create " ++ opts.canisterName ++
-                  " --network " ++ opts.network ++ " 2>/dev/null || true"
+                  " --network " ++ opts.network ++ noWalletFlag ++ " 2>/dev/null || true"
   _ <- system createCmd
 
   -- Install WASM directly
