@@ -842,7 +842,7 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
          ++ " && cd " ++ absProjectDir
          ++ " && \"$APP\" --build " ++ tempIpkgName
          ++ " > " ++ logPath ++ " 2>&1"
-  _ <- system cmd
+  buildRc <- system cmd
   contentResult <- readFile dumppathsPath
   logResult <- readFile logPath
   removeFileIfExists tempIdrPath
@@ -852,10 +852,18 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
   removeFileIfExistsSafe logPath
   case contentResult of
     Left err =>
+      -- The shell's exit code disambiguates the failure mode: a plain
+      -- "produced no JSON" reads identically whether the compiler OOM-killed
+      -- (SIGKILL, rc=137 under `sh -c`), timed out, or hit a genuine compile
+      -- error — and a run that dies this way still reports a coverage number,
+      -- just a quietly smaller one (the missing chunk's hits never landed).
+      -- Surfacing the rc turns "File Not Found" back into "the process died".
       let logTail = case logResult of
                       Left _ => ""
                       Right logContent => unlines (reverse (take 12 (reverse (lines logContent))))
-      in pure $ Left $ "Static chunk " ++ show idx ++ " failed to produce dumppaths JSON: " ++ show err
+      in pure $ Left $ "Static chunk " ++ show idx ++ " failed to produce dumppaths JSON (build rc="
+                    ++ show buildRc ++ if buildRc == 137 then ", likely OOM-killed" else ""
+                    ++ "): " ++ show err
                     ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
     Right content =>
       if null (trim content)
@@ -974,9 +982,12 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
       -- package this OOM-killed whichever chunk finally exceeded available
       -- RAM (observed: SIGKILL after compiling 107/129 modules for a
       -- SINGLE-MODULE chunk, confirmed via the raw build log's "Killed: 9"
-      -- — the caller only ever sees "File Not Found" for the missing
-      -- dumppaths JSON, since that SIGKILL is not distinguished from any
-      -- other producer failure at the read site above). The disk-bound
+      -- — the caller used to only see "File Not Found" for the missing
+      -- dumppaths JSON, since that SIGKILL was not distinguished from any
+      -- other producer failure at the read site above; runStaticDumppathsJsonChunk
+      -- now threads the shell's exit code into the error message (2026-07-29,
+      -- alice's fleet-chat report of a coverage_percent that silently varied
+      -- run-to-run traced this exact gap). The disk-bound
       -- cleanup this line intended is still correct AFTER THE WHOLE
       -- CHUNKED RUN completes — see the unconditional cleanup already
       -- present where runChunks is invoked (this function, ~line 938,
@@ -1717,9 +1728,12 @@ runExeSlices projectDir relExecPath pathHitsPath = do
   -- Resolve the per-slice window ONCE (explicit IDRIS2COV_SLICE_LIMIT, else auto
   -- from free memory). Threaded into `go` so every slice uses the same value.
   sliceLimit <- resolveSliceLimit
-  when (sliceLimit /= intraSliceLimit) $
-    ignore $ fPutStrLn stderr ("    [slice] per-slice test window = " ++ show sliceLimit
-              ++ " (default " ++ show intraSliceLimit ++ "; set IDRIS2COV_SLICE_LIMIT to override)")
+  -- Always print, even when sliceLimit == intraSliceLimit (the default): a
+  -- reader must be able to tell "resolved to 100" from "this code path never
+  -- ran" apart. A line that only appears on the non-default branch answers
+  -- both questions with silence, which is indistinguishable from either.
+  ignore $ fPutStrLn stderr ("    [slice] per-slice test window = " ++ show sliceLimit
+            ++ " (default " ++ show intraSliceLimit ++ "; set IDRIS2COV_SLICE_LIMIT to override)")
   go sliceLimit 0 0 Nothing [] intraSliceMaxSlices
   where
     -- Env-gated per-slice trace. Set IDRIS2COV_SLICE_DEBUG=1 to diagnose a
