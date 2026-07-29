@@ -36,8 +36,14 @@ static const char HEX[] = "0123456789abcdef";
 /* message is variable-length, unlike ic_tecdsa's fixed 32-byte hash — the
  * whole reason for this sibling module rather than reusing t-ECDSA: an SSH
  * certificate body is signed directly (PROTOCOL.certkeys: "everything up to
- * and including signature key"), no pre-hashing. */
-#define SCHNORR_MAX_MESSAGE 512
+ * and including signature key"), no pre-hashing.
+ *
+ * Must be >= SCHNORR_MAX_CERT_BODY: ic_schnorr_sign_pending_cert copies the
+ * WHOLE assembled cert body into this buffer byte-for-byte before signing
+ * (see below), so a smaller limit here would reintroduce the exact same
+ * silent-truncation bug the 2026-07-29 SCHNORR_MAX_CERT_BODY fix closed,
+ * one layer later in the same call. */
+#define SCHNORR_MAX_MESSAGE 2048
 static uint8_t g_schnorr_message[SCHNORR_MAX_MESSAGE];
 static uint32_t g_schnorr_message_len = 0;
 static uint8_t g_key_name[32];
@@ -57,11 +63,24 @@ static int32_t g_last_error_len = 0;
  * A certificate BODY assembled by Idris2 (SshCert.Core.assembleCertBody),
  * held here until the async sign_with_schnorr reply arrives, at which
  * point the reply callback appends the signature and replies the whole
- * thing — see ic_schnorr.h's "Idris2-driven deferred-sign path" doc. */
-#define SCHNORR_MAX_CERT_BODY 512
+ * thing — see ic_schnorr.h's "Idris2-driven deferred-sign path" doc.
+ *
+ * SCHNORR_MAX_CERT_BODY was 512 until 2026-07-29 (carl, mfycd principal,
+ * found live): the read+write unified force-command (747a35a) made a real
+ * cert body ~521 bytes, 9 over the old limit. set_pending_cert_body_byte's
+ * bounds check silently DROPPED bytes past the limit with no error signal,
+ * so the certificate's trailing signature-key field (the CA pubkey) was
+ * truncated mid-field — declared length 32, actual 19 bytes present — and
+ * every issued certificate failed `ssh-keygen -L` with "invalid key:
+ * invalid format". Raised to 2048 (4x headroom over the measured overrun,
+ * cheap on a canister with a stable-memory-backed heap) and the bounds
+ * check now records an error instead of dropping silently — see
+ * g_pending_cert_overflow below. */
+#define SCHNORR_MAX_CERT_BODY 2048
 static uint8_t g_pending_cert_body[SCHNORR_MAX_CERT_BODY];
 static uint32_t g_pending_cert_body_len = 0;
 static int32_t g_pending_cert_reply = 0;  /* consumed by @defer_if_pending */
+static int32_t g_pending_cert_overflow = 0;  /* set if any byte was dropped for being out of range */
 
 static uint32_t encode_leb128_unsigned(uint8_t* buf, uint64_t value) {
     uint32_t len = 0;
@@ -523,6 +542,7 @@ void ic_schnorr_set_key(int64_t key_type) {
  * callback fires" — the copy makes that safe regardless). */
 void ic_schnorr_clear_pending_cert_body(void) {
     g_pending_cert_body_len = 0;
+    g_pending_cert_overflow = 0;
     memset(g_pending_cert_body, 0, sizeof(g_pending_cert_body));
 }
 
@@ -532,12 +552,30 @@ void ic_schnorr_set_pending_cert_body_byte(int64_t idx, int64_t byte) {
         if ((int32_t)idx + 1 > (int32_t)g_pending_cert_body_len) {
             g_pending_cert_body_len = (uint32_t)((int32_t)idx + 1);
         }
+    } else {
+        /* Found live 2026-07-29 (carl, mfycd principal): silently dropping
+         * an out-of-range byte here produced a truncated certificate that
+         * LOOKED complete (correct declared field lengths, wrong actual
+         * byte count) and failed only much later, at ssh-keygen -L on the
+         * CLIENT. Recording the overflow lets ic_schnorr_sign_pending_cert
+         * refuse to sign a body it silently mangled, rather than signing
+         * a truncated message and returning a certificate that will always
+         * fail verification. */
+        g_pending_cert_overflow = 1;
     }
 }
 
 int64_t ic_schnorr_sign_pending_cert(void) {
     int32_t perform_result;
     uint32_t i;
+    if (g_pending_cert_overflow) {
+        /* The assembled body did not fit in SCHNORR_MAX_CERT_BODY — signing
+         * a truncated message would produce a certificate that verifies
+         * against different bytes than SshCert.Core.assembleCertBody
+         * actually emitted, indistinguishable from a real successful issue
+         * until the CLIENT tries to use it. Refuse instead. */
+        return (int64_t)-1;
+    }
     ic_schnorr_clear_message();
     for (i = 0; i < g_pending_cert_body_len; i++) {
         ic_schnorr_set_message_byte((int64_t)i, (int64_t)g_pending_cert_body[i]);
