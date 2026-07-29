@@ -1818,6 +1818,18 @@ runExeSlices projectDir relExecPath pathHitsPath = do
                 ++ " crashedMidSlice=" ++ show crashedMidSlice
       if timedOut || crashedMidSlice
         then do sliceDebug "branch=ADVANCE(timeout/crash)"
+                -- Unconditional (not gated on IDRIS2COV_SLICE_DEBUG): a slice
+                -- that times out or crashes mid-suite keeps only the hits it
+                -- had already written before dying, then the walk advances
+                -- past it — the numerator this run reports is silently
+                -- smaller than a clean run's. Whether that happened at all
+                -- must not depend on a debug flag nobody sets on a gate run.
+                ignore $ fPutStrLn stderr ("    [slice] WARNING offset=" ++ show offset
+                          ++ " exit=" ++ show sliceExit
+                          ++ (if timedOut then " (timeout, alarm=" ++ show intraSliceTimeoutSecs ++ "s)"
+                              else if sliceExit == 137 then " (likely OOM-killed)"
+                              else " (non-zero exit, no Results: line)")
+                          ++ " — this slice's hits may be incomplete; advancing")
                 go sliceLimit (offset + sliceLimit) (S idx) firstCount acc' fuel
         else if count == 0
           then do sliceDebug "branch=STOP(clean-empty past-the-end)"; pure acc'  -- clean empty slice → past the end → done
