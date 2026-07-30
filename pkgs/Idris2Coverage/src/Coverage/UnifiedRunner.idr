@@ -893,6 +893,61 @@ sortModulesLeafFirst projectDir sourcedir mods = do
         Right c => (length (filter (isPrefixOf "import ") (map trim (lines c))), m)
         Left _  => (1000, m)
 
+||| Free system memory in MiB, best-effort (Nothing if it can't be read). macOS:
+||| `vm_stat` free+inactive pages × page size. Linux: /proc/meminfo MemAvailable.
+||| Used to auto-shrink both the static chunk size (resolveStaticChunkSize) and the
+||| runtime hits-walk slice window (resolveSliceLimit) on a low-memory host; a read
+||| failure falls back to each caller's fixed default (never blocks a run).
+freeMemMiB : IO (Maybe Nat)
+freeMemMiB = do
+  let out = "/tmp/idris2cov-freemem.txt"
+  -- macOS: (free+inactive) pages * 4096 / 1MiB. Linux: MemAvailable kB / 1024.
+  -- One portable pipeline; whichever branch the host supports writes the MiB int.
+  _ <- system $
+    "{ if command -v vm_stat >/dev/null 2>&1; then "
+      ++ "vm_stat | awk '/Pages free/{f=$3} /Pages inactive/{i=$3} "
+      ++ "END{gsub(/\\./,\"\",f); gsub(/\\./,\"\",i); print int((f+i)*4096/1048576)}'; "
+    ++ "elif [ -r /proc/meminfo ]; then "
+      ++ "awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; "
+    ++ "else echo ''; fi; } > " ++ out ++ " 2>/dev/null"
+  r <- readFile out
+  pure $ case r of
+    Right s => parsePositive {a = Nat} (trim s)
+    Left _  => Nothing
+
+||| Static-chunk size (modules per `chunkList` group in runStaticDumppathsJsonChunks),
+||| resolved the same way resolveSliceLimit resolves the RUNTIME hits-walk window —
+||| but with a much smaller default, since a static chunk COMPILES its modules
+||| (transitive closure + accumulating TTC cache) rather than just RUNNING already-
+||| built tests. The fixed size of 8 this replaces was found live (2026-07-30,
+||| baseline-worktree cov.log) still OOM-killing: "Static chunk 11 failed to produce
+||| dumppaths JSON (build rc=137, likely OOM-killed)" on an 8-module chunk, on a host
+||| with no prior `build/ttc` (hasPrebuilt=False in runStaticDumppathsJsonChunk — a
+||| fresh worktree, e.g. a CI diff-scoping baseline checkout, never has one). Without
+||| a prebuilt TTC cache to reuse, EVERY chunk compiles its modules' full transitive
+||| closure from source, so peak memory scales with chunk size much more steeply
+||| than in the (implicitly assumed) prebuilt case this constant was tuned for.
+|||   1. IDRIS2COV_STATIC_CHUNK_LIMIT (explicit override) wins.
+|||   2. else AUTO from free memory, shrunk further when there is no prebuilt TTC
+|||      cache to lean on: prebuilt=True keeps the original bands (<1GiB→4, <2GiB→6,
+|||      else 8); prebuilt=False halves them (<1GiB→2, <2GiB→3, else 4) since that
+|||      path has no on-disk shortcut at all. A freeMemMiB read failure falls back to
+|||      the prebuilt-aware default (never worse than doing nothing).
+||| Clamped to >=1 so a bogus 0 can't stall the walk.
+resolveStaticChunkSize : (hasPrebuilt : Bool) -> IO Nat
+resolveStaticChunkSize hasPrebuilt = do
+  ov <- getEnv "IDRIS2COV_STATIC_CHUNK_LIMIT"
+  case ov >>= (parsePositive {a = Nat}) . trim of
+    Just n  => pure (if n < 1 then 1 else n)
+    Nothing => do
+      mfree <- freeMemMiB
+      pure $ case mfree of
+        Just mb =>
+          if hasPrebuilt
+             then if mb < 1024 then 4 else if mb < 2048 then 6 else 8
+             else if mb < 1024 then 2 else if mb < 2048 then 3 else 4
+        Nothing => if hasPrebuilt then 8 else 4
+
 runStaticDumppathsJsonChunks : String -> String -> IO (Either String String)
 runStaticDumppathsJsonChunks ipkgPath wholeErr = do
   let (projectDir, _) = splitPath ipkgPath
@@ -940,8 +995,10 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        let tailCount = if n > 16 then 16 else n
        let headMods = take (minus n tailCount) sortedModules
        let tailMods = drop (minus n tailCount) sortedModules
-       let chunks = chunkList 8 headMods ++ map (\m => [m]) tailMods
-       putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons)..."
+       hasPrebuiltForSizing <- exists (projectDir ++ "/build/ttc")
+       chunkSize <- resolveStaticChunkSize hasPrebuiltForSizing
+       let chunks = chunkList chunkSize headMods ++ map (\m => [m]) tailMods
+       putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons, chunk size " ++ show chunkSize ++ (if hasPrebuiltForSizing then " (prebuilt TTC found)" else " (no prebuilt TTC — colder/smaller chunks)") ++ ")..."
        chunkResults <- runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent chunks 0 []
        _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
        case chunkResults of
@@ -1643,27 +1700,6 @@ parsePathHitLineLocal line =
 ||| stops (see runExeSlices).
 intraSliceLimit : Nat
 intraSliceLimit = 100
-
-||| Free system memory in MiB, best-effort (Nothing if it can't be read). macOS:
-||| `vm_stat` free+inactive pages × page size. Linux: /proc/meminfo MemAvailable.
-||| Used ONLY to auto-shrink the slice size on a low-memory host; a read failure
-||| falls back to the fixed default (never blocks a run).
-freeMemMiB : IO (Maybe Nat)
-freeMemMiB = do
-  let out = "/tmp/idris2cov-freemem.txt"
-  -- macOS: (free+inactive) pages * 4096 / 1MiB. Linux: MemAvailable kB / 1024.
-  -- One portable pipeline; whichever branch the host supports writes the MiB int.
-  _ <- system $
-    "{ if command -v vm_stat >/dev/null 2>&1; then "
-      ++ "vm_stat | awk '/Pages free/{f=$3} /Pages inactive/{i=$3} "
-      ++ "END{gsub(/\\./,\"\",f); gsub(/\\./,\"\",i); print int((f+i)*4096/1048576)}'; "
-    ++ "elif [ -r /proc/meminfo ]; then "
-      ++ "awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; "
-    ++ "else echo ''; fi; } > " ++ out ++ " 2>/dev/null"
-  r <- readFile out
-  pure $ case r of
-    Right s => parsePositive {a = Nat} (trim s)
-    Left _  => Nothing
 
 ||| The per-slice test window size, resolved at run time so a caller can control it
 ||| and a low-memory host is never overrun:
