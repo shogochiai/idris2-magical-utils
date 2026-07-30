@@ -548,20 +548,40 @@ export
 depInstallFailureNote : List String -> Maybe String
 depInstallFailureNote [] = Nothing
 depInstallFailureNote names = Just $
-  "    [dep-install] UNRESOLVED: " ++ show (length names) ++
+  "    [dep-install] CONTRACT_FAIL: " ++ show (length names) ++
   " local dep(s) never installed into the forked compiler: " ++
   joinStrings ", " names ++
-  " -- any path coverage below is built on an INCOMPLETE package path"
+  " -- aborting: path coverage measured on an INCOMPLETE package path is not a measurement"
 
-||| REQ_COV_DEP_003: emit that line (stderr; producer stdout is a parsed
-||| evidence stream). Callers of installNeededDepsIntoFork must route its result
-||| through this rather than discarding it.
+||| REQ_COV_DEP_004: the fatality decision, as a total function separate from the
+||| effect, so both branches are observable without terminating the test process.
+||| A warning printed above a number is read as a number; the only way an
+||| incomplete package path cannot be rendered as a measurement is for there to
+||| be no measurement.
 export
-reportDepInstallFailures : List String -> IO ()
-reportDepInstallFailures names =
+depInstallIsFatal : List String -> Bool
+depInstallIsFatal names = not (null names)
+
+||| REQ_COV_DEP_003 / _004 / REQ_TYPE_DEP_003: emit and abort are parameters.
+||| The ORDER is part of the contract -- aborting before emitting loses the only
+||| line that says why -- and it is structural here rather than nested inside the
+||| note's Just branch, so the two guards can disagree in a test.
+export
+requireDepsInstalledWith : Monad m => (emit : String -> m ()) -> (abort : m ())
+                        -> List String -> m ()
+requireDepsInstalledWith emit abort names = do
   case depInstallFailureNote names of
     Nothing  => pure ()
-    Just msg => ignore $ fPutStrLn stderr msg
+    Just msg => emit msg
+  when (depInstallIsFatal names) abort
+
+||| REQ_COV_DEP_003: stderr, because producer stdout is a parsed evidence stream.
+||| Callers of installNeededDepsIntoFork must route its result through this
+||| rather than discarding it.
+export
+requireDepsInstalled : List String -> IO ()
+requireDepsInstalled =
+  requireDepsInstalledWith (\m => ignore (fPutStrLn stderr m)) exitFailure
 
 ||| REQ_COV_DEP_002: returns the names of wanted local deps that never installed.
 ||| It used to return `IO ()` — not a verdict the caller discarded, but no
@@ -1172,7 +1192,7 @@ runStaticDumppathsJson ipkgPath = do
   staticPackToml <- readProjectPackToml staticProjectDir
   staticDepends  <- readProjectDepends staticProjectDir
   -- REQ_COV_DEP_003: the verdict is surfaced, never discarded.
-  installNeededDepsIntoFork staticDepends staticPackToml >>= reportDepInstallFailures
+  installNeededDepsIntoFork staticDepends staticPackToml >>= requireDepsInstalled
   -- Peek the module count: large packages skip the OOM-prone whole-package build
   -- and chunk directly (chunks run sequentially in groups of 8 — bounded memory).
   modCount <- do
@@ -2176,7 +2196,7 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       -- Install the project's needed local deps into the forked compiler so the
       -- direct --dumppaths-json build resolves them (fork ignores pack.toml).
       -- REQ_COV_DEP_003: the verdict is surfaced, never discarded.
-      installNeededDepsIntoFork projectDepends packTomlContent >>= reportDepInstallFailures
+      installNeededDepsIntoFork projectDepends packTomlContent >>= requireDepsInstalled
       let dumppathsPath = "/tmp/idris2_dumppaths_runtime_" ++ uid ++ ".json"
       let pathHitsPath = "/tmp/idris2_pathhits_runtime_" ++ uid ++ ".txt"
       let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName

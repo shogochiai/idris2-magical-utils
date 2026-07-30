@@ -116,7 +116,7 @@ buildWebInstrumented projectDir = do
   let projectDepends = parseIpkgDepends ipkgContent
   packToml <- readProjectPackToml projectDir
   -- REQ_COV_DEP_003: the verdict is surfaced, never discarded.
-  installNeededDepsIntoFork projectDepends packToml >>= reportDepInstallFailures
+  installNeededDepsIntoFork projectDepends packToml >>= requireDepsInstalled
 
   -- 2. fork-build instrumented node executable + denominator dumppaths JSON
   let dumppathsPath = projectDir ++ "/build/exec/web-cov-paths.json"

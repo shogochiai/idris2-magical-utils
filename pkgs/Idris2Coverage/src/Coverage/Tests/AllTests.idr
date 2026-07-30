@@ -24,6 +24,7 @@ import Data.String
 import Data.Maybe
 import System
 import System.File
+import Data.IORef
 
 %default total
 
@@ -977,7 +978,7 @@ test_DEP_002 = do
 ||| REQ_COV_DEP_003: an empty unresolved set says NOTHING, a non-empty one names
 ||| every dep — "nothing to say" and "said nothing" must stay distinguishable.
 ||| Then the wiring itself: every CALL of installNeededDepsIntoFork in this
-||| package's source must route its result through reportDepInstallFailures.
+||| package's source must route its result through requireDepsInstalled.
 ||| A gate is only as loud as its call site, so the call site is what is tested.
 covering
 test_DEP_003 : IO Bool
@@ -990,6 +991,7 @@ test_DEP_003 = do
                    Just m  => isInfixOf "lazyshared" m
                            && isInfixOf "idris2-coverage" m
                            && isInfixOf "INCOMPLETE" m
+                           && isInfixOf "CONTRACT_FAIL" m
                            && isInfixOf "2" m)
   Just src <- findSourceUpwards 6 "src/Coverage/UnifiedRunner.idr"
     | Nothing => do
@@ -1012,7 +1014,7 @@ test_DEP_003 = do
         && isPrefixOf " " line
         && not (isPrefixOf "--" t)
         && not (isPrefixOf "|||" t)
-        && not (isInfixOf "reportDepInstallFailures" line)
+        && not (isInfixOf "requireDepsInstalled" line)
 
     climb : Nat -> Nat -> String -> IO (Maybe String)
     climb _ Z _ = pure Nothing
@@ -1024,6 +1026,39 @@ test_DEP_003 = do
 
     findSourceUpwards : Nat -> String -> IO (Maybe String)
     findSourceUpwards fuel rel = climb 0 fuel rel
+
+||| REQ_COV_DEP_004: a non-empty unresolved dep set aborts, and the message is
+||| emitted BEFORE the abort. Both effects are parameters, so the fatal branch is
+||| observable here without terminating the test process -- an `exitFailure`
+||| written directly into the production function would have made the abort
+||| untestable, which is how "loud but continues" survived in the first place.
+covering
+test_DEP_004 : IO Bool
+test_DEP_004 = do
+  logRef <- newIORef (the (List String) [])
+  let emit  = \m => modifyIORef logRef (++ ["emit:" ++ m])
+      abort = modifyIORef logRef (++ ["abort"])
+  -- empty set: neither effect fires (an empty set is not a silent abort either)
+  requireDepsInstalledWith emit abort []
+  quiet <- readIORef logRef
+  writeIORef logRef []
+  requireDepsInstalledWith emit abort ["lazyshared"]
+  loud <- readIORef logRef
+  let orderOK = case loud of
+                  [e, "abort"] => isPrefixOf "emit:" e
+                               && isInfixOf "lazyshared" e
+                               && isInfixOf "CONTRACT_FAIL" e
+                  _            => False
+  -- The decision is pinned to the note. Both sides of that equation are mine,
+  -- so it is stated WITH concrete controls: muting every note would satisfy the
+  -- equation but not these two lines.
+  let fatalOnNonEmpty = depInstallIsFatal ["x"]
+      quietOnEmpty    = not (depInstallIsFatal [])
+      pinned = all (\ns => depInstallIsFatal ns == isJust (depInstallFailureNote ns))
+                   [[], ["x"], ["x", "y"]]
+  when (not orderOK) $
+    putStrLn $ "  [DEP_004] effect log was " ++ show loud
+  pure $ quiet == [] && orderOK && fatalOnNonEmpty && quietOnEmpty && pinned
 
 export
 covering
@@ -1127,6 +1162,7 @@ allTests =
   , ("REQ_COV_DEP_001", test_DEP_001)
   , ("REQ_COV_DEP_002", test_DEP_002)
   , ("REQ_COV_DEP_003", test_DEP_003)
+  , ("REQ_COV_DEP_004", test_DEP_004)
   ]
 
 -- =============================================================================

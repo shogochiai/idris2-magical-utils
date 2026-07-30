@@ -851,7 +851,8 @@ name = "Worktree-aware path resolution and honest install verdicts"
 specs = [
   "- [REQ_COV_DEP_001] ${module_self}/UnifiedRunner SHALL resolve a relative local-dep path against the primary worktree root (the git common directory's parent) when it does not exist relative to the declaring pack.toml's own directory, and SHALL prefer the declaring directory when both exist",
   "- [REQ_COV_DEP_002] ${module_self}/UnifiedRunner SHALL return the names of wanted local deps that never installed successfully, and SHALL NOT return unit",
-  "- [REQ_COV_DEP_003] Every caller of installNeededDepsIntoFork SHALL surface a non-empty unresolved set, so that a coverage number computed on an incomplete package path is not rendered as a measurement"
+  "- [REQ_COV_DEP_003] Every caller of installNeededDepsIntoFork SHALL surface a non-empty unresolved set, so that a coverage number computed on an incomplete package path is not rendered as a measurement",
+  "- [REQ_COV_DEP_004] A non-empty unresolved set SHALL abort the run, and the message SHALL be emitted BEFORE the abort"
 ]
 
 [[spec]]
@@ -866,6 +867,10 @@ description = "${module_self}/UnifiedRunner SHALL return the names of wanted loc
 id = "REQ_COV_DEP_003"
 description = "Every caller of installNeededDepsIntoFork SHALL surface a non-empty unresolved set on stderr, so that a coverage number computed on an incomplete package path is not rendered as a measurement. An empty set SHALL emit nothing, so that 'nothing to say' and 'said nothing' remain distinguishable."
 
+[[spec]]
+id = "REQ_COV_DEP_004"
+description = "A non-empty unresolved dep set SHALL abort the run (CONTRACT_FAIL), not merely warn: path coverage measured on an incomplete package path is not a measurement, and a warning above a number is rendered as a number. The message SHALL be emitted BEFORE the abort, or it is lost. An empty set SHALL neither emit nor abort. The fatality decision SHALL be a total function over the verdict, separate from the effect, so that both branches are testable without terminating the test process."
+
 [[type]]
 id = "REQ_TYPE_DEP_001"
 text = "There exists a function `resolveDepPathM` whose directory-existence check is a parameter, so the production function itself is testable against a synthetic worktree layout"
@@ -873,3 +878,7 @@ text = "There exists a function `resolveDepPathM` whose directory-existence chec
 [[type]]
 id = "REQ_TYPE_DEP_002"
 text = "There exists a function `installNeededDepsIntoFork` returning `IO (List String)` -- the names of local deps that never installed"
+
+[[type]]
+id = "REQ_TYPE_DEP_003"
+text = "There exists a function `requireDepsInstalledWith` whose emit and abort effects are parameters, so the abort branch is observable without exiting the process"
