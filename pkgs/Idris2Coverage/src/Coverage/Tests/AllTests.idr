@@ -3,6 +3,7 @@
 module Coverage.Tests.AllTests
 
 import Coverage.Types
+import Control.Monad.Identity
 import Coverage.Linearity
 import Coverage.TypeAnalyzer
 import Coverage.StateSpace
@@ -22,6 +23,7 @@ import Data.List
 import Data.String
 import Data.Maybe
 import System
+import System.File
 
 %default total
 
@@ -907,6 +909,122 @@ test_CFG_003 = do
 -- All Tests
 -- =============================================================================
 
+-- =============================================================================
+-- Local Dependency Resolution Tests (DEP_001-003)
+--
+-- REQ_COV_DEP_001..003. See src/Coverage/SPEC.toml for the verbatim measurement
+-- these pin (a git worktree has no sibling repositories beside it, and the
+-- dep-install command's only audible failure mode was a missing directory).
+-- =============================================================================
+
+||| REQ_COV_DEP_001: a relative local-dep path falls back to the primary
+||| worktree root, and does NOT when the declaring directory already resolves.
+|||
+||| The existence check is injected, so this exercises the production function
+||| against a synthetic worktree layout instead of a copy of its logic.
+covering
+test_DEP_001 : IO Bool
+test_DEP_001 = do
+  let repo = "/r/luci"
+      wt   = "/r/luci/.claude/worktrees/wt"
+      rel  = "../lazy/pkgs/LazyShared"
+      viaWt   = wt ++ "/" ++ rel
+      viaRepo = repo ++ "/" ++ rel
+      bases   = depPathBases wt (Just repo)
+
+  -- (a) the measured case: nothing exists beside the worktree, the repo root does
+  let onlyRepo = runIdentity (resolveDepPathM (\p => pure (p == viaRepo)) bases rel)
+  -- (b) when BOTH resolve, the declaring directory wins (pack's own semantics)
+  let both     = runIdentity (resolveDepPathM (\_ => pure True) bases rel)
+  -- (c) nothing resolves anywhere: report it, do not invent a path
+  let neither  = runIdentity (resolveDepPathM (\_ => pure False) bases rel)
+  -- (d) a primary checkout has ONE base, so this is the identity there
+  let identityBases = depPathBases repo (Just repo)
+  -- (e) common-dir parsing, all four measured invocation environments
+  let fromWorktree  = mainRootFromCommonDir wt "/r/luci/.git\n"
+      fromRepoRoot  = mainRootFromCommonDir repo ".git\n"
+      fromSubdir    = mainRootFromCommonDir "/r/luci/pkgs/Luci" "../../.git\n"
+      fromLinkedWt  = mainRootFromCommonDir wt "/r/luci/.git/worktrees/wt\n"
+      notARepo      = mainRootFromCommonDir repo ""
+
+  pure $ onlyRepo == Just viaRepo
+      && both == Just viaWt
+      && neither == Nothing
+      && identityBases == [repo]
+      && fromWorktree == Just repo
+      && fromRepoRoot == Just repo
+      && fromSubdir == Just repo
+      && fromLinkedWt == Just repo
+      && notARepo == Nothing
+
+||| REQ_COV_DEP_002: installNeededDepsIntoFork reports which deps never
+||| installed. The type ascription is the assertion: reverting the return type
+||| to `IO ()` fails to compile, which is the only thing that stops a verdict
+||| from silently ceasing to exist.
+covering
+test_DEP_002 : IO Bool
+test_DEP_002 = do
+  let _ = the (List String -> String -> IO (List String)) installNeededDepsIntoFork
+  -- absolutizePackPaths must remain exactly its existence-blind instantiation:
+  -- a single base, every path rewritten whether or not it exists.
+  let content = "[custom.all.x]\ntype   = \"local\"\npath = \"../lazy/pkgs/LazyShared\"\nipkg = \"x.ipkg\"\n"
+      blind   = absolutizePackPaths "/base" content
+      viaM    = runIdentity (absolutizePackPathsM (\_ => pure True) ["/base"] content)
+      entries = localDepEntries blind
+  pure $ blind == viaM
+      && entries == [("x", "/base/../lazy/pkgs/LazyShared", "x.ipkg")]
+
+||| REQ_COV_DEP_003: an empty unresolved set says NOTHING, a non-empty one names
+||| every dep — "nothing to say" and "said nothing" must stay distinguishable.
+||| Then the wiring itself: every CALL of installNeededDepsIntoFork in this
+||| package's source must route its result through reportDepInstallFailures.
+||| A gate is only as loud as its call site, so the call site is what is tested.
+covering
+test_DEP_003 : IO Bool
+test_DEP_003 = do
+  let quiet = depInstallFailureNote []
+      loud  = depInstallFailureNote ["lazyshared", "idris2-coverage"]
+  let notesOK = quiet == Nothing
+             && (case loud of
+                   Nothing => False
+                   Just m  => isInfixOf "lazyshared" m
+                           && isInfixOf "idris2-coverage" m
+                           && isInfixOf "INCOMPLETE" m
+                           && isInfixOf "2" m)
+  Just src <- findSourceUpwards 6 "src/Coverage/UnifiedRunner.idr"
+    | Nothing => do
+        putStrLn "  [DEP_003] could not locate UnifiedRunner.idr -- unread, NOT clean"
+        pure False
+  let callSites = filter isUnwiredCall (lines src)
+  case callSites of
+    [] => pure notesOK
+    ls => do
+      putStrLn $ "  [DEP_003] " ++ show (length ls) ++ " call site(s) discard the verdict:"
+      traverse_ (\l => putStrLn ("    " ++ l)) ls
+      pure False
+  where
+    -- an indented, non-comment mention is a CALL; column-0 mentions are the
+    -- signature/definition, and "|||"/"--" lines are prose.
+    isUnwiredCall : String -> Bool
+    isUnwiredCall line =
+      let t = trim line in
+      isInfixOf "installNeededDepsIntoFork" line
+        && isPrefixOf " " line
+        && not (isPrefixOf "--" t)
+        && not (isPrefixOf "|||" t)
+        && not (isInfixOf "reportDepInstallFailures" line)
+
+    climb : Nat -> Nat -> String -> IO (Maybe String)
+    climb _ Z _ = pure Nothing
+    climb depth (S k) r = do
+      let pfx = fastConcat (replicate depth "../")
+      Right c <- readFile (pfx ++ r)
+        | Left _ => climb (S depth) k r
+      pure (Just c)
+
+    findSourceUpwards : Nat -> String -> IO (Maybe String)
+    findSourceUpwards fuel rel = climb 0 fuel rel
+
 export
 covering
 allTests : List (String, IO Bool)
@@ -1006,6 +1124,9 @@ allTests =
   , ("REQ_COV_CFG_001", test_CFG_001)
   , ("REQ_COV_CFG_002", test_CFG_002)
   , ("REQ_COV_CFG_003", test_CFG_003)
+  , ("REQ_COV_DEP_001", test_DEP_001)
+  , ("REQ_COV_DEP_002", test_DEP_002)
+  , ("REQ_COV_DEP_003", test_DEP_003)
   ]
 
 -- =============================================================================

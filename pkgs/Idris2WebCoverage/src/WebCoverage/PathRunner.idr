@@ -115,7 +115,8 @@ buildWebInstrumented projectDir = do
     | Left err => pure $ Left $ "Failed to read ipkg: " ++ show err
   let projectDepends = parseIpkgDepends ipkgContent
   packToml <- readProjectPackToml projectDir
-  installNeededDepsIntoFork projectDepends packToml
+  -- REQ_COV_DEP_003: the verdict is surfaced, never discarded.
+  installNeededDepsIntoFork projectDepends packToml >>= reportDepInstallFailures
 
   -- 2. fork-build instrumented node executable + denominator dumppaths JSON
   let dumppathsPath = projectDir ++ "/build/exec/web-cov-paths.json"

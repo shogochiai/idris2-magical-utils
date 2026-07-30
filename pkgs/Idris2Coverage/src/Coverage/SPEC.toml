@@ -814,3 +814,62 @@ text = "There exists a record `TestCoverageReport` containing testResults, total
 id = "REQ_TYPE_UNI_003"
 text = "There exists a function `runTestsWithCoverage` that executes tests and returns coverage data"
 
+
+# =============================================================================
+# Local Dependency Resolution (DEP)
+#
+# Measured 2026-07-30 (alice), pkgs/Luci/.lazy-cov-artifacts/cov.log:2-5, four
+# identical lines (one per install round):
+#
+#   sh: line 0: cd: /Users/alice/code/luci/.claude/worktrees/
+#   memory-encryption-sharing/../lazy/pkgs/LazyShared: No such file or directory
+#
+# The effective variable is worktree-vs-primary-checkout, NOT /tmp: a git
+# worktree lives under <repo>/.claude/worktrees/<name> and has no sibling
+# repositories beside it, so every `path = "../<sibling>/..."` in an inherited
+# pack.toml resolves to nothing. On this machine one of the two siblings was
+# masked by a hand-made, untracked, undocumented symlink
+# (.claude/worktrees/idris2-magical-utils -> /Users/alice/code/idris2-magical-utils,
+# created 2026-07-21); the other had none, which is the whole reason only one
+# of them failed.
+#
+# Control (3 conditions, /tmp): of `cd P && build >/dev/null 2>&1 && install
+# >/dev/null 2>&1`, ONLY a missing directory emits anything -- the shell's own
+# `cd:` error, because the redirections attach to the idris2 commands and not to
+# `cd`. A present directory whose build fails, with or without real diagnostics,
+# is byte-identical silence with rc=1. The rc was discarded (`_ <- system`) and
+# the enclosing function returned `IO ()`, so the visible symptom was the only
+# member of its family that had a voice.
+# =============================================================================
+
+[[spec_area]]
+name = "Local Dependency Resolution"
+description = "Resolving and installing pack.toml `type = \"local\"` deps into the forked compiler"
+
+[[spec_area.sub_feature]]
+name = "Worktree-aware path resolution and honest install verdicts"
+specs = [
+  "- [REQ_COV_DEP_001] ${module_self}/UnifiedRunner SHALL resolve a relative local-dep path against the primary worktree root (the git common directory's parent) when it does not exist relative to the declaring pack.toml's own directory, and SHALL prefer the declaring directory when both exist",
+  "- [REQ_COV_DEP_002] ${module_self}/UnifiedRunner SHALL return the names of wanted local deps that never installed successfully, and SHALL NOT return unit",
+  "- [REQ_COV_DEP_003] Every caller of installNeededDepsIntoFork SHALL surface a non-empty unresolved set, so that a coverage number computed on an incomplete package path is not rendered as a measurement"
+]
+
+[[spec]]
+id = "REQ_COV_DEP_001"
+description = "${module_self}/UnifiedRunner SHALL resolve a relative local-dep path against the primary worktree root (the git common directory's parent) when it does not exist relative to the declaring pack.toml's own directory, and SHALL prefer the declaring directory when both exist. In a primary checkout the two bases coincide, so this is the identity there and can only turn a non-existent path into an existing one."
+
+[[spec]]
+id = "REQ_COV_DEP_002"
+description = "${module_self}/UnifiedRunner SHALL return the names of wanted local deps that never installed successfully in any round, and SHALL NOT return unit. A dep whose declared directory does not exist SHALL be reported rather than shelled to."
+
+[[spec]]
+id = "REQ_COV_DEP_003"
+description = "Every caller of installNeededDepsIntoFork SHALL surface a non-empty unresolved set on stderr, so that a coverage number computed on an incomplete package path is not rendered as a measurement. An empty set SHALL emit nothing, so that 'nothing to say' and 'said nothing' remain distinguishable."
+
+[[type]]
+id = "REQ_TYPE_DEP_001"
+text = "There exists a function `resolveDepPathM` whose directory-existence check is a parameter, so the production function itself is testable against a synthetic worktree layout"
+
+[[type]]
+id = "REQ_TYPE_DEP_002"
+text = "There exists a function `installNeededDepsIntoFork` returning `IO (List String)` -- the names of local deps that never installed"

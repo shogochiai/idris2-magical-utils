@@ -11,6 +11,7 @@ import Coverage.Core.DumppathsJson
 import Coverage.Exclusions
 import Coverage.PathCoverage
 import Coverage.Standardization.Types
+import Control.Monad.Identity
 import System
 import System.Clock
 import System.File
@@ -265,38 +266,174 @@ parentOf path =
        [""] => "/"
        _    => fastConcat (intersperse "/" kept)
 
-||| Rewrite each `path = "rel"` in pack.toml content so a relative dep path
-||| resolves from `baseDir` regardless of where the temp pack.toml is written.
-||| pack resolves a local dep's `path` relative to the pack.toml that declares it;
-||| when we INHERIT an ancestor pack.toml into a package-dir temp pack.toml, its
-||| relative paths (e.g. "../idris2-magical-utils/pkgs/Foo") would otherwise
-||| resolve from the wrong dir and dependency resolution fails. Absolutizing
-||| against the ancestor dir makes them location-independent. Already-absolute
-||| paths (leading "/") are left untouched.
-absolutizePackPaths : (baseDir : String) -> (content : String) -> String
-absolutizePackPaths baseDir content = unlines (map rewriteLine (lines content))
-  where
-    -- the value inside `path = "..."`, or Nothing if this isn't a path line
-    pathValue : String -> Maybe String
-    pathValue line =
-      let t = trim line in
-      if isPrefixOf "path" t
-        then case break (== '=') (unpack t) of
-               (_, eqRest) =>
-                 let afterEq = trim (pack (drop 1 eqRest))
-                 in if isPrefixOf "\"" afterEq
-                      then Just (pack (takeWhile (/= '"') (drop 1 (unpack afterEq))))
-                      else Nothing
-        else Nothing
+||| The string value of a `key = "value"` toml line (already trimmed), or Nothing.
+export
+tomlStringField : (key : String) -> String -> Maybe String
+tomlStringField key line =
+  let t = trim line in
+  if isPrefixOf key t
+    then case break (== '=') (unpack t) of
+           (_, eqRest) =>
+             let afterEq = trim (pack (drop 1 eqRest))
+             in if isPrefixOf "\"" afterEq
+                  then Just (pack (takeWhile (/= '"') (drop 1 (unpack afterEq))))
+                  else Nothing
+    else Nothing
 
-    rewriteLine : String -> String
-    rewriteLine line =
-      case pathValue line of
-        Nothing  => line
-        Just rel =>
-          if isPrefixOf "/" rel
-            then line                                    -- already absolute
-            else "path = \"" ++ baseDir ++ "/" ++ rel ++ "\""
+||| Collapse "." and "x/.." segments. Purely textual — no symlink resolution.
+|||
+||| REQ_COV_DEP_001: this is what makes the primary-checkout case an EXACT
+||| identity rather than an approximate one. Measured 2026-07-30 across four
+||| invocation environments: `git -C <dir> rev-parse --git-common-dir` prints
+||| ".git" from a repo root, "../../.git" from a SUBDIRECTORY of a primary
+||| checkout, and an absolute "/repo/.git" from anywhere in a linked worktree.
+||| Without normalisation the subdirectory form is a textually different
+||| spelling of the declaring directory, and would add a redundant second base
+||| to every primary checkout.
+export
+normalisePathDots : String -> String
+normalisePathDots path =
+  let segs = forget (split (== '/') path)
+      isAbs = case segs of
+                ("" :: _) => True
+                _         => False
+      body = reverse (foldl step [] segs)
+  in if isAbs
+       then "/" ++ joinStrings "/" body
+       else case body of
+              [] => "."
+              _  => joinStrings "/" body
+  where
+    step : List String -> String -> List String
+    step acc ""   = acc
+    step acc "."  = acc
+    step acc ".." = case acc of
+                      (a :: rest) => if a == ".." then ".." :: acc else rest
+                      []          => [".."]
+    step acc s    = s :: acc
+
+||| REQ_COV_DEP_001: the PRIMARY worktree root, from `git rev-parse
+||| --git-common-dir` output. That command prints an absolute path from a linked
+||| worktree ("/repo/.git") and a relative one from a primary checkout (".git"
+||| at the root, "../../.git" from a subdirectory), so `queriedDir` absolutizes
+||| the relative form and the result is normalised. Everything from the ".git"
+||| component on is dropped, which also handles "/repo/.git/worktrees/w".
+||| Nothing when the output names no ".git" component (not a layout we know).
+export
+mainRootFromCommonDir : (queriedDir : String) -> (commonDirOutput : String) -> Maybe String
+mainRootFromCommonDir queriedDir raw =
+  let c = trim raw in
+  if c == ""
+    then Nothing
+    else let absolute = normalisePathDots
+                          (if isPrefixOf "/" c then c else queriedDir ++ "/" ++ c)
+             segs = forget (split (== '/') absolute)
+             kept = takeWhile (/= ".git") segs
+         in if length kept == length segs
+              then Nothing
+              else case kept of
+                     []   => Nothing
+                     [""] => Just "/"
+                     _    => Just (fastConcat (intersperse "/" kept))
+
+||| REQ_COV_DEP_001: base directories for resolving a RELATIVE local-dep path,
+||| in priority order.
+|||
+||| pack resolves a local dep's `path` relative to the pack.toml that declares
+||| it. That is correct in a primary checkout, where `../lazy` really does sit
+||| beside the repo — and wrong in a git WORKTREE, which lives under
+||| `<repo>/.claude/worktrees/<name>` (or /tmp) and has no sibling repositories
+||| at all. The primary worktree root is therefore appended as a FALLBACK only:
+||| on a primary checkout `mainRoot == packDir` and this is the identity, so the
+||| fallback can only ever turn a path that does not exist into one that does.
+export
+depPathBases : (packDir : String) -> (mainRoot : Maybe String) -> List String
+depPathBases packDir Nothing = [packDir]
+depPathBases packDir (Just root) =
+  if root == packDir then [packDir] else [packDir, root]
+
+||| REQ_COV_DEP_001: the first base whose `<base>/<rel>` exists, or Nothing when
+||| none does.
+|||
+||| The existence check is a PARAMETER, not a call to the filesystem, so this
+||| exact function — not a copy of it — can be unit-tested against a synthetic
+||| worktree layout without creating one. A test that cannot reproduce the
+||| invocation environment tends to pass for the wrong reason.
+export
+resolveDepPathM : Monad m => (dirExists : String -> m Bool)
+               -> (bases : List String) -> (rel : String) -> m (Maybe String)
+resolveDepPathM _ [] _ = pure Nothing
+resolveDepPathM dirExists (b :: bs) rel = do
+  let cand = b ++ "/" ++ rel
+  ok <- dirExists cand
+  if ok then pure (Just cand) else resolveDepPathM dirExists bs rel
+
+||| REQ_COV_DEP_001: rewrite one `path = "rel"` line against `bases`.
+||| Unresolvable relative paths keep the first base, preserving the pre-existing
+||| (loud) behaviour: the downstream `cd` then fails visibly rather than this
+||| silently inventing a path.
+export
+rewritePackPathLineM : Monad m => (dirExists : String -> m Bool)
+                    -> (bases : List String) -> (line : String) -> m String
+rewritePackPathLineM dirExists bases line =
+  case tomlStringField "path" line of
+    Nothing  => pure line
+    Just rel =>
+      if isPrefixOf "/" rel
+        then pure line                                  -- already absolute
+        else do
+          resolved <- resolveDepPathM dirExists bases rel
+          let firstBase = case bases of
+                            []       => "."
+                            (b :: _) => b
+          pure ("path = \"" ++ fromMaybe (firstBase ++ "/" ++ rel) resolved ++ "\"")
+
+||| Rewrite each `path = "rel"` in pack.toml content so a relative dep path
+||| resolves from one of `bases` regardless of where the temp pack.toml is
+||| written. When we INHERIT an ancestor pack.toml into a package-dir temp
+||| pack.toml, its relative paths (e.g. "../idris2-magical-utils/pkgs/Foo")
+||| would otherwise resolve from the wrong dir and dependency resolution fails.
+||| Already-absolute paths (leading "/") are left untouched.
+export
+absolutizePackPathsM : Monad m => (dirExists : String -> m Bool)
+                    -> (bases : List String) -> (content : String) -> m String
+absolutizePackPathsM dirExists bases content =
+  map unlines (traverse (rewritePackPathLineM dirExists bases) (lines content))
+
+||| Single-base, existence-blind instantiation — exactly the behaviour this had
+||| before REQ_COV_DEP_001, kept as the positive control for the generalisation.
+export
+absolutizePackPaths : (baseDir : String) -> (content : String) -> String
+absolutizePackPaths baseDir content =
+  runIdentity (absolutizePackPathsM (\_ => pure True) [baseDir] content)
+
+||| Directory existence. Deliberately NOT the readFile-based `fileExists` helper
+||| further down this file: readFile on a directory never returns (it spins
+||| allocating), so an existence probe aimed at a directory must use openDir.
+export
+dirExistsIO : String -> IO Bool
+dirExistsIO path = do
+  Right d <- openDir path
+    | Left _ => pure False
+  closeDir d
+  pure True
+
+||| REQ_COV_DEP_001: the primary worktree root for `dir`, or Nothing when `dir`
+||| is not in a git repository (or git is unavailable). In a primary checkout
+||| this equals the repo root, so depPathBases degenerates to the identity.
+primaryWorktreeRoot : String -> IO (Maybe String)
+primaryWorktreeRoot dir = do
+  uid <- getUniqueId
+  let out = "/tmp/idris2cov-gitcommondir-" ++ uid ++ ".txt"
+  rc <- system $ "git -C \"" ++ dir ++ "\" rev-parse --git-common-dir > "
+              ++ out ++ " 2>/dev/null"
+  if rc /= 0
+    then pure Nothing
+    else do
+      Right c <- readFile out
+        | Left _ => pure Nothing
+      _ <- system $ "rm -f " ++ out
+      pure (mainRootFromCommonDir dir c)
 
 ||| Read the project's pack.toml, preserving its custom dependency entries.
 ||| If the package has no pack.toml of its own, walk UP to the nearest ancestor
@@ -318,37 +455,32 @@ readProjectPackToml projectDir = do
   -- find 0 local deps → the numerator build then failed "Module … not found".
   -- So MERGE: own (verbatim) ++ nearest ancestor (paths absolutized). Later
   -- duplicate [custom.all.X] blocks are harmless; localDepEntries dedups by name.
+  -- REQ_COV_DEP_001: in a git worktree the ancestor pack.toml's own directory is
+  -- NOT beside the sibling repositories its relative paths name, so resolution
+  -- falls back to the primary worktree root. Identity on a primary checkout.
+  mainRoot <- primaryWorktreeRoot absDir
   ownContent <- readFile (projectDir ++ "/pack.toml")
-  ancestor <- inheritFrom (parentOf absDir) 8
+  ancestor <- inheritFrom mainRoot (parentOf absDir) 8
   case ownContent of
     Right own => pure $ if ancestor == "" then own else own ++ "\n\n" ++ ancestor
     Left _    => pure ancestor
   where
-    inheritFrom : String -> Nat -> IO String
-    inheritFrom _ Z = pure ""
-    inheritFrom dir (S fuel) =
+    inheritFrom : Maybe String -> String -> Nat -> IO String
+    inheritFrom _ _ Z = pure ""
+    inheritFrom mainRoot dir (S fuel) =
       if dir == "" || dir == "/"
         then do
           Right c <- readFile "/pack.toml"
             | Left _ => pure ""
-          pure (absolutizePackPaths "/" c)
+          absolutizePackPathsM dirExistsIO (depPathBases "/" mainRoot) c
         else do
           Right c <- readFile (dir ++ "/pack.toml")
-            | Left _ => inheritFrom (parentOf dir) fuel
-          pure (absolutizePackPaths dir c)
+            | Left _ => inheritFrom mainRoot (parentOf dir) fuel
+          absolutizePackPathsM dirExistsIO (depPathBases dir mainRoot) c
 
-||| The string value of a `key = "value"` toml line (already trimmed), or Nothing.
-tomlStringField : (key : String) -> String -> Maybe String
-tomlStringField key line =
-  let t = trim line in
-  if isPrefixOf key t
-    then case break (== '=') (unpack t) of
-           (_, eqRest) =>
-             let afterEq = trim (pack (drop 1 eqRest))
-             in if isPrefixOf "\"" afterEq
-                  then Just (pack (takeWhile (/= '"') (drop 1 (unpack afterEq))))
-                  else Nothing
-    else Nothing
+-- (tomlStringField moved above absolutizePackPathsM, which needs it; it was a
+--  byte-identical duplicate of the private `pathValue` that used to live in
+--  absolutizePackPaths's where-block.)
 
 ||| Extract (depName, absolutePath, ipkgFileName) for every `type = "local"` custom
 ||| dep in pack.toml content. Paths are expected already absolutized (see
@@ -408,32 +540,79 @@ coverageStackDeps =
 ||| stack) so we don't build unrelated heavyweight monorepo packages (e.g. the
 ||| canister). Best-effort + multi-round for dep ordering. No-op when IDRIS2_BIN
 ||| is unset (pack resolves deps itself then).
+||| REQ_COV_DEP_003: the line a caller must emit when local deps did not install.
+||| Nothing when every wanted dep landed — so "nothing to say" and "said nothing"
+||| are distinguishable at the type, and a coverage number computed on top of an
+||| incomplete package path cannot be rendered as a plain measurement.
 export
-installNeededDepsIntoFork : (projectDepends : List String) -> (packTomlContent : String) -> IO ()
+depInstallFailureNote : List String -> Maybe String
+depInstallFailureNote [] = Nothing
+depInstallFailureNote names = Just $
+  "    [dep-install] UNRESOLVED: " ++ show (length names) ++
+  " local dep(s) never installed into the forked compiler: " ++
+  joinStrings ", " names ++
+  " -- any path coverage below is built on an INCOMPLETE package path"
+
+||| REQ_COV_DEP_003: emit that line (stderr; producer stdout is a parsed
+||| evidence stream). Callers of installNeededDepsIntoFork must route its result
+||| through this rather than discarding it.
+export
+reportDepInstallFailures : List String -> IO ()
+reportDepInstallFailures names =
+  case depInstallFailureNote names of
+    Nothing  => pure ()
+    Just msg => ignore $ fPutStrLn stderr msg
+
+||| REQ_COV_DEP_002: returns the names of wanted local deps that never installed.
+||| It used to return `IO ()` — not a verdict the caller discarded, but no
+||| verdict at all — while each attempt was `_ <- system ("cd P && build
+||| >/dev/null 2>&1 && install >/dev/null 2>&1")`. Measured: of that command's
+||| three failure modes, only a MISSING DIRECTORY says anything (the shell's own
+||| `cd:` error, because the redirections attach to the idris2 commands, not to
+||| `cd`); a present directory whose build fails is byte-identical silence with a
+||| discarded rc=1. So the loudest member of the family was the only visible one.
+export
+installNeededDepsIntoFork : (projectDepends : List String) -> (packTomlContent : String) -> IO (List String)
 installNeededDepsIntoFork projectDepends packTomlContent = do
   Just idris2 <- resolveIdris2Override
-    | Nothing => pure ()
+    | Nothing => pure []   -- nothing attempted: pack resolves deps itself
   let wanted = projectDepends ++ coverageStackDeps
   let deps = filter (\(n, _, _) => elem n wanted) (localDepEntries packTomlContent)
-  -- Multi-round (no topo-sort): a dep whose own deps aren't installed yet fails
-  -- this round but succeeds once they land in a later round (installs idempotent).
-  let rounds = 4
   -- Progress goes to STDERR: producer stdout is a parsed evidence stream (the
   -- v2 raw-count contract / soundness fixture output) and must not carry logs.
   ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length deps) ++ " local deps for forked compiler"
-  for_ (replicate rounds ()) $ \_ => traverse_ (installOne idris2) deps
+  -- Multi-round (no topo-sort): a dep whose own deps aren't installed yet fails
+  -- this round but succeeds once they land in a later round (installs idempotent).
+  runRounds idris2 deps 4
   where
-    installOne : String -> (String, String, String) -> IO ()
-    installOne idris2 (_, path, ipkg) = do
-      -- Always build THEN install with the FORKED compiler, in the dep's own dir.
-      -- Build is incremental (cached TTCs), and only a successful build installs a
-      -- real package — so a dep whose own deps are missing this round simply fails
-      -- here and is retried next round (idempotent). && chains so a failed build
-      -- never installs a hollow package.
-      _ <- system $ "cd " ++ path ++ " && " ++ idris2 ++ " --build " ++ ipkg
-                 ++ " > /dev/null 2>&1 && " ++ idris2 ++ " --install " ++ ipkg
-                 ++ " > /dev/null 2>&1"
-      pure ()
+    depName : (String, String, String) -> String
+    depName (n, _, _) = n
+
+    installOne : String -> (String, String, String) -> IO (String, Bool)
+    installOne idris2 (name, path, ipkg) = do
+      -- REQ_COV_DEP_002: a path that does not exist is reported, not shelled to.
+      present <- dirExistsIO path
+      if not present
+        then pure (name, False)
+        else do
+          -- Always build THEN install with the FORKED compiler, in the dep's own
+          -- dir. Build is incremental (cached TTCs), and only a successful build
+          -- installs a real package — so a dep whose own deps are missing this
+          -- round simply fails here and is retried next round (idempotent). &&
+          -- chains so a failed build never installs a hollow package.
+          rc <- system $ "cd " ++ path ++ " && " ++ idris2 ++ " --build " ++ ipkg
+                      ++ " > /dev/null 2>&1 && " ++ idris2 ++ " --install " ++ ipkg
+                      ++ " > /dev/null 2>&1"
+          pure (name, rc == 0)
+
+    runRounds : String -> List (String, String, String) -> Nat -> IO (List String)
+    runRounds _ remaining Z = pure (map depName remaining)
+    runRounds idris2 remaining (S fuel) = do
+      verdicts <- traverse (installOne idris2) remaining
+      let stillFailing = filter (\d => not (elem (depName d, True) verdicts)) remaining
+      if null stillFailing
+        then pure []
+        else runRounds idris2 stillFailing fuel
 
 ||| Check if a file exists
 fileExists : String -> IO Bool
@@ -992,7 +1171,8 @@ runStaticDumppathsJson ipkgPath = do
   let (staticProjectDir, _) = splitPath ipkgPath
   staticPackToml <- readProjectPackToml staticProjectDir
   staticDepends  <- readProjectDepends staticProjectDir
-  installNeededDepsIntoFork staticDepends staticPackToml
+  -- REQ_COV_DEP_003: the verdict is surfaced, never discarded.
+  installNeededDepsIntoFork staticDepends staticPackToml >>= reportDepInstallFailures
   -- Peek the module count: large packages skip the OOM-prone whole-package build
   -- and chunk directly (chunks run sequentially in groups of 8 — bounded memory).
   modCount <- do
@@ -1995,7 +2175,8 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       let packTomlContent = generateTempPackToml projectPackToml
       -- Install the project's needed local deps into the forked compiler so the
       -- direct --dumppaths-json build resolves them (fork ignores pack.toml).
-      installNeededDepsIntoFork projectDepends packTomlContent
+      -- REQ_COV_DEP_003: the verdict is surfaced, never discarded.
+      installNeededDepsIntoFork projectDepends packTomlContent >>= reportDepInstallFailures
       let dumppathsPath = "/tmp/idris2_dumppaths_runtime_" ++ uid ++ ".json"
       let pathHitsPath = "/tmp/idris2_pathhits_runtime_" ++ uid ++ ".txt"
       let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
