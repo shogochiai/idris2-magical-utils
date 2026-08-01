@@ -128,6 +128,67 @@ public export
 supportsPerSpecIdNumerator : CoverageFamily -> Bool
 supportsPerSpecIdNumerator f = specScopeMethod f == EnterTestLabel
 
+||| How the DENOMINATOR is scoped for a per-SpecId Step 4 — the half
+||| `specScopeMethod` does not answer, and the half that decides whether a
+||| per-SpecId verdict says anything about that SpecId at all.
+|||
+||| Measured 2026-08-01 (carl): `luci parity-ti <SpecId> --pkg pkgs/Luci
+||| --run-step4` reports `Missing paths: 11071`, `coverage_percent=0.0`,
+||| `claim_admissible=True`, `threshold=53.0` → FAIL. Nothing is broken there:
+||| `IDRIS2COV_SPEC_FILTER` filters the HIT lines only (UnifiedRunner keepLine),
+||| while the denominator is built from the whole target's static dumppaths. One
+||| requirement's tests over a whole package's paths is 0%, so the verdict is
+||| unreachable BY CONSTRUCTION and is not evidence about the requirement.
+|||
+||| It cost hours to establish that, twice, across two machines, because the fact
+||| lived in a source comment and a display string (`step4Note`) instead of in a
+||| type. That is the reason this exists: the pair (numerator scope, denominator
+||| scope) is what makes a per-SpecId verdict meaningful, and only one of the two
+||| was nameable.
+public export
+data DenominatorScope
+  = ||| The denominator is restricted to the SpecId under measurement, so a
+    ||| per-SpecId percentage is a statement about that SpecId. No family does
+    ||| this today; it needs either a declared SpecId→function mapping (present
+    ||| in 66 of 1124 `pkgs/Luci` invariants, 6%) or call-graph reachability from
+    ||| the test entry points (the coverage tool has branch-level `Reachability`,
+    ||| not a call graph).
+    SpecScopedDenominator
+  | ||| The denominator is the whole target regardless of any spec filter. This
+    ||| is every family today. Named rather than assumed, so that a gate can ask.
+    WholeTargetDenominator
+
+public export
+Eq DenominatorScope where
+  SpecScopedDenominator  == SpecScopedDenominator  = True
+  WholeTargetDenominator == WholeTargetDenominator = True
+  _                      == _                      = False
+
+||| Total, like `specScopeMethod`: a new CoverageFamily must answer for its
+||| denominator too, rather than inheriting a silent whole-target assumption.
+public export
+denominatorScopeMethod : CoverageFamily -> DenominatorScope
+denominatorScopeMethod EvmHash       = WholeTargetDenominator
+denominatorScopeMethod DfxWasm       = WholeTargetDenominator
+denominatorScopeMethod WebMVU        = WholeTargetDenominator
+denominatorScopeMethod AndroidDevice = WholeTargetDenominator
+denominatorScopeMethod CoreLib       = WholeTargetDenominator
+denominatorScopeMethod Humanoid      = WholeTargetDenominator
+
+||| Is a per-SpecId Step 4 verdict actually ABOUT that SpecId? Only when BOTH
+||| ends are scoped to it. Today this is False for every family, which is the
+||| honest statement of where the machinery stands — and it is the predicate a
+||| gate must consult before treating a per-SpecId step4 FAIL as a defect in the
+||| change under review, exactly as `supportsPerSpecIdNumerator` is consulted
+||| before treating a per-SpecId PASS as SpecId-scoped evidence.
+|||
+||| Deliberately NOT a Bool baked into the call sites: the two halves are named
+||| so a future family that scopes its denominator flips this by construction.
+public export
+perSpecIdVerdictIsSpecScoped : CoverageFamily -> Bool
+perSpecIdVerdictIsSpecScoped f =
+  supportsPerSpecIdNumerator f && denominatorScopeMethod f == SpecScopedDenominator
+
 ||| Every coverage family — for exhaustiveness-style iteration in the round-trip and
 ||| no-silent-gap contract tests, and any UI that enumerates coverage mechanisms.
 public export
