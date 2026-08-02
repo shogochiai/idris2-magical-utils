@@ -1759,15 +1759,33 @@ runExeSlices projectDir relExecPath pathHitsPath = do
       removeFileIfExists outPath
       hitsContent <- readFile pathHitsPath
       -- Optional per-SpecId scoping: IDRIS2COV_SPEC_FILTER=<REQ_ID> keeps ONLY the
-      -- hits produced under a test whose name (the attribution label) matches
-      -- `test_<REQ_ID>_...` — the numerator for ONE requirement's paths. Unset →
-      -- keep every hit (whole-target numerator, unchanged behaviour).
+      -- hits produced under a test attributed to that requirement — the numerator
+      -- for ONE requirement's paths. Unset → keep every hit (whole-target
+      -- numerator, unchanged behaviour).
+      --
+      -- THREE accepted label shapes, because the attribution label is whatever the
+      -- suite passed to `enterTest` and that differs by project:
+      --   test_<REQ>…   the function-name convention this filter was written for
+      --   <REQ>         the BARE id — measured 2026-08-03 in Luci.Tests.AllTests:
+      --                 1238 of 1242 registry rows pass the bare id and ZERO pass
+      --                 a `test_` prefix, because Idris2.TestSuite.runSuite hands
+      --                 enterTest the registry tuple's NAME. Against the old
+      --                 single-shape filter every hit was dropped, so the
+      --                 per-SpecId numerator was structurally 0 and per-SpecId
+      --                 parity-ti could never go green for that project.
+      --   <REQ>_…       the same id with a suffix (e.g. REQ_X_001_join_and_empty)
+      -- The suffix form uses `req ++ "_"` rather than a bare prefix so REQ_X_001
+      -- cannot match REQ_X_0011.
       specFilter <- getEnv "IDRIS2COV_SPEC_FILTER"
       let keepLine : String -> Bool
           keepLine ln = case specFilter of
                           Nothing => True
                           Just "" => True
-                          Just req => isPrefixOf ("test_" ++ req) (pathHitLabel ln)
+                          Just req =>
+                            let lbl = pathHitLabel ln
+                            in isPrefixOf ("test_" ++ req) lbl
+                               || lbl == req
+                               || isPrefixOf (req ++ "_") lbl
       let sliceHits = case hitsContent of
                         Left _ => []
                         Right c => mapMaybe parsePathHitLineLocal (filter keepLine (lines c))
