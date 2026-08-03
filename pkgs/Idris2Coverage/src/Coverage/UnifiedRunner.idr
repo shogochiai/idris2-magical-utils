@@ -420,7 +420,29 @@ installNeededDepsIntoFork projectDepends packTomlContent = do
   let rounds = 4
   -- Progress goes to STDERR: producer stdout is a parsed evidence stream (the
   -- v2 raw-count contract / soundness fixture output) and must not carry logs.
-  ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length deps) ++ " local deps for forked compiler"
+  --
+  -- REPORT THE SHORTFALL, not the haul. `localDepEntries` yields only pack.toml
+  -- entries that carry a `path`; one declared with `url = …` is silently outside the
+  -- set, forever, on every machine. Measured 2026-08-04: `toml`
+  -- (url = github.com/hydrolarus/toml-idr.git) is required by luci.ipkg and was never
+  -- installed into the fork, so every STATIC chunked coverage run — the fallback that
+  -- builds the project ipkg with the fork — died on
+  -- `Required toml any but no matching version is installed`, produced no
+  -- dumppaths.json, and EXITED 0. Downstream that surfaced as 22 of 30 per-SpecId
+  -- step4 verdicts reading `CONTRACT_FAIL (coverage_percent=unknown)`: 73% of the
+  -- measurement gone, blamed on the consumer. The line below used to say
+  -- "8 local deps", which reads as coverage of the requirement and is why this
+  -- survived: a count of what was FOUND cannot show what is MISSING.
+  let missing = filter (\w => not (elem w (map (\(n, _, _) => n) deps))) wanted
+  ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length deps) ++ " of "
+                              ++ show (length wanted) ++ " required deps installable locally"
+  unless (null missing) $
+    ignore $ fPutStrLn stderr $
+      "    [dep-install] NOT INSTALLABLE (no local path in pack.toml): "
+      ++ show missing
+      ++ " — a fork build that needs one of these will fail to resolve it and produce"
+      ++ " no dumppaths.json while exiting 0. Install it by hand into the fork's"
+      ++ " package path, or give it a `path` entry."
   for_ (replicate rounds ()) $ \_ => traverse_ (installOne idris2) deps
   where
     installOne : String -> (String, String, String) -> IO ()
