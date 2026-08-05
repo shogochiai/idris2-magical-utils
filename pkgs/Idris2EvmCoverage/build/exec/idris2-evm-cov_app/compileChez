@@ -1,1 +1,0 @@
-(parameterize ([optimize-level 3] [compile-file-message #f]) (compile-program "/Users/bob/code/idris2-magical-utils/pkgs/Idris2EvmCoverage/build/exec/idris2-evm-cov_app/idris2-evm-cov.ss"))
