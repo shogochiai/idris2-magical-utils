@@ -52,6 +52,31 @@ sleep 2
 # Launch via `am start` (deterministic activity start) rather than monkey, which
 # occasionally warm-resumes without remounting. Fall back to monkey.
 "${ADB[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
+
+# --driver: exercise the app beyond the cold-start mount. WAS PARSED AND NEVER
+# USED — `DRIVER` appeared exactly twice in this file, at its initialisation and
+# at the option parse, so `--driver foo.sh` was accepted and silently discarded.
+# Measured 2026-08-05 on carl: a bare cold start reaches 40 of 1478 paths, and
+# `claim_admissible` is `missing == []` (PathCoverage.idr:113), i.e. true only at
+# 100% — so the number cannot move at all without something driving the UI. Had
+# the option stayed a no-op, a written driver would have changed nothing and the
+# blame would have landed on the driver or the app.
+#
+# Run SYNCHRONOUSLY here, after the launch and before the scrape: `logcat -c`
+# above cleared the buffer and the poll below reads the whole buffer with
+# `logcat -d`, so every hit the driver provokes is still there when it is read.
+# Running it in the background instead would race the poll's stability break.
+# A driver that fails does NOT fail the run — whatever it managed to exercise is
+# real evidence, and refusing here would throw away a valid partial measurement.
+if [[ -n "$DRIVER" ]]; then
+  if [[ ! -f "$DRIVER" ]]; then
+    echo "driver not found: $DRIVER" >&2; exit 5
+  fi
+  sleep "$SETTLE"          # let the View mount before touching it
+  bash "$DRIVER" "$PKG" "${SERIAL:-}" \
+    || echo "driver exited nonzero — continuing; the paths it did reach still count" >&2
+fi
+
 # Wait for the View to actually mount: the hook logs IDRIS_PATHHIT_HOOK_INSTALLED
 # once installed, and recordPathHit lines follow. Poll until the hook marker
 # appears (up to ~$SETTLE+20s) so a slow cold start is not scraped too early.
