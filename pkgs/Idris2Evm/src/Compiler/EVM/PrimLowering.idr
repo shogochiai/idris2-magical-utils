@@ -1,6 +1,6 @@
 ||| EVM Primitive Operations
 ||| Mapping Idris primitives to EVM/Yul operations
-module Compiler.EVM.Primitives
+module Compiler.EVM.PrimLowering
 
 import Compiler.EVM.YulIR
 import Core.TT

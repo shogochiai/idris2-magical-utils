@@ -4,7 +4,7 @@ module Compiler.EVM.Codegen
 
 import Compiler.EVM.YulIR
 import Compiler.EVM.Memory
-import Compiler.EVM.Primitives
+import Compiler.EVM.PrimLowering
 import Compiler.EVM.Foreign
 
 import Core.CompileExpr

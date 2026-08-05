@@ -28,7 +28,7 @@ modules = EVM.Word256
         , Compiler.EVM.Yul
         , Compiler.EVM.YulIR
         , Compiler.EVM.Codegen
-        , Compiler.EVM.Primitives
+        , Compiler.EVM.PrimLowering
         , Compiler.EVM.Foreign
         , Compiler.EVM.Memory
         , Compiler.EVM.ABI
