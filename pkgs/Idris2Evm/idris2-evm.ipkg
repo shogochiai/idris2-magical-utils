@@ -15,16 +15,10 @@ authors = "LazyEvm Team"
 -- Safe to shrink, measured first: every out-of-package importer
 -- (Idris2EvmCoverage, Idris2Subcontract, Idris2TextDao) imports only
 -- EVM.Primitives, EVM.Storage.Namespace and EVM.Word256 — all role-A modules.
--- The INTERPRETER (Bytecode/Interpreter/WorldState/MultiInterpreter/Main) is
--- still here, and that is a deliberate stop rather than an oversight. Splitting
--- it into idris2-evm-interp was written, built clean, and then REVERTED: the
--- dependent Idris2EvmCoverage does `import public EVM.Interpreter`, so it would
--- have to `depends = idris2-evm-interp` — and that name would have to be added
--- to ~/code/pack.toml, a machine-local file no repository owns. The package
--- would then build here and nowhere else until every machine hand-edits the
--- same file. That trades one fragility for a worse one, so the interpreter
--- split waits until package names are owned by the repo.
-brief = "Idris2 EVM contract-authoring library + bytecode interpreter (interpreter pending its own package)"
+-- The interpreter now lives in idris2-evm-interp.ipkg. Splitting it needed the
+-- package name to be owned by the tracked pack.toml first (00d99e48); before
+-- that, the only home for a new name was an untracked machine-local file.
+brief = "Idris2 EVM contract-authoring library: word/stack/memory/storage models, opcode primitives, ABI"
 
 sourcedir = "src"
 
@@ -41,8 +35,3 @@ modules = EVM.Word256
         , EVM.ABI.Types
         , EVM.ABI.JSON
         , EVM.Tests.AllTests
-        , EVM.Bytecode
-        , EVM.Interpreter
-        , EVM.WorldState
-        , EVM.MultiInterpreter
-        , Main

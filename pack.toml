@@ -137,3 +137,14 @@ ipkg = "idris2-lsp.ipkg"
 type = "local"
 path = "pkgs/Idris2Evm"
 ipkg = "idris2-yul.ipkg"
+
+# The bytecode interpreter, split out of idris2-evm so it stops being compiled
+# into every consumer of the contract library that has no use for it. Declaring
+# it HERE (tracked, relative path) is what makes the split possible at all: the
+# attempt on 2026-08-05 was reverted because the only place to put a new name
+# was the untracked ~/code/pack.toml, which would have made this repo build on
+# one machine and nowhere else. See 00d99e48.
+[custom.all.idris2-evm-interp]
+type = "local"
+path = "pkgs/Idris2Evm"
+ipkg = "idris2-evm-interp.ipkg"
