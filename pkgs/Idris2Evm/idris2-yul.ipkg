@@ -1,31 +1,29 @@
 package idris2-yul
 
-version = "0.2.0"
+version = "0.3.0"
 
 authors = "LazyEvm Team"
 
-brief = "Idris2 EVM: interpreter, Yul codegen backend, FFI primitives, and ABI"
+-- ROLE: the codegen DRIVER. Plugs into the Idris2 driver
+-- (Idris.Driver.mainWithCodegens) as a custom codegen targeting Yul, which is
+-- why the executable is named idris2-yul — the house convention for codegen
+-- drivers, the same shape as idris2-rn (react-native) and idris2-icwasm.
+--
+-- ⚠ A DIFFERENT codebase also declares `package idris2-yul` with
+-- `executable = idris2-yul`: the standalone repo
+-- git@github.com:shogochiai/idris2-yul.git. That one carries the
+-- prim__recordPathHit → log1(0,0,FNV(path-id)) lowering (commits a4eb13e /
+-- f83363d) which THIS one does not, and 2026-01-25 (12b7119f) already decided
+-- the two should be one package. Until that is finished, `idris2-yul` on PATH
+-- may be either, and neither can be asked which it is: `--version` reports the
+-- Idris API it links, not the source it was built from.
+brief = "Idris2 Yul codegen driver: ANF -> Yul backend for the EVM target"
 
 sourcedir = "src"
 
-depends = base, contrib, idris2
+depends = base, contrib, idris2, idris2-evm
 
-modules = EVM.Word256
-        , EVM.Stack
-        , EVM.Memory
-        , EVM.Storage.Model
-        , EVM.Opcodes
-        , EVM.Bytecode
-        , EVM.Interpreter
-        , EVM.WorldState
-        , EVM.MultiInterpreter
-        , EVM.Tests.AllTests
-        , EVM.Primitives
-        , EVM.Storage.Namespace
-        , EVM.Storage.Storable
-        , EVM.ABI.Types
-        , EVM.ABI.JSON
-        , Compiler.EVM.Yul
+modules = Compiler.EVM.Yul
         , Compiler.EVM.YulIR
         , Compiler.EVM.Codegen
         , Compiler.EVM.PrimLowering
@@ -34,7 +32,6 @@ modules = EVM.Word256
         , Compiler.EVM.ABI
         , Compiler.EVM.Solc
         , Compiler.EVM.Tests.AllTests
-        , Main
         , YulMain
 
 main = YulMain
