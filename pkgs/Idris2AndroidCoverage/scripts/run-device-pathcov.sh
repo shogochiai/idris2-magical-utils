@@ -17,7 +17,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKGROOT="$(cd "$HERE/.." && pwd)"
 
-PKG="" PATHS="" PREFIX="" DRIVER="" SETTLE=8 SERIAL="" OUTFILE=""
+PKG="" PATHS="" PREFIX="" DRIVER="" SETTLE=8 SERIAL="" OUTFILE="" EXCLUSIONS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --package)       PKG="$2"; shift 2 ;;
@@ -27,6 +27,7 @@ while [[ $# -gt 0 ]]; do
     --settle)        SETTLE="$2"; shift 2 ;;
     --serial)        SERIAL="$2"; shift 2 ;;
     --out)           OUTFILE="$2"; shift 2 ;;
+    --exclusions)    EXCLUSIONS="$2"; shift 2 ;;
     -h|--help) echo "Usage: run-device-pathcov.sh --package PKG --paths DUMPPATHS_JSON [--module-prefix P] [--driver S] [--settle N] [--serial S] [--out FILE]"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -133,7 +134,7 @@ set -e -o pipefail
 
 # The Idris2 side computes coverage (exclusions, intersection, report) and sets exit.
 if [[ -n "$OUTFILE" ]]; then
-  "$PATHCOV_BIN" "$DENOM" "$HITS" "$PREFIX" | tee "$OUTFILE"
+  "$PATHCOV_BIN" "$DENOM" "$HITS" "$PREFIX" "$EXCLUSIONS" | tee "$OUTFILE"
 else
-  "$PATHCOV_BIN" "$DENOM" "$HITS" "$PREFIX"
+  "$PATHCOV_BIN" "$DENOM" "$HITS" "$PREFIX" "$EXCLUSIONS"
 fi

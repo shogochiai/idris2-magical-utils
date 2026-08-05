@@ -28,6 +28,27 @@ readIds path = do
     | Left _ => pure []
   pure (nonEmptyLines content)
 
+||| Read a project exclusion file. Format mirrors the dfx side's
+||| coverage-exclusions.txt: one entry per line, `# ...` and blank lines ignored,
+||| an optional `# reason` tail stripped. Kept deliberately simple — a plain
+||| function-name fragment, because the thing being excluded here is "this
+||| function cannot run on a device without mutating a live canister", which is
+||| a property of the function, not of a path id.
+|||
+||| A missing or unreadable file yields [] rather than an error: a target with no
+||| exclusions must measure exactly as it did before this existed.
+readExclusionFragments : String -> IO (List String)
+readExclusionFragments path = do
+  Right content <- readFile path
+    | Left _ => pure []
+  pure $ mapMaybe fragmentOf (lines content)
+  where
+    fragmentOf : String -> Maybe String
+    fragmentOf raw =
+      let noComment = pack (fst (break (== '#') (unpack raw)))
+          frag      = trim noComment
+      in if frag == "" then Nothing else Just frag
+
 main : IO ()
 main = do
   args <- getArgs
@@ -36,9 +57,15 @@ main = do
       let modPrefix = case rest of (p :: _) => p; [] => ""
       denom <- readIds denomF
       hits  <- readIds hitF
-      let cov = pathCoverage denom hits modPrefix
+      -- Project-supplied exclusions, if the caller named a file. Same role as
+      -- GlobalRegistry/coverage-exclusions.txt on the dfx side; absent file →
+      -- empty list → byte-identical to the previous behaviour.
+      extra <- case rest of
+                 (_ :: exclF :: _) => readExclusionFragments exclF
+                 _                 => pure []
+      let cov = pathCoverageWith extra denom hits modPrefix
       putStr (report cov)
       if cov.missing == [] then pure () else exitFailure
     _ => do
-      putStrLn "Usage: device-pathcov <denom-ids-file> <hit-ids-file> [module-prefix]"
+      putStrLn "Usage: device-pathcov <denom-ids-file> <hit-ids-file> [module-prefix] [exclusions-file]"
       exitFailure

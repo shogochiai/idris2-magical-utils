@@ -87,15 +87,44 @@ record PathCov where
 ||| denominator, then it is intersected with the (deduped) hit set. The excluded
 ||| count is carried in the report so the consumer can check conservation
 ||| (paths_total = denominator + excluded + unknown).
+||| Project-supplied exclusions, on top of the built-in `isExcludedFn` policy.
+||| Each entry is a plain function-name fragment; a path is dropped when its
+||| function name CONTAINS one.
+|||
+||| Why this exists (measured on carl 2026-08-05): the built-in policy drops only
+||| libraries, tests, record accessors and structural `==` — 13.2% of
+||| pkgs/Idris2LuciAndroid. dfx drops 47.4% because GlobalRegistry ships a
+||| `coverage-exclusions.txt`, and android had neither such a file nor any code
+||| that reads one. That is not a regression; android was never wired to the
+||| mechanism the other families use.
+|||
+||| It matters because `claim_admissible` here is `missing == []` — all or
+||| nothing. 506 of the 1357 unhit paths are in Parse/Model/MemGraph/Canister,
+||| reachable only by MUTATING a live canister (`Canister.idr`: 106 of its 109
+||| functions are `IO`). Leaving those in the denominator sets a bar that a
+||| device run cannot clear by construction, which is not honesty, it is an
+||| unreachable pass condition.
 export
-pathCoverage : (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
-pathCoverage denomIds hitIds modPrefix =
+isProjectExcludedFn : (extraPatterns : List String) -> String -> Bool
+isProjectExcludedFn pats fn = any (\p => isInfixOf p fn) pats
+
+||| `pathCoverage` plus project-supplied exclusion fragments. The zero-pattern
+||| call is byte-identical to the old behaviour, so a target with no
+||| coverage-exclusions.txt measures exactly as it did.
+export
+pathCoverageWith : (extraPatterns : List String) -> (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
+pathCoverageWith extraPatterns denomIds hitIds modPrefix =
   let scoped  = nub (filter (inModule modPrefix) denomIds)
-      denom   = filter (not . isExcluded) scoped
+      denom   = filter (\pid => not (isExcluded pid)
+                             && not (isProjectExcludedFn extraPatterns (funcOf pid))) scoped
       excl    = length scoped `minus` length denom
       hits    = nub hitIds
       missing = filter (\p => not (elem p hits)) denom
   in MkPathCov (length denom) (length denom `minus` length missing) excl missing
+
+export
+pathCoverage : (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
+pathCoverage denomIds hitIds modPrefix = pathCoverageWith [] denomIds hitIds modPrefix
 
 ||| The parity-ti-shaped report text (same keys host step4 emits, so parity-ti's
 ||| step4Pass parses it identically). PASS ⟺ Missing paths: 0.
