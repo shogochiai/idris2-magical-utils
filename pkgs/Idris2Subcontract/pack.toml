@@ -10,3 +10,12 @@ ipkg   = "idris2-evm.ipkg"
 type   = "local"
 path   = "."
 ipkg   = "idris2-subcontract.ipkg"
+
+# Split out of idris2-evm on 2026-08-05 (magical-utils 7ebb671a). Declared in
+# EVERY repo whose packages transitively reach Idris2EvmCoverage — pack.toml
+# files do not inherit across repositories, and fixing only the repo where the
+# failure surfaced left the next one broken three times running.
+[custom.all.idris2-evm-interp]
+type   = "local"
+path   = "../Idris2Evm"
+ipkg   = "idris2-evm-interp.ipkg"
