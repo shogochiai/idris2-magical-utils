@@ -55,6 +55,22 @@ sanitize s = pack $ map sanitizeChar (unpack s)
         then c
         else '_'
 
+||| Deterministic FNV-1a 64-bit hash of a path-id string, used as the EVM LOG
+||| topic for path-coverage markers. The coverage collector computes the SAME hash
+||| for each dumppaths path_id, so a fired topic identity-joins to its path. 64-bit
+||| keeps it well within a 256-bit topic and collision-free for realistic path sets.
+||| MUST stay byte-identical to the collector's implementation.
+export
+pathIdTopic : String -> Integer
+pathIdTopic s = foldl step 14695981039346656037 (map (cast . ord) (unpack s))
+  where
+    mask64 : Integer
+    mask64 = 18446744073709551615
+    step : Integer -> Integer -> Integer
+    step h b =
+      let x = prim__and_Integer (prim__xor_Integer h b) mask64
+      in prim__and_Integer (x * 1099511628211) mask64
+
 ||| Convert Idris name to valid Yul identifier
 export
 mangleName : Name -> YulId
@@ -228,6 +244,7 @@ record CompileCtx where
   arities : FnArityMap
   closureIds : ClosureIdMap
   nextCaseId : Nat  -- Unique ID counter for case_result variables
+  lastStr : Maybe String  -- most-recent Str literal seen (for path-hit marker)
 
 ||| Generate next unique case result variable name and return updated context
 nextCaseVar : CompileCtx -> (CompileCtx, String)
@@ -312,19 +329,30 @@ mutual
 
   -- External primitive (FFI)
   compileANFExprWithStmts ctx (AExtPrim _ _ n args) = do
-    let compiledArgs = map compileAVar args
-    case parseEvmForeign (show n) of
-      Just (op, _) =>
-        let expr = evmOpcodeToYul op compiledArgs
-        in case expr of
-             YCall fname _ => if isVoidOp fname
-                                then pure (ctx, [YExprStmt expr], yulNum 0)
-                                else pure (ctx, [], expr)
-             _ => pure (ctx, [], expr)
-      Nothing =>
-        let fnName = mangleName n
-            paddedArgs = padArgs ctx.arities fnName compiledArgs
-        in pure (ctx, [], yulCall fnName paddedArgs)
+    -- Path-coverage marker: prim__recordPathHit "<fn>#pN" → log1(0,0,topic(pid)).
+    -- The path-id arg is only an AVar here, but ctx.lastStr holds the Str literal
+    -- bound just before this call (set in the APrimVal handler). Emit an EVM LOG
+    -- the revm trace records; the collector hashes dumppaths path_ids the same way.
+    if isInfixOf "recordPathHit" (show n)
+       then case ctx.lastStr of
+              Just pid =>
+                let marker = YExprStmt (yulCall "log1" [yulNum 0, yulNum 0, yulNum (pathIdTopic pid)])
+                in pure (ctx, [marker], yulNum 0)
+              Nothing => pure (ctx, [], yulNum 0)  -- no id recoverable; emit nothing
+       else do
+        let compiledArgs = map compileAVar args
+        case parseEvmForeign (show n) of
+          Just (op, _) =>
+            let expr = evmOpcodeToYul op compiledArgs
+            in case expr of
+                 YCall fname _ => if isVoidOp fname
+                                    then pure (ctx, [YExprStmt expr], yulNum 0)
+                                    else pure (ctx, [], expr)
+                 _ => pure (ctx, [], expr)
+          Nothing =>
+            let fnName = mangleName n
+                paddedArgs = padArgs ctx.arities fnName compiledArgs
+            in pure (ctx, [], yulCall fnName paddedArgs)
     where
       isVoidOp : String -> Bool
       isVoidOp "revert" = True
@@ -341,7 +369,13 @@ mutual
       isVoidOp _ = False
 
   -- Constant
-  compileANFExprWithStmts ctx (APrimVal _ c) = pure (ctx, [], compileConstant c)
+  compileANFExprWithStmts ctx (APrimVal _ c) =
+    -- Remember the most-recent Str literal so a following prim__recordPathHit
+    -- (whose arg is only an AVar by the time we see it) can recover its path-id.
+    let ctx' = case c of
+                 Str s => { lastStr := Just s } ctx
+                 _ => ctx
+    in pure (ctx', [], compileConstant c)
 
   -- Erased value
   compileANFExprWithStmts ctx (AErased _) = pure (ctx, [], yulNum 0)
@@ -485,7 +519,7 @@ compileANFExpr ctx anf = do
 
 ||| Compile ANF expression (with arity map for proper call padding)
 compileANFWithArities : FnArityMap -> ANF -> Core YulExpr
-compileANFWithArities arities = compileANFExpr (MkCompileCtx arities empty 0)
+compileANFWithArities arities = compileANFExpr (MkCompileCtx arities empty 0 Nothing)
 
 ||| Legacy wrapper (for backward compatibility)
 export
@@ -581,7 +615,7 @@ compileANFStmtCtx ctx anf = do
 
 ||| Compile ANF to Yul statement (for let bindings and cases)
 compileANFStmtWithArities : FnArityMap -> ANF -> Core (List YulStmt)
-compileANFStmtWithArities arities = compileANFStmtCtx (MkCompileCtx arities empty 0)
+compileANFStmtWithArities arities = compileANFStmtCtx (MkCompileCtx arities empty 0 Nothing)
 
 ||| Legacy wrapper
 export
@@ -830,7 +864,7 @@ compileDefCtx ctx (n, MkAError exp) = do
 
 ||| Compile an ANF definition to a Yul function (with arity map)
 compileDefWithArities : FnArityMap -> (Name, ANFDef) -> Core (Maybe YulFun)
-compileDefWithArities arities = compileDefCtx (MkCompileCtx arities empty 0)
+compileDefWithArities arities = compileDefCtx (MkCompileCtx arities empty 0 Nothing)
 
 ||| Compile an ANF definition to a Yul function
 export
@@ -871,13 +905,19 @@ generateYul name defs = do
   let arities = collectArities defs
   let closureTargets = collectClosureTargets defs
   let closureIds = buildClosureIdMap closureTargets
-  let ctx = MkCompileCtx arities closureIds 0
+  let ctx = MkCompileCtx arities closureIds 0 Nothing
   -- Second pass: compile with context
   allFuns <- catMaybes <$> traverse (compileDefCtx ctx) defs
   -- Deduplicate functions (ANF may produce duplicates from typeclass instances)
   let dedupedFuns = deduplicateFuns allFuns
   let mainFn = fromMaybe (UN (Basic "main")) (findMain defs)
   let mainName = mangleName mainFn
+  -- Pass main's ACTUAL arity worth of zero args (not a hardcoded 1). With
+  -- --dumppathshits the path-instrumentation can change main's compiled arity
+  -- (e.g. the world token is wrapped), so a fixed `main(0)` mismatches the
+  -- generated `function main()`/`main(w)` and solc rejects it. Look up the arity.
+  let mainArity = fromMaybe 1 (lookup mainName arities)
+  let mainArgs = replicate mainArity (yulNum 0)
   -- Generate closure support functions
   let closureFuns = mkClosureFunction :: applyClosureFunction closureIds arities :: []
   -- Add built-in functions
@@ -889,7 +929,7 @@ generateYul name defs = do
   -- Create runtime object (the actual contract logic)
   let runtimeObject = MkYulObject
         { name = "runtime"
-        , code = initMemory ++ [YExprStmt $ yulCall "pop" [yulCall mainName [yulNum 0]]]
+        , code = initMemory ++ [YExprStmt $ yulCall "pop" [yulCall mainName mainArgs]]
         , functions = reachableFuns
         , subObjects = []
         }

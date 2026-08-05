@@ -864,7 +864,7 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
          ++ " && cd " ++ absProjectDir
          ++ " && \"$APP\" --build " ++ tempIpkgName
          ++ " > " ++ logPath ++ " 2>&1"
-  _ <- system cmd
+  buildRc <- system cmd
   contentResult <- readFile dumppathsPath
   logResult <- readFile logPath
   removeFileIfExists tempIdrPath
@@ -874,10 +874,18 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
   removeFileIfExistsSafe logPath
   case contentResult of
     Left err =>
+      -- The shell's exit code disambiguates the failure mode: a plain
+      -- "produced no JSON" reads identically whether the compiler OOM-killed
+      -- (SIGKILL, rc=137 under `sh -c`), timed out, or hit a genuine compile
+      -- error — and a run that dies this way still reports a coverage number,
+      -- just a quietly smaller one (the missing chunk's hits never landed).
+      -- Surfacing the rc turns "File Not Found" back into "the process died".
       let logTail = case logResult of
                       Left _ => ""
                       Right logContent => unlines (reverse (take 12 (reverse (lines logContent))))
-      in pure $ Left $ "Static chunk " ++ show idx ++ " failed to produce dumppaths JSON: " ++ show err
+      in pure $ Left $ "Static chunk " ++ show idx ++ " failed to produce dumppaths JSON (build rc="
+                    ++ show buildRc ++ if buildRc == 137 then ", likely OOM-killed" else ""
+                    ++ "): " ++ show err
                     ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
     Right content =>
       if null (trim content)
@@ -906,6 +914,61 @@ sortModulesLeafFirst projectDir sourcedir mods = do
       pure $ case r of
         Right c => (length (filter (isPrefixOf "import ") (map trim (lines c))), m)
         Left _  => (1000, m)
+
+||| Free system memory in MiB, best-effort (Nothing if it can't be read). macOS:
+||| `vm_stat` free+inactive pages × page size. Linux: /proc/meminfo MemAvailable.
+||| Used to auto-shrink both the static chunk size (resolveStaticChunkSize) and the
+||| runtime hits-walk slice window (resolveSliceLimit) on a low-memory host; a read
+||| failure falls back to each caller's fixed default (never blocks a run).
+freeMemMiB : IO (Maybe Nat)
+freeMemMiB = do
+  let out = "/tmp/idris2cov-freemem.txt"
+  -- macOS: (free+inactive) pages * 4096 / 1MiB. Linux: MemAvailable kB / 1024.
+  -- One portable pipeline; whichever branch the host supports writes the MiB int.
+  _ <- system $
+    "{ if command -v vm_stat >/dev/null 2>&1; then "
+      ++ "vm_stat | awk '/Pages free/{f=$3} /Pages inactive/{i=$3} "
+      ++ "END{gsub(/\\./,\"\",f); gsub(/\\./,\"\",i); print int((f+i)*4096/1048576)}'; "
+    ++ "elif [ -r /proc/meminfo ]; then "
+      ++ "awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; "
+    ++ "else echo ''; fi; } > " ++ out ++ " 2>/dev/null"
+  r <- readFile out
+  pure $ case r of
+    Right s => parsePositive {a = Nat} (trim s)
+    Left _  => Nothing
+
+||| Static-chunk size (modules per `chunkList` group in runStaticDumppathsJsonChunks),
+||| resolved the same way resolveSliceLimit resolves the RUNTIME hits-walk window —
+||| but with a much smaller default, since a static chunk COMPILES its modules
+||| (transitive closure + accumulating TTC cache) rather than just RUNNING already-
+||| built tests. The fixed size of 8 this replaces was found live (2026-07-30,
+||| baseline-worktree cov.log) still OOM-killing: "Static chunk 11 failed to produce
+||| dumppaths JSON (build rc=137, likely OOM-killed)" on an 8-module chunk, on a host
+||| with no prior `build/ttc` (hasPrebuilt=False in runStaticDumppathsJsonChunk — a
+||| fresh worktree, e.g. a CI diff-scoping baseline checkout, never has one). Without
+||| a prebuilt TTC cache to reuse, EVERY chunk compiles its modules' full transitive
+||| closure from source, so peak memory scales with chunk size much more steeply
+||| than in the (implicitly assumed) prebuilt case this constant was tuned for.
+|||   1. IDRIS2COV_STATIC_CHUNK_LIMIT (explicit override) wins.
+|||   2. else AUTO from free memory, shrunk further when there is no prebuilt TTC
+|||      cache to lean on: prebuilt=True keeps the original bands (<1GiB→4, <2GiB→6,
+|||      else 8); prebuilt=False halves them (<1GiB→2, <2GiB→3, else 4) since that
+|||      path has no on-disk shortcut at all. A freeMemMiB read failure falls back to
+|||      the prebuilt-aware default (never worse than doing nothing).
+||| Clamped to >=1 so a bogus 0 can't stall the walk.
+resolveStaticChunkSize : (hasPrebuilt : Bool) -> IO Nat
+resolveStaticChunkSize hasPrebuilt = do
+  ov <- getEnv "IDRIS2COV_STATIC_CHUNK_LIMIT"
+  case ov >>= (parsePositive {a = Nat}) . trim of
+    Just n  => pure (if n < 1 then 1 else n)
+    Nothing => do
+      mfree <- freeMemMiB
+      pure $ case mfree of
+        Just mb =>
+          if hasPrebuilt
+             then if mb < 1024 then 4 else if mb < 2048 then 6 else 8
+             else if mb < 1024 then 2 else if mb < 2048 then 3 else 4
+        Nothing => if hasPrebuilt then 8 else 4
 
 runStaticDumppathsJsonChunks : String -> String -> IO (Either String String)
 runStaticDumppathsJsonChunks ipkgPath wholeErr = do
@@ -954,8 +1017,10 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        let tailCount = if n > 16 then 16 else n
        let headMods = take (minus n tailCount) sortedModules
        let tailMods = drop (minus n tailCount) sortedModules
-       let chunks = chunkList 8 headMods ++ map (\m => [m]) tailMods
-       putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons)..."
+       hasPrebuiltForSizing <- exists (projectDir ++ "/build/ttc")
+       chunkSize <- resolveStaticChunkSize hasPrebuiltForSizing
+       let chunks = chunkList chunkSize headMods ++ map (\m => [m]) tailMods
+       putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons, chunk size " ++ show chunkSize ++ (if hasPrebuiltForSizing then " (prebuilt TTC found)" else " (no prebuilt TTC — colder/smaller chunks)") ++ ")..."
        chunkResults <- runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent chunks 0 []
        _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
        case chunkResults of
@@ -996,9 +1061,12 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
       -- package this OOM-killed whichever chunk finally exceeded available
       -- RAM (observed: SIGKILL after compiling 107/129 modules for a
       -- SINGLE-MODULE chunk, confirmed via the raw build log's "Killed: 9"
-      -- — the caller only ever sees "File Not Found" for the missing
-      -- dumppaths JSON, since that SIGKILL is not distinguished from any
-      -- other producer failure at the read site above). The disk-bound
+      -- — the caller used to only see "File Not Found" for the missing
+      -- dumppaths JSON, since that SIGKILL was not distinguished from any
+      -- other producer failure at the read site above; runStaticDumppathsJsonChunk
+      -- now threads the shell's exit code into the error message (2026-07-29,
+      -- alice's fleet-chat report of a coverage_percent that silently varied
+      -- run-to-run traced this exact gap). The disk-bound
       -- cleanup this line intended is still correct AFTER THE WHOLE
       -- CHUNKED RUN completes — see the unconditional cleanup already
       -- present where runChunks is invoked (this function, ~line 938,
@@ -1655,27 +1723,6 @@ parsePathHitLineLocal line =
 intraSliceLimit : Nat
 intraSliceLimit = 100
 
-||| Free system memory in MiB, best-effort (Nothing if it can't be read). macOS:
-||| `vm_stat` free+inactive pages × page size. Linux: /proc/meminfo MemAvailable.
-||| Used ONLY to auto-shrink the slice size on a low-memory host; a read failure
-||| falls back to the fixed default (never blocks a run).
-freeMemMiB : IO (Maybe Nat)
-freeMemMiB = do
-  let out = "/tmp/idris2cov-freemem.txt"
-  -- macOS: (free+inactive) pages * 4096 / 1MiB. Linux: MemAvailable kB / 1024.
-  -- One portable pipeline; whichever branch the host supports writes the MiB int.
-  _ <- system $
-    "{ if command -v vm_stat >/dev/null 2>&1; then "
-      ++ "vm_stat | awk '/Pages free/{f=$3} /Pages inactive/{i=$3} "
-      ++ "END{gsub(/\\./,\"\",f); gsub(/\\./,\"\",i); print int((f+i)*4096/1048576)}'; "
-    ++ "elif [ -r /proc/meminfo ]; then "
-      ++ "awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; "
-    ++ "else echo ''; fi; } > " ++ out ++ " 2>/dev/null"
-  r <- readFile out
-  pure $ case r of
-    Right s => parsePositive {a = Nat} (trim s)
-    Left _  => Nothing
-
 ||| The per-slice test window size, resolved at run time so a caller can control it
 ||| and a low-memory host is never overrun:
 |||   1. IDRIS2COV_SLICE_LIMIT (explicit override — a tool/LUCICONF sets this) wins.
@@ -1739,9 +1786,12 @@ runExeSlices projectDir relExecPath pathHitsPath = do
   -- Resolve the per-slice window ONCE (explicit IDRIS2COV_SLICE_LIMIT, else auto
   -- from free memory). Threaded into `go` so every slice uses the same value.
   sliceLimit <- resolveSliceLimit
-  when (sliceLimit /= intraSliceLimit) $
-    ignore $ fPutStrLn stderr ("    [slice] per-slice test window = " ++ show sliceLimit
-              ++ " (default " ++ show intraSliceLimit ++ "; set IDRIS2COV_SLICE_LIMIT to override)")
+  -- Always print, even when sliceLimit == intraSliceLimit (the default): a
+  -- reader must be able to tell "resolved to 100" from "this code path never
+  -- ran" apart. A line that only appears on the non-default branch answers
+  -- both questions with silence, which is indistinguishable from either.
+  ignore $ fPutStrLn stderr ("    [slice] per-slice test window = " ++ show sliceLimit
+            ++ " (default " ++ show intraSliceLimit ++ "; set IDRIS2COV_SLICE_LIMIT to override)")
   go sliceLimit 0 0 Nothing [] intraSliceMaxSlices
   where
     -- Env-gated per-slice trace. Set IDRIS2COV_SLICE_DEBUG=1 to diagnose a
@@ -1844,6 +1894,18 @@ runExeSlices projectDir relExecPath pathHitsPath = do
                 ++ " crashedMidSlice=" ++ show crashedMidSlice
       if timedOut || crashedMidSlice
         then do sliceDebug "branch=ADVANCE(timeout/crash)"
+                -- Unconditional (not gated on IDRIS2COV_SLICE_DEBUG): a slice
+                -- that times out or crashes mid-suite keeps only the hits it
+                -- had already written before dying, then the walk advances
+                -- past it — the numerator this run reports is silently
+                -- smaller than a clean run's. Whether that happened at all
+                -- must not depend on a debug flag nobody sets on a gate run.
+                ignore $ fPutStrLn stderr ("    [slice] WARNING offset=" ++ show offset
+                          ++ " exit=" ++ show sliceExit
+                          ++ (if timedOut then " (timeout, alarm=" ++ show intraSliceTimeoutSecs ++ "s)"
+                              else if sliceExit == 137 then " (likely OOM-killed)"
+                              else " (non-zero exit, no Results: line)")
+                          ++ " — this slice's hits may be incomplete; advancing")
                 go sliceLimit (offset + sliceLimit) (S idx) firstCount acc' fuel
         else if count == 0
           then do sliceDebug "branch=STOP(clean-empty past-the-end)"; pure acc'  -- clean empty slice → past the end → done
