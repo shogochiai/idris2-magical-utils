@@ -122,3 +122,18 @@ ipkg = "idris2-ffi-coverage.ipkg"
 type = "local"
 path = "pkgs/Idris2LspRedox"
 ipkg = "idris2-lsp.ipkg"
+
+# The Yul codegen driver shipped by pkgs/Idris2Evm. Declared HERE, not only in a
+# machine-local ~/code/pack.toml, because until 2026-08-05 this name was bound
+# nowhere a repository owned: the only binding lived in an untracked file, and it
+# resolved `idris2-yul` to this package while a DIFFERENT codebase
+# (git@github.com:shogochiai/idris2-yul.git) also declares `package idris2-yul`.
+# `which idris2-yul` answered, `pack install-app idris2-yul` succeeded, and the
+# binary accepted the flags — every surface said "the tool is here" and none of
+# them said "the tool is the one you mean". Owning the binding does not resolve
+# that collision, but it makes it reviewable and reproducible instead of
+# per-machine folklore.
+[custom.all.idris2-yul]
+type = "local"
+path = "pkgs/Idris2Evm"
+ipkg = "idris2-yul.ipkg"
