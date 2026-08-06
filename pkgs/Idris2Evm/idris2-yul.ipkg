@@ -1,6 +1,6 @@
 package idris2-yul
 
-version = "0.3.0"
+version = 0.3.0
 
 authors = "LazyEvm Team"
 

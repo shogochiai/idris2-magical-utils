@@ -1,5 +1,5 @@
 package idris2-android-coverage-tests
-version = "0.1.0"
+version = 0.1.0
 sourcedir = "src"
 depends = base, contrib, idris2-react-native-lib
 

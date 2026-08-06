@@ -1,6 +1,6 @@
 package idris2-react-native
 
-version = "0.1.0"
+version = 0.1.0
 
 authors = "EtherClaw"
 

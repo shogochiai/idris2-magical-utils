@@ -1,5 +1,5 @@
 package idris2-android-coverage
-version = "0.1.0"
+version = 0.1.0
 authors = "EtherClaw"
 sourcedir = "src"
 depends = base, contrib, idris2-react-native-lib, idris2-coverage-core, idris2-coverage-standardization
