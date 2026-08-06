@@ -570,12 +570,32 @@ runPathFullPipelineArtifacts opts = do
               mDispatchIpkg <- YulInstr.findDispatchIpkg targetDir
               let buildIpkg = fromMaybe ipkgPath mDispatchIpkg
               -- Denominator universe: dispatch ipkg if present, else test ipkg.
-              denomContent <- case mDispatchIpkg of
-                                Just di => do
-                                  Right c <- runDumppathsJsonInIsolatedCopy di
-                                    | Left _ => pure dumppathsContent
-                                  pure c
-                                Nothing => pure dumppathsContent
+              --
+              -- This MUST NOT fall back silently. The binary below is built from
+              -- `buildIpkg` = the dispatch ipkg, so its path markers are dispatch
+              -- path-ids. Substituting the TEST ipkg's dumppaths here does not
+              -- shrink the denominator, it swaps it for a DIFFERENT universe, and
+              -- the FNV join that follows can then only return zero — not because
+              -- nothing was covered but because no fired id can be in the set.
+              --
+              -- Measured on carl 2026-08-06, TextDao, with the fallback in place:
+              -- the trace held 40250 well-formed `[0] 0x<64hex>` lines, 70 unique
+              -- topics at 575 each (= the dispatch call count), and all 70 hash
+              -- back to real obligations (0x8b46a5a6899482e =
+              -- TextDAO.Functions.Config.Config.setDeliberationConfigSel#p0, and
+              -- 69 more). The reported denominator was 4, and the join returned 0.
+              -- Every stage worked; the two sides were measuring different programs.
+              -- Three separate diagnoses were written against that zero — "the
+              -- contract is not being driven", then "the labels are stale" — and
+              -- both were wrong, because the one fact that would have refuted them
+              -- was the error this `Left _` discarded.
+              Right denomContent <- the (IO (Either String String)) (case mDispatchIpkg of
+                                       Just di => runDumppathsJsonInIsolatedCopy di
+                                       Nothing => pure (Right dumppathsContent))
+                | Left err => pure $ Left $
+                    "Pathcov denominator generation failed for the dispatch ipkg: " ++ err ++
+                    " -- refusing to score dispatch path markers against the test ipkg's" ++
+                    " dumppaths, which would report a structural 0% as a measurement."
               Right baseYul <- YulInstr.generateYul buildIpkg outputDir
                 | Left err => pure $ Left $ "Pathcov Yul generation failed: " ++ err
               Right _ <- YulInstr.compileYulToBytecode baseYul outputDir
