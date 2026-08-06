@@ -65,7 +65,14 @@ main = do
                  _                 => pure []
       let cov = pathCoverageWith extra denom hits modPrefix
       putStr (report cov)
-      if cov.missing == [] then pure () else exitFailure
+      -- Exit on ADMISSIBILITY, not on completeness. This producer emits raw
+      -- evidence; whether the coverage clears a bar is the consumer's call
+      -- against its family threshold (Android = 95.0). Exiting nonzero for
+      -- "not 100%" made every real device run a failure and left no exit code
+      -- free to mean "this run measured nothing" — the one condition the
+      -- caller genuinely cannot recover from, and the one a false-zero
+      -- numerator produces. See `claimAdmissible`.
+      if claimAdmissible cov then pure () else exitFailure
     _ => do
       putStrLn "Usage: device-pathcov <denom-ids-file> <hit-ids-file> [module-prefix] [exclusions-file]"
       exitFailure

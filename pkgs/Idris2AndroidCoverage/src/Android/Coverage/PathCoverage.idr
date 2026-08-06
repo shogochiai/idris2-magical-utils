@@ -98,12 +98,11 @@ record PathCov where
 ||| that reads one. That is not a regression; android was never wired to the
 ||| mechanism the other families use.
 |||
-||| It matters because `claim_admissible` here is `missing == []` — all or
-||| nothing. 506 of the 1357 unhit paths are in Parse/Model/MemGraph/Canister,
+||| It matters because the denominator is what the family threshold is scored
+||| against. 506 of the 1357 unhit paths are in Parse/Model/MemGraph/Canister,
 ||| reachable only by MUTATING a live canister (`Canister.idr`: 106 of its 109
-||| functions are `IO`). Leaving those in the denominator sets a bar that a
-||| device run cannot clear by construction, which is not honesty, it is an
-||| unreachable pass condition.
+||| functions are `IO`). Leaving those in the denominator inflates it with
+||| obligations no device run may discharge.
 export
 isProjectExcludedFn : (extraPatterns : List String) -> String -> Bool
 isProjectExcludedFn pats fn = any (\p => isInfixOf p fn) pats
@@ -126,8 +125,40 @@ export
 pathCoverage : (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
 pathCoverage denomIds hitIds modPrefix = pathCoverageWith [] denomIds hitIds modPrefix
 
+||| Is this run a MEASUREMENT at all? That is the only question
+||| `claim_admissible` answers, and it is deliberately not "is the measurement
+||| complete" — completeness is the family threshold's job
+||| (`Luci.FamilyThreshold`: Android = 95.0, "MVU, fully drivable"), and the
+||| consumer already gates on `claim_admissible && coverage >= threshold`
+||| (`Parity.passesStep4Threshold`).
+|||
+||| This used to be `missing == []`, i.e. 100%. That made the declared 95.0 a
+||| decoration: no run below 100% could pass no matter what the table said.
+||| Luci's own consumer carries a comment identifying exactly this shape as a
+||| real bug and removing it there ("Requiring literal gap-zero made `threshold`
+||| a display-only decoration") — the producer side was simply never brought in
+||| line, so android alone kept a pass condition of 100% while core cleared 53
+||| and dfx 90.
+|||
+||| What genuinely makes a device run inadmissible is a numerator that is zero
+||| for instrument reasons, and this harness has produced that at least three
+||| ways, all recorded in run-device-pathcov.sh: a warm resume that does not
+||| remount the View (manual cold start 58 hits, warm resume 0); a `grep -q`
+||| SIGPIPE under `set -o pipefail` that emptied the extraction while the dump
+||| held 58-67; and an early poll finding zero hits before the View had mounted,
+||| which `set -e` then turned into an exit. In every case the run reported a
+||| clean, well-formed zero. A zero numerator is therefore indistinguishable
+||| from a failed instrument, and reporting it as an admissible 0% is the
+||| unmeasured-rendered-as-measured defect rather than a low score.
+|||
+||| An empty denominator is inadmissible for the same reason: nothing was
+||| scoped, so there is no obligation set to have covered.
+export
+claimAdmissible : PathCov -> Bool
+claimAdmissible c = c.denomTotal > 0 && c.covered > 0
+
 ||| The parity-ti-shaped report text (same keys host step4 emits, so parity-ti's
-||| step4Pass parses it identically). PASS ⟺ Missing paths: 0.
+||| step4Pass parses it identically).
 |||
 ||| v2 raw-evidence contract: RAW COUNTS only — this producer computes no
 ||| percentage (the old `percent` helper reported 100 on zero obligations, the
@@ -139,7 +170,7 @@ report c =
   unlines $
     [ "# Device PATH Coverage (dumppaths denominator, on-device hit numerator)"
     , "coverage_model: raw_evidence_v2"
-    , "claim_admissible: " ++ (if c.missing == [] then "True" else "False")
+    , "claim_admissible: " ++ (if claimAdmissible c then "True" else "False")
     , "paths_total: " ++ show (c.denomTotal + c.excludedCount)
     , "paths_denominator: " ++ show c.denomTotal
     , "paths_hit: " ++ show c.covered
