@@ -9,16 +9,60 @@ set -e
 INPUT="${1:?Usage: $0 input.wasm output.wasm}"
 OUTPUT="${2:?Usage: $0 input.wasm output.wasm}"
 
-# Check dependencies
-command -v wasm2wat >/dev/null || { echo "wasm2wat not found (install wabt)"; exit 1; }
-command -v wat2wasm >/dev/null || { echo "wat2wasm not found (install wabt)"; exit 1; }
+# Toolchain selection: wabt if present, else binaryen.
+#
+# emsdk ships binaryen (wasm-dis/wasm-as) but NOT wabt, so on a host whose only
+# wasm toolchain came with emscripten this script used to abort at "wasm2wat not
+# found" — after emcc had already produced the unstubbed .wasm. That aborts the
+# whole canister build (measured 2026-08-01, alice: `>>> Step 4: WASI stubbing` /
+# `wasm2wat not found (install wabt)` and no global_registry_stubbed.wasm), for a
+# dependency the build otherwise does not need. Prefer wabt to keep existing
+# hosts byte-identical; fall back to binaryen rather than fail.
+#
+# The two disassemblers emit different WAT dialects and each needs its own
+# transformer:
+#   wabt:     (import "wasi…" "fd_close" (func $__wasi_fd_close (type 0)))
+#   binaryen: (import "wasi…" "fd_close" (func $__wasi_fd_close (param i32) (result i32)))
+# i.e. binaryen inlines the signature instead of referencing a (type N).
+BACKEND=""
+if command -v wasm2wat >/dev/null && command -v wat2wasm >/dev/null; then
+  BACKEND=wabt
+else
+  # Look on PATH first, then beside emcc (emsdk's upstream/bin holds binaryen).
+  DIS=$(command -v wasm-dis || true)
+  ASM=$(command -v wasm-as || true)
+  if [ -z "$DIS" ] || [ -z "$ASM" ]; then
+    EMCC_PATH=$(command -v emcc || true)
+    if [ -n "$EMCC_PATH" ]; then
+      EM_BIN="$(cd "$(dirname "$(readlink "$EMCC_PATH" || echo "$EMCC_PATH")")/../bin" 2>/dev/null && pwd || true)"
+      [ -x "$EM_BIN/wasm-dis" ] && DIS="$EM_BIN/wasm-dis"
+      [ -x "$EM_BIN/wasm-as" ] && ASM="$EM_BIN/wasm-as"
+    fi
+  fi
+  if [ -n "$DIS" ] && [ -n "$ASM" ]; then
+    BACKEND=binaryen
+  fi
+fi
+
+if [ -z "$BACKEND" ]; then
+  echo "no wasm text toolchain found: need either wabt (wasm2wat/wat2wasm) or binaryen (wasm-dis/wasm-as)"
+  exit 1
+fi
+echo ">>> WAT backend: $BACKEND"
 
 TEMP_WAT=$(mktemp /tmp/wasm-stub-XXXXXX.wat)
 TEMP_WAT2=$(mktemp /tmp/wasm-stub2-XXXXXX.wat)
-trap "rm -f $TEMP_WAT $TEMP_WAT2" EXIT
+TEMP_PY_BINARYEN=$(mktemp /tmp/wasm-stub-binaryen-XXXXXX.py)
+trap "rm -f $TEMP_WAT $TEMP_WAT2 $TEMP_PY_BINARYEN" EXIT
 
 echo ">>> Converting WASM to WAT..."
-wasm2wat "$INPUT" -o "$TEMP_WAT"
+if [ "$BACKEND" = wabt ]; then
+  wasm2wat "$INPUT" -o "$TEMP_WAT"
+else
+  # --all-features: the module uses bulk-memory (memory.copy). Without it the
+  # round trip fails on the way back in, not here.
+  "$DIS" --all-features "$INPUT" -o "$TEMP_WAT"
+fi
 
 echo ">>> Analyzing WASI imports..."
 grep -E '^\s*\(import "wasi_snapshot_preview1"' "$TEMP_WAT" || echo "(no WASI imports found)"
@@ -133,14 +177,116 @@ with open(output_file, 'w') as f:
 print(f">>> Wrote transformed WAT to {output_file}", file=sys.stderr)
 PYEOF
 
+cat > "$TEMP_PY_BINARYEN" << 'PYEOF'
+"""Stub WASI/env imports in binaryen's WAT dialect (inline signatures).
+
+Each matching import line becomes a local definition with the SAME name and the
+SAME signature, and a body returning the neutral value, so every call site keeps
+typechecking against an identical type. Nothing else in the module changes.
+
+Unlike the wabt path there are no numeric function indices to remap: binaryen
+names every function, so replacing the line in place is sufficient.
+"""
+import re
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as f:
+    lines = f.read().split('\n')
+
+# (import "MOD" "NAME" (func $ID <sig>))  — sig is the rest, minus two closers.
+IMPORT = re.compile(
+    r'^(\s*)\(import "(wasi_snapshot_preview1|env)" "([^"]+)" '
+    r'\(func (\$[^\s)]+)(.*)\)\)\s*$')
+
+RESULT = re.compile(r'\(result\s+([^\s)]+)')
+
+NEUTRAL = {
+    'i32': '(i32.const 0)',
+    'i64': '(i64.const 0)',
+    'f32': '(f32.const 0)',
+    'f64': '(f64.const 0)',
+}
+
+
+def body_for(sig):
+    m = RESULT.search(sig)
+    if not m:
+        return '(nop)'
+    ty = m.group(1)
+    if ty not in NEUTRAL:
+        # An unknown result type would get a wrong-typed body and the assembler
+        # would reject it with a confusing message. Say which one, and stop.
+        print('unsupported result type in stub: %s' % ty, file=sys.stderr)
+        sys.exit(2)
+    return NEUTRAL[ty]
+
+
+out = []
+stubbed = {'wasi_snapshot_preview1': 0, 'env': 0}
+for line in lines:
+    m = IMPORT.match(line)
+    if not m:
+        out.append(line)
+        continue
+    indent, module, name, ident, sig = m.groups()
+    out.append('%s(func %s%s\n%s %s\n%s)' % (indent, ident, sig, indent, body_for(sig), indent))
+    stubbed[module] += 1
+    # env imports are stubbed for parity with the wabt path, but printed
+    # individually: a silently-zeroed env import is how a missing .c file once
+    # shipped as a canister that just never replied (see canister-build.toml's
+    # ic_schnorr.c note). Naming them here makes that visible in the build log.
+    label = 'WASI' if module == 'wasi_snapshot_preview1' else 'env  ** check this is intentional **'
+    print('  stubbed %s: %s %s' % (label, name, body_for(sig)), file=sys.stderr)
+
+with open(dst, 'w') as f:
+    f.write('\n'.join(out))
+
+remaining = sum(l.count('"wasi_snapshot_preview1"') for l in out)
+print('>>> stubbed wasi=%d env=%d; remaining wasi mentions=%d'
+      % (stubbed['wasi_snapshot_preview1'], stubbed['env'], remaining), file=sys.stderr)
+# Emitting a module that still imports WASI is the failure this script exists to
+# prevent: the replica rejects it at install time (IC0505) with no useful
+# diagnostic, long after the build reported success.
+sys.exit(0 if remaining == 0 else 1)
+PYEOF
+
 echo ">>> Transforming WAT..."
-python3 /tmp/stub_wasi.py "$TEMP_WAT" "$TEMP_WAT2"
+if [ "$BACKEND" = wabt ]; then
+  python3 /tmp/stub_wasi.py "$TEMP_WAT" "$TEMP_WAT2"
+else
+  python3 "$TEMP_PY_BINARYEN" "$TEMP_WAT" "$TEMP_WAT2"
+fi
 
 echo ">>> Remaining imports:"
 grep -E '^\s*\(import' "$TEMP_WAT2" | head -10 || echo "(none)"
 
 echo ">>> Converting back to WASM..."
-wat2wasm "$TEMP_WAT2" -o "$OUTPUT" 2>&1
+if [ "$BACKEND" = wabt ]; then
+  wat2wasm "$TEMP_WAT2" -o "$OUTPUT" 2>&1
+else
+  "$ASM" --all-features "$TEMP_WAT2" -o "$OUTPUT" 2>&1
+fi
+
+# Postcondition on the ARTIFACT, not on the intermediate text. Everything above
+# can succeed and still ship a module the replica refuses; the only reading that
+# settles it is disassembling what was actually written.
+echo ">>> Verifying no WASI imports survive in the output..."
+VERIFY_WAT=$(mktemp /tmp/wasm-stub-verify-XXXXXX.wat)
+if [ "$BACKEND" = wabt ]; then
+  wasm2wat "$OUTPUT" -o "$VERIFY_WAT"
+else
+  "$DIS" --all-features "$OUTPUT" -o "$VERIFY_WAT"
+fi
+SURVIVING=$(grep -a -c 'wasi_snapshot_preview1' "$VERIFY_WAT" || true)
+rm -f "$VERIFY_WAT"
+if [ "$SURVIVING" != "0" ]; then
+  echo "FAIL: $SURVIVING wasi_snapshot_preview1 reference(s) remain in $OUTPUT"
+  echo "      (installing this would fail with IC0505 at the replica, not here)"
+  rm -f "$OUTPUT"
+  exit 1
+fi
+echo ">>> Verified: 0 WASI imports"
 
 echo ">>> Done!"
 ls -la "$OUTPUT"
