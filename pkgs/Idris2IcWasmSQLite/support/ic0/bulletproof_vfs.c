@@ -97,7 +97,7 @@ static inline void bp_dbg(const char* tag, uint64_t a, uint64_t b) { (void)tag; 
 #define BP_P            SQL_VFS_SQLITE_PAGE_SIZE   /* logical page length P */
 #define BP_STABLE_PAGE  SQL_VFS_STABLE_PAGE_SIZE   /* 64KiB grow unit       */
 #define BP_SB_ENCODED   64U                        /* bytes we actually write */
-#define BP_MAX_DB_SIZE  (256ULL * 1024ULL * 1024ULL)
+#define BP_MAX_DB_SIZE  (1024ULL * 1024ULL * 1024ULL)
 
 /* superblock slots occupy one 64KiB stable page each (distinct charge pages),
  * the page region begins after both slots. */
