@@ -940,24 +940,41 @@ compileYulToBytecode yulPath outputDir = do
   let solcLog = outputDir ++ "/solc-build.log"
   -- For strict-assembly mode, solc outputs to stdout, redirect to file
   let cmd = "solc --strict-assembly --optimize " ++ yulPath ++ " --bin > " ++ binPath ++ " 2> " ++ solcLog
-  -- First check for syntax errors
-  let checkCmd = "solc --strict-assembly " ++ yulPath ++ " > /dev/null 2> " ++ solcLog
-  checkResult <- system checkCmd
-  if checkResult /= 0
-    then do
-      logTail <- readLogTail solcLog
-      pure $ Left $
-        "Yul syntax error (instrumentation bug)"
-        ++ (if null logTail then "" else "\nsolc log tail:\n" ++ logTail)
+  -- Is the compiler here at all? Without this, `solc` missing from PATH makes
+  -- the syntax check below exit nonzero and the failure is reported as
+  -- "Yul syntax error (instrumentation bug)" — an accusation against generated
+  -- code that was never read by anything. Measured on carl 2026-08-06: the
+  -- whole diagnosis was `sh: solc: command not found`, printed underneath a
+  -- headline blaming the instrumentor. Three earlier tool absences in this same
+  -- pipeline were each reported under a different wrong cause ("tampered
+  -- instrument", "Yul syntax error", "revm executed the fixture"), and each one
+  -- cost a diagnosis written against the wrong subsystem.
+  let solcProbe : String := "command -v solc > /dev/null 2>&1"
+  solcPresent <- system solcProbe
+  if solcPresent /= 0
+    then pure $ the (Either String String) $ Left $
+      "solc not found on PATH. This is a missing tool, not a defect in the" ++
+      " generated Yul: nothing has read " ++ yulPath ++ " yet. Install it" ++
+      " (e.g. `brew install solidity`) and re-run."
     else do
-      exitCode <- system cmd
-      if exitCode == 0
-        then pure $ Right binPath
-        else do
+      -- Now a nonzero exit really does mean solc read the Yul and rejected it.
+      let checkCmd = "solc --strict-assembly " ++ yulPath ++ " > /dev/null 2> " ++ solcLog
+      checkResult <- system checkCmd
+      if checkResult /= 0
+        then do
           logTail <- readLogTail solcLog
           pure $ Left $
-            "solc compilation failed (exit " ++ show exitCode ++ ")"
+            "Yul syntax error (instrumentation bug)"
             ++ (if null logTail then "" else "\nsolc log tail:\n" ++ logTail)
+        else do
+          exitCode <- system cmd
+          if exitCode == 0
+            then pure $ Right binPath
+            else do
+              logTail <- readLogTail solcLog
+              pure $ Left $
+                "solc compilation failed (exit " ++ show exitCode ++ ")"
+                ++ (if null logTail then "" else "\nsolc log tail:\n" ++ logTail)
 
 -- =============================================================================
 -- Phase 2.4: Idris2 EVM Test Execution
