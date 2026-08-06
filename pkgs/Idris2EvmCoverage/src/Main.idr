@@ -304,7 +304,27 @@ runDumppathsJsonInIsolatedCopy : String -> IO (Either String String)
 runDumppathsJsonInIsolatedCopy ipkgPath = do
   let (projectDir, ipkgName) = splitPath ipkgPath
   t <- time
-  let tempDir = "/tmp/idris2-evm-pathdump-" ++ ipkgName ++ "-" ++ show t
+  -- The copy MUST sit at the same filesystem depth as the original, because a
+  -- pack.toml declares its dependencies with paths relative to itself. Under
+  -- /tmp those paths keep their spelling and lose their meaning:
+  --
+  --   /private/tmp/idris2-evm-pathdump-…/  +  ../../../idris2-magical-utils/…
+  --     = /idris2-magical-utils/…            (the filesystem root)
+  --
+  -- Measured on carl 2026-08-06: that is the whole reason TextDao reported a
+  -- denominator of 4 while its trace held 70 genuine path-id topics fired 575
+  -- times each. pack answered `Required idris2-subcontract any but no matching
+  -- version is installed` and named the file it could not read — inside the
+  -- temp copy, where no sibling repository is reachable at any relative depth.
+  -- Changing the DEPTH of the declaration cannot fix this; every depth is wrong
+  -- once the file has moved to a different root.
+  --
+  -- `projectDir ++ "/../"` puts the copy beside the original, so every relative
+  -- path resolves exactly as it does for a normal build. The dot prefix keeps
+  -- it out of the way and it is removed below; a crash between the two can
+  -- leave one behind and show up as an untracked directory, which is the price
+  -- of the copy being somewhere the original's neighbours exist.
+  let tempDir = projectDir ++ "/../.idris2-evm-pathdump-" ++ ipkgName ++ "-" ++ show t
   let copyCmd =
         "rm -rf " ++ tempDir
         ++ " && mkdir -p " ++ tempDir
