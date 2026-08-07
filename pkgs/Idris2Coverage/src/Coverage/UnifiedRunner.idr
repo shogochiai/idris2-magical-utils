@@ -1068,6 +1068,17 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
                 -- and I each spent an hour on that question, from opposite ends,
                 -- and the answer on real packages turns out to be "no".
                 --
+                -- RANGE OF THAT "no" (carl, 2026-08-08). It was measured on
+                -- Idris2Step3Silicon, which is small enough to take the WHOLE
+                -- path — and this filter only ever runs on the CHUNKED path, so
+                -- the package it was measured on never reaches this line. The
+                -- pattern most likely to fire, `TempStaticDumppaths`, matches
+                -- wrappers that only EXIST when chunking generates them: 696
+                -- distinct ones on pkgs/Luci. So "inert" is established below the
+                -- chunking ceiling and untested above it, which is the only place
+                -- it can act. The per-pattern breakdown below settles it with a
+                -- number instead of an inference, either way.
+                --
                 -- The zero case is printed too, deliberately: "dropped 0" and
                 -- "never ran" must not look the same, and here zero is the
                 -- informative outcome — it says the pattern set is inert on this
@@ -1078,6 +1089,10 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
                           ++ (if dropped == 0
                                  then " (no pattern matched — exclusion set inert here)"
                                  else ""))
+                -- When something DID fire, name which pattern and how many, so
+                -- the count is attributable rather than a second opaque number.
+                traverse_ putStrLn $ renderExclusionBreakdown
+                                   $ exclusionBreakdown excl emptyExclusionConfig deduped
                 pure $ Right $ pathObligationsToDumppathsJson filtered
   where
     runChunks : String -> String -> String -> List String -> String -> List (List String) -> Nat -> List PathObligation -> IO (Either String (List PathObligation))

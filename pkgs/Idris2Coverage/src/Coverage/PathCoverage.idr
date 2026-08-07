@@ -59,6 +59,63 @@ filterPathObligations : LoadedExclusions -> ExclusionConfig -> List PathObligati
 filterPathObligations excl config =
   filter (\path => not (shouldExcludePath excl config path))
 
+||| Which patterns dropped obligations here, and how many each dropped.
+|||
+||| THIS IS NOT `paths_excluded`. Stated first because I had it wrong on
+||| 2026-08-08 and alice caught it: `paths_excluded` partitions the ENUMERATED
+||| paths by `ObligationClass` (LogicallyUnreachable / CompilerInsertedArtifact /
+||| ExternalEffectBoundary), a classification made downstream. `filterPathObligations`
+||| is a different mechanism entirely — it drops obligations by NAME before they
+||| are ever enumerated.
+|||
+||| WHY IT MATTERS ANYWAY, and why it is the sharper of the two. Because the
+||| filter runs upstream of enumeration, what it removes never enters
+||| `paths_total`. The conservation law a consumer checks —
+||| `total = denominator + excluded + unknown` — therefore holds perfectly over a
+||| universe that was ALREADY TRIMMED by an unreported amount. All five buckets
+||| conserve; none of them can see the trim. Recomputing from the buckets, which
+||| is the discipline that catches a moving denominator, cannot catch this one.
+|||
+||| Attribution uses `isMethodExcluded`, which returns the FIRST matching
+||| pattern's reason — the same first-match semantics `shouldExcludePath` uses,
+||| so every count names the pattern that actually did the dropping rather than
+||| every pattern that could have. The counts partition: their sum is exactly
+||| `length paths - length (filterPathObligations excl config paths)`.
+export
+exclusionBreakdown : LoadedExclusions -> ExclusionConfig -> List PathObligation -> List (String, Nat)
+exclusionBreakdown excl config paths =
+  let reasons = mapMaybe reasonFor paths
+  in map (\k => (k, length (filter (== k) reasons))) (nub reasons)
+  where
+    reasonFor : PathObligation -> Maybe String
+    reasonFor path =
+      case isMethodExcluded excl.patterns path.functionName of
+        Just r  => Just r
+        Nothing => if matchesConfig config path.functionName
+                     then Just "exclusion config (package/module/function list)"
+                     else Nothing
+
+||| Render the breakdown as one line per pattern, largest first, for printing
+||| next to the bucket counts. Empty when nothing was dropped — a run that
+||| removed nothing should say nothing, not print an empty heading.
+|||
+||| The heading says "before enumeration" because these obligations are absent
+||| from `paths_total`, not sorted into `paths_excluded`. A reader who conflates
+||| the two concludes the buckets already account for them; they do not.
+export
+renderExclusionBreakdown : List (String, Nat) -> List String
+renderExclusionBreakdown [] = []
+renderExclusionBreakdown bd =
+  let dropped = sum (map snd bd)
+      ordered = sortBy (\a, b => compare (snd b) (snd a)) bd
+  in ("    dropped " ++ show dropped ++ " obligations by name BEFORE enumeration "
+      ++ "(absent from paths_total; NOT paths_excluded), by pattern:")
+     :: map (\(reason, n) => "      " ++ padTo 6 (show n) ++ "  " ++ reason) ordered
+  where
+    padTo : Nat -> String -> String
+    padTo w s = let l = length s in
+                if l >= w then s else pack (replicate (minus w l) ' ') ++ s
+
 export
 parseProjectDumppathsJson : LoadedExclusions -> ExclusionConfig -> String -> Either String (List PathObligation)
 parseProjectDumppathsJson excl config content = do
