@@ -68,13 +68,24 @@ static inline void mpz_clears(mpz_t x, ...) {
 GMPEOF
 fi
 
-# Download RefC runtime source if not present
-if [ ! -f "$REFC_SRC/runtime.c" ]; then
+# Download RefC runtime source if not present.
+# Same rule as the mini-gmp guard above: a partial /tmp/refc-src (runtime.c
+# present, the other twelve cleaned) must not read as prepared. Derive the guard
+# from the download lists so the two cannot drift apart.
+REFC_FILES="memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clock.c buffer.c prim.c refc_util.c"
+C_FILES="idris_support.c idris_file.c idris_directory.c idris_util.c"
+refc_src_complete() {
+    for f in $REFC_FILES $C_FILES; do
+        [ -f "$REFC_SRC/$f" ] || return 1
+    done
+    return 0
+}
+if ! refc_src_complete; then
     mkdir -p "$REFC_SRC"
-    for f in memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clock.c buffer.c prim.c refc_util.c; do
+    for f in $REFC_FILES; do
         curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f"
     done
-    for f in idris_support.c idris_file.c idris_directory.c idris_util.c; do
+    for f in $C_FILES; do
         curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f"
     done
 fi
