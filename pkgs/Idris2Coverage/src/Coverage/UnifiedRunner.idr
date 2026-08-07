@@ -1035,10 +1035,32 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
            let excl     = MkLoadedExclusions
                             (prefixPattern "TempStaticDumppaths" "Chunked-dumppaths build scaffolding (generated per-chunk Main wrapper)"
                               :: idris2FullExclusions) "builtin"
-               filtered = filterPathObligations excl emptyExclusionConfig (nub paths) in
+               deduped  = nub paths
+               filtered = filterPathObligations excl emptyExclusionConfig deduped
+               dropped  = length deduped `minus` length filtered in
            if null filtered
               then pure $ Left $ wholeErr ++ "\nChunked fallback produced zero path obligations."
-              else pure $ Right $ pathObligationsToDumppathsJson filtered
+              else do
+                -- Say what the filter did. `paths_excluded` in the evidence report
+                -- is a CLASSIFICATION bucket (LogicallyUnreachable,
+                -- CompilerInsertedArtifact, …) and has nothing to do with these
+                -- name-prefix patterns — two different mechanisms sharing the word
+                -- "excluded". With no line here, the only way to ask "did the
+                -- exclusion set fire?" was to read the source and guess; a peer
+                -- and I each spent an hour on that question, from opposite ends,
+                -- and the answer on real packages turns out to be "no".
+                --
+                -- The zero case is printed too, deliberately: "dropped 0" and
+                -- "never ran" must not look the same, and here zero is the
+                -- informative outcome — it says the pattern set is inert on this
+                -- package, so the denominator is the compiler's enumeration
+                -- unmodified.
+                putStrLn ("    dumppaths exclusions: dropped " ++ show dropped
+                          ++ " of " ++ show (length deduped) ++ " obligations"
+                          ++ (if dropped == 0
+                                 then " (no pattern matched — exclusion set inert here)"
+                                 else ""))
+                pure $ Right $ pathObligationsToDumppathsJson filtered
   where
     runChunks : String -> String -> String -> List String -> String -> List (List String) -> Nat -> List PathObligation -> IO (Either String (List PathObligation))
     runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
