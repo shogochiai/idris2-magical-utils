@@ -433,9 +433,27 @@ installNeededDepsIntoFork projectDepends packTomlContent = do
   -- measurement gone, blamed on the consumer. The line below used to say
   -- "8 local deps", which reads as coverage of the requirement and is why this
   -- survived: a count of what was FOUND cannot show what is MISSING.
-  let missing = filter (\w => not (elem w (map (\(n, _, _) => n) deps))) wanted
-  ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length deps) ++ " of "
-                              ++ show (length wanted) ++ " required deps installable locally"
+  -- Two corrections to the line below, both measured on carl 2026-08-07 while it
+  -- was firing on every single run.
+  --
+  -- (a) It printed "12 of 9 required deps installable locally". `deps` counts
+  --     pack.toml ENTRIES and `wanted` counts NAMES, and neither was deduplicated,
+  --     so the found count could exceed the required count. A ratio whose
+  --     numerator can exceed its denominator is not reporting a shortfall — which
+  --     is the one thing the comment above says this line exists to do.
+  --
+  -- (b) It named `base` and `contrib` as NOT INSTALLABLE on every run. They ship
+  --     WITH the compiler and are not pack.toml local-path entries at all;
+  --     measured on this machine, the fork resolves both from its own prefix
+  --     (~/.idris2/idris2-0.8.0/{base,contrib}-0.8.0). Reporting them as missing
+  --     is a false alarm, and a diagnostic that cries wolf on every run trains
+  --     its reader to skip the line that will one day carry the real `toml`.
+  let compilerBundled = ["prelude", "base", "contrib", "network", "test", "linear", "papers"]
+  let wantedNames = nub (filter (\w => not (elem w compilerBundled)) wanted)
+  let foundNames  = nub (filter (\n => elem n wantedNames) (map (\(n, _, _) => n) deps))
+  let missing = filter (\w => not (elem w foundNames)) wantedNames
+  ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length foundNames) ++ " of "
+                              ++ show (length wantedNames) ++ " required deps installable locally"
   unless (null missing) $
     ignore $ fPutStrLn stderr $
       "    [dep-install] NOT INSTALLABLE (no local path in pack.toml): "
