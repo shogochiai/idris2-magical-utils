@@ -39,8 +39,12 @@ C_SUPPORT="$IDRIS2_SUPPORT/c"
 MINI_GMP="/tmp/mini-gmp"
 REFC_SRC="/tmp/refc-src"
 
-# Download mini-gmp if not present
-if [ ! -f "$MINI_GMP/mini-gmp.c" ]; then
+# Download mini-gmp if not present.
+# Check every file a consumer needs, not just the first one produced: a partial
+# /tmp/mini-gmp (mini-gmp.c present, headers cleaned away) otherwise satisfies
+# the guard and the build then dies on a missing gmp.h. Same condition as
+# ensure_mini_gmp() in lib/build-canister-common.sh.
+if [ ! -f "$MINI_GMP/mini-gmp.c" ] || [ ! -f "$MINI_GMP/mini-gmp.h" ] || [ ! -f "$MINI_GMP/gmp.h" ]; then
     mkdir -p "$MINI_GMP"
     curl -sLo "$MINI_GMP/mini-gmp.c" https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c
     curl -sLo "$MINI_GMP/mini-gmp.h" https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.h
