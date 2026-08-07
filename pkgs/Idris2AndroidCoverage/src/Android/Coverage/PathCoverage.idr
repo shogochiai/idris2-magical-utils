@@ -180,4 +180,10 @@ report c =
     , "evidence_kind: device_dumppaths_path_coverage"
     , ""
     , "Missing paths:" ]
-    ++ (if c.missing == [] then ["  (none)"] else map (\m => "  " ++ m) c.missing)
+    -- `  - name`, not `  name`. The shared step-4 contract marks each missing entry
+    -- with a leading `- ` (the dfx side emits `- id => reason`), and lazy's consumer
+    -- keeps only lines matching it. Emitting bare names meant 824 missing paths
+    -- parsed as zero gaps, so `lazy android ask --steps=4` reported StepOK on
+    -- paths_hit 1 of 825 — measured on carl 2026-08-07. A producer that drifts from
+    -- the contract does not fail loudly here; it turns the gate green.
+    ++ (if c.missing == [] then ["  (none)"] else map (\m => "  - " ++ m) c.missing)
