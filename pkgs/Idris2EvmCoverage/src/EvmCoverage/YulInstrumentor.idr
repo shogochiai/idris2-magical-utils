@@ -938,8 +938,30 @@ compileYulToBytecode yulPath outputDir = do
   let baseName = getBaseName yulPath
   let binPath = outputDir ++ "/" ++ baseName ++ ".bin"
   let solcLog = outputDir ++ "/solc-build.log"
-  -- For strict-assembly mode, solc outputs to stdout, redirect to file
-  let cmd = "solc --strict-assembly --optimize " ++ yulPath ++ " --bin > " ++ binPath ++ " 2> " ++ solcLog
+  -- SOLC_OPTIMIZE=0 drops --optimize. Two measured reasons, both from 2026-08-08.
+  --
+  -- (1) It is not always safe. On bob's machine every dispatch selector aborted
+  -- with StackUnderflow before any marker could fire, so the trace held 24 rows
+  -- and zero log events; recompiling the SAME Yul without --optimize made the
+  -- crash vanish and 70 log events fire. Same solc version as carl (0.8.36,
+  -- verified by upgrading his and re-running), same revm-run (14.0.3), same fork
+  -- idris2-yul — so the optimizer, not a version skew, was the variable.
+  --
+  -- (2) It is in tension with what this pipeline measures. UnknownClassification
+  -- means "did not materialise as a distinct branch (inlined/merged/optimized)",
+  -- and --optimize is what performs that merging. Every path the optimizer folds
+  -- away leaves the denominator and lands in the unknown bucket, where it counts
+  -- AGAINST coverage. Measured on carl, fork-yul mode: denominator 41, unknown
+  -- 258 of 439 — the optimizer's own output shapes the universe the rate is
+  -- taken over.
+  --
+  -- Default stays --optimize so production measures production bytecode; the
+  -- override exists so the difference can be measured rather than argued.
+  mNoOpt <- getEnv "SOLC_OPTIMIZE"
+  let optFlag = case map trim mNoOpt of
+                  Just "0" => ""
+                  _        => "--optimize "
+  let cmd = "solc --strict-assembly " ++ optFlag ++ yulPath ++ " --bin > " ++ binPath ++ " 2> " ++ solcLog
   -- Is the compiler here at all? Without this, `solc` missing from PATH makes
   -- the syntax check below exit nonzero and the failure is reported as
   -- "Yul syntax error (instrumentation bug)" — an accusation against generated
