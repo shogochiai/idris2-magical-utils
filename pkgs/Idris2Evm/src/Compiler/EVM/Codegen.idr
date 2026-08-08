@@ -982,11 +982,32 @@ generateYul name defs = do
     mkDispatchCase : FnArityMap -> (String, Integer) -> YulCase
     mkDispatchCase arities (fnName, closureId) =
       let arity = fromMaybe 1 (lookup fnName arities)
-          -- Generate call with captured args from closure + new arg
+          -- Generate call with captured args from closure + the applied arg.
           -- Closure layout: [funcId, arity, arg0, arg1, arg2, arg3]
+          --
+          -- Exactly arity-1 args are CAPTURED; the last one is the `arg` being
+          -- applied right now. Taking `arity` captured slots here and appending
+          -- `arg` produced arity+1 entries, and the `take arity` at the call site
+          -- then dropped `arg` — so every fully-applied closure was invoked with
+          -- the captured slots only, and the final real argument was replaced by
+          -- whatever mk_closure had zero-filled that slot with.
+          --
+          -- Measured on carl 2026-08-08, TextDAO dispatch: `dispatch` builds the
+          -- predicate as mk_closure(2, 1, selector, 0, 0, 0) and hands it to
+          -- Data.List.find. With arity 1 the emitted case called
+          -- `dispatch_0(mload(closure+64), mload(closure+96))` = (selector, 0),
+          -- so the predicate received 0 instead of the list element, compared
+          -- `someEntrySelector 0 == sel` for every entry, and find returned
+          -- Nothing. The contract reverted on EVERY call: 23 selectors x 6 arg
+          -- vectors plus a 20-call happy path all produced byte-identical traces,
+          -- and evm path coverage read 0 hits against a denominator of 41 while
+          -- only top-level constants (the Sig/Sel/Entry table construction) ever
+          -- fired. Calldata and caller were irrelevant because the argument never
+          -- reached the callee — which is exactly why varying them changed
+          -- nothing and sent the investigation through solc, revm, the TTC cache
+          -- and the label emitter first.
           capturedArgs = map (\i => mload (yulCall "add" [yulVar "closure", yulNum ((i + 2) * 32)]))
-                             (take arity [0..])
-          -- The new arg replaces the last captured slot based on remaining arity
+                             (take (minus arity 1) [0..])
           callArgs = capturedArgs ++ [yulVar "arg"]
       in MkCase (YulNum closureId) (YBlock
           -- For arity 1: call function directly with all args
