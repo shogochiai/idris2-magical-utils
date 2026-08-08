@@ -347,17 +347,41 @@ runDumppathsJsonInIsolatedCopy ipkgPath = do
 loadDumppathsForPipeline : String -> IO (Either String String)
 loadDumppathsForPipeline ipkgPath = runDumppathsJson ipkgPath
 
+||| A hits line is `<path-id>` or `<path-id>,<count>`. The separator also occurs
+||| INSIDE path ids: a nested local function is named after its parent, so
+||| `…AccessControl.case block in checkMember,checkLoop#p0` is one id containing
+||| one comma.
+|||
+||| The previous version matched on the shape of the split — a two-element split
+||| was read as (id, count) unconditionally — so exactly those ids were cut at
+||| the comma, `checkLoop#p0` was handed to parsePositive, and the failed parse
+||| fell back to a count of 1 for a path id that no longer existed. The hit was
+||| then silently absent. Ids with TWO or more commas hit the catch-all and
+||| survived intact, which is why the defect looked like noise rather than a
+||| rule.
+|||
+||| Measured 2026-08-09 on TextDao: of 241 supplied hit ids, 232 had no comma and
+||| 9 had exactly one; all nine and only those nine were reported Missing while
+||| present in the hits file. paths_hit came out 44 where a string intersection
+||| of denominator and hits gives 53, and 53 - 9 = 44 exactly.
+|||
+||| So decide by CONTENT, not by shape: the trailing field is a count only when
+||| it parses as a number and something precedes it. Everything else is an id.
+||| A bare `123` therefore stays an id, which is correct — a line with no comma
+||| was never a count.
 parsePathHitLine : String -> Maybe PathRuntimeHit
 parsePathHitLine line =
   let trimmed = trim line in
   if null trimmed || isPrefixOf "#" trimmed
      then Nothing
-     else case forget (split (== ',') trimmed) of
-            [pathId] => Just (MkPathRuntimeHit (trim pathId) 1)
-            [pathId, countStr] =>
-              let parsed = fromMaybe 1 (parsePositive (trim countStr))
-              in Just (MkPathRuntimeHit (trim pathId) parsed)
-            _ => Just (MkPathRuntimeHit trimmed 1)
+     else let parts     = split (== ',') trimmed
+              lead      = init parts
+              tailField = trim (last parts)
+          in case (lead, parsePositive tailField) of
+               ((_ :: _), Just n) =>
+                 Just (MkPathRuntimeHit (trim (joinBy "," lead)) n)
+               _ =>
+                 Just (MkPathRuntimeHit trimmed 1)
 
 loadPathHits : Maybe String -> IO (Either String (List PathRuntimeHit))
 loadPathHits Nothing = pure $ Right []
