@@ -105,6 +105,24 @@ record PathCoverageResult where
   measurement     : CoverageMeasurement
   coverageModel   : String
   claimAdmissible : Bool
+  ||| Hit ids that are NOT in the denominator — paths the run demonstrably
+  ||| executed and that no bucket counts. `coveredIds` is `hits ∩ denominator`,
+  ||| so until this field existed those observations were discarded at the moment
+  ||| of construction and nothing downstream could recover them.
+  |||
+  ||| Measured 2026-08-09 on evm/pkgs/Idris2TextDao: 241 distinct path topics
+  ||| fired, 12 were counted, and the other 229 had to be reconstructed BY HAND
+  ||| from the trace and the emitted Yul — 156 sitting in unknown, 73 in
+  ||| excluded.
+  |||
+  ||| It carries NO judgement. An excluded path that executed may be a perfectly
+  ||| good exclusion: a Show wrapper runs, and is still not an obligation. The
+  ||| point is that the two hidden buckets are not interchangeable — `unknown`
+  ||| keeps a path in the denominator and depresses the rate, `excluded` removes
+  ||| it from the universe and RAISES the rate — so moving paths between them
+  ||| changes the number without a single new test, and this is the only field
+  ||| from which such a move can be seen.
+  observedOutsideDenominator : List String
 
 renderPathCoverageResult : PathCoverageResult -> String
 renderPathCoverageResult result =
@@ -173,6 +191,11 @@ buildPathCoverageResult paths hitPathIds =
         filter (\path => elem path.pathId measurement.denominatorIds
                       && not (elem path.pathId measurement.coveredIds)) uniquePaths
       obligations = map pathObligationToCoverageObligation uniquePaths
+      -- Keep what coveredIds throws away. This changes NO bucket: every count in
+      -- the report is derived from `measurement`, which is untouched. It only
+      -- stops the evidence being unrecoverable.
+      outside =
+        filter (\oid => not (elem oid measurement.denominatorIds)) (nub hitPathIds)
   in MkPathCoverageResult
        uniquePaths
        covered
@@ -180,6 +203,7 @@ buildPathCoverageResult paths hitPathIds =
        measurement
        (standardName semanticPathObligationStandard)
        (isCoverageClaimAdmissible semanticPathObligationStandard obligations)
+       outside
 
 public export
 buildPathCoverageResultFromHits : List PathObligation -> List PathRuntimeHit -> PathCoverageResult
@@ -274,6 +298,23 @@ renderPathEvidence headerLabel result =
              then []
              else ("Unknown paths: " ++ show (length unknownPaths))
                   :: map (\p => "- " ++ p.pathId ++ " :: " ++ pathSummary p) unknownPaths)
+       -- Executions the buckets cannot show. Counts only: the ids are already
+       -- listed above for the unknown half, and printing the excluded half in
+       -- full would add thousands of lines to a dfx report. What the reader
+       -- needs here is the SPLIT, because the two destinations behave in
+       -- opposite directions on the rate.
+       ++ (let outside = result.observedOutsideDenominator
+               inUnknown = length (filter (\i => elem i (unknownIds result.measurement)) outside)
+               inExcluded = length (filter (\i => elem i (excludedIds result.measurement)) outside)
+           in if null outside
+                 then []
+                 else [ ""
+                      , "observed_outside_denominator: " ++ show (length outside)
+                      , "  in unknown  : " ++ show inUnknown
+                          ++ "   (still in the denominator; depresses the rate)"
+                      , "  in excluded : " ++ show inExcluded
+                          ++ "   (removed from the universe; raises the rate)"
+                      ])
 
 ||| Canonical JSON form of the same evidence (again: counts and lists only, no
 ||| percent field to fake).
