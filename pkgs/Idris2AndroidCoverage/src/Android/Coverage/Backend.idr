@@ -39,7 +39,7 @@ funcOf pid = case span (/= '#') (unpack pid) of (f, _) => pack f
 export
 androidIdToObligation : String -> PathObligation
 androidIdToObligation pid =
-  MkPathObligation pid (funcOf pid) "" ReachableObligation
+  MkPathObligation pid pid (funcOf pid) "" ReachableObligation
                    "reached_clause" Nothing [] Nothing 0
 
 ||| Reclassify obligations whose function name matches the device exclusion policy

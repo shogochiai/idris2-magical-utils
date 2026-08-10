@@ -468,6 +468,7 @@ test_PATH_003 () =
   let unknownPath =
         MkPathObligation
           "Main.unknown#p0"
+          "Main.unknown|-|0"
           "Main.unknown"
           "Main"
           UnknownClassification
@@ -487,6 +488,7 @@ test_PATH_STUBBED_001 () =
   let stubbedPath =
         MkPathObligation
           "Main.stubbed#p0"
+          "Main.stubbed|-|0"
           "Main.stubbed"
           "Main"
           StubbedReach
@@ -504,6 +506,7 @@ test_PATH_004 () =
   let obligation = pathObligationToCoverageObligation $
         MkPathObligation
           "Main.safe#p0"
+          "Main.safe|-|0"
           "Main.safe"
           "Main"
           ReachableObligation
@@ -527,7 +530,7 @@ fnOf pid = pack (takeWhile (/= '#') (unpack pid))
 
 mkOb : String -> ObligationClass -> List PathStep -> Maybe String -> PathObligation
 mkOb pid cls steps spanU =
-  MkPathObligation pid (fnOf pid) "M" cls "reached_clause" Nothing steps spanU
+  MkPathObligation pid pid (fnOf pid) "M" cls "reached_clause" Nothing steps spanU
                    (length steps)
 
 -- coveredByKey with the STRING-identity key (web/dfx/core/android join).

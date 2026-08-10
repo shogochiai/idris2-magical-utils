@@ -42,6 +42,7 @@ public export
 record PathObligation where
   constructor MkPathObligation
   pathId           : String
+  stableKey        : String   -- D3: emitted position-independent comparison key (read, never reconstructed)
   functionName     : String
   moduleName       : String
   classification   : ObligationClass
@@ -269,11 +270,11 @@ renderPathEvidence headerLabel result =
        , ""
        , "Missing paths: " ++ show (length result.missingPaths)
        ]
-       ++ map (\p => "- " ++ p.pathId ++ " :: " ++ pathSummary p) result.missingPaths
+       ++ map (\p => "- " ++ p.pathId ++ " :: " ++ pathSummary p ++ " :: sk=" ++ p.stableKey) result.missingPaths
        ++ (if null unknownPaths
              then []
              else ("Unknown paths: " ++ show (length unknownPaths))
-                  :: map (\p => "- " ++ p.pathId ++ " :: " ++ pathSummary p) unknownPaths)
+                  :: map (\p => "- " ++ p.pathId ++ " :: " ++ pathSummary p ++ " :: sk=" ++ p.stableKey) unknownPaths)
 
 ||| Canonical JSON form of the same evidence (again: counts and lists only, no
 ||| percent field to fake).

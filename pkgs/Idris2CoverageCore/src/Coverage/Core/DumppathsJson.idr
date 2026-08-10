@@ -106,8 +106,12 @@ parsePath functionName boundary json = do
   stepsJson <- maybeToEither "path object is missing steps" (getField "steps" json >>= getArray)
   let (moduleName, _) = parseQualifiedFunction functionName
   steps <- parseSteps stepsJson
+  -- D3: read the emitted comparison key. Fall back to path_id only for blobs from
+  -- a pre-D2 compiler (absent field), never by reconstructing it from path_id.
+  let stableKey = fromMaybe pathId (getStringField "stable_key" json)
   pure $ MkPathObligation
     pathId
+    stableKey
     functionName
     moduleName
     (applyBoundary boundary (parseClassification classificationRaw))
