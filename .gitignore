@@ -10,3 +10,6 @@ __pycache__/
 *.py[cod]
 temp-test-*.ipkg
 dumpcases-temp-*.ipkg
+
+# luci daemon/subagent state (worktrees, tasktrees, leases) — never tracked.
+.luci/

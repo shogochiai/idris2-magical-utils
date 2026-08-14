@@ -12,7 +12,7 @@ instance_id = "idris2-magical-utils"
 version = 1
 mode = "standalone"
 executor = "codex"
-architect = "codex"
+architect = "claude:claude-fable-5"
 source_repo = "shogochiai/idris2-magical-utils"
 build = "pack install-app idris2-lsp-redox"
 
