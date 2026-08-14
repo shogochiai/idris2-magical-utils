@@ -38,3 +38,33 @@ grep は **exit 2** を返し、ハーネスはそれを `UsageExitTwo` (malform
   `[[lazy]]` 側が入れ子の SPEC.toml を集約できるようにするかのどちらか。
   **どちらが正しいかはまだ測っていない** (入れ子 SPEC.toml を読む経路が既に
   あるのかを確認していない)。
+
+## 決着 (2026-08-15、対照付き)
+
+「入れ子の SPEC.toml を読む経路が既にあるか」を測った。**無い。**
+
+```
+luci dump-s --pkg pkgs/Idris2AndroidCoverage  ->  5 distinct REQ ids   (対照)
+luci dump-s --pkg pkgs/Idris2Subcontract      ->  0 distinct REQ ids
+```
+
+対照を並べたのは、0 が「集約されない」なのか「私のコマンドが間違い」なのかを
+区別するため。root に SPEC.toml を持つ兄弟が 5 件返すので、計器は動いており
+**0 は Idris2Subcontract についての事実**である。
+
+したがって修理は好みではなく測定で決まる: **package-root に `SPEC.toml` が要る**。
+
+## これは facade タスクより大きい
+
+CLAUDE.md の [[lazy]] 登録義務はこう書いている — 未登録のパッケージは
+`dump-s` に出ず、AGA Loop の quality gate の対象外になり、SemanticAudit の
+対象外になる。**Idris2Subcontract は登録済みなのに仕様を1件も供給していない**
+ので、登録の効果としては未登録と同じである。
+
+つまり **ERC-7546 の実装一式 — proxy / dictionary / slots / upgrade validation —
+は、登録済みに見えて一度も品質ゲートに載っていない**。これは「登録した」と
+「測られている」が別物である例で、外からは区別がつかない (登録は成功しており、
+エラーは出ない)。
+
+ここに facade を足せば、facade もまた測られないまま増える。**SPEC.toml が
+facade の前提である。**
