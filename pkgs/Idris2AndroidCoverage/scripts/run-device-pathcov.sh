@@ -50,6 +50,17 @@ ADB=(adb); [[ -n "$SERIAL" ]] && ADB=(adb -s "$SERIAL")
 "${ADB[@]}" shell am force-stop "$PKG" >/dev/null 2>&1 || true
 sleep 2
 "${ADB[@]}" logcat -c >/dev/null 2>&1 || true
+# STREAM the log instead of re-dumping the ring buffer. `main` is a 256Kb ring
+# and a driven run writes 2-3k lines, so IDRIS_PATHHIT entries emitted early are
+# EVICTED before the scrape reads them. Measured 2026-08-14 on ATOMHZ0000012603:
+# against a continuous `adb logcat` over the same runs, the dump form reported
+# 107/108/84 where the stream held 130/121/94. The loop below is unchanged in
+# shape — it still polls until the id count stops growing — but it now polls a
+# file that only ever grows, so a hit seen once cannot be lost again.
+STREAM_LOG="$(mktemp)"
+"${ADB[@]}" logcat > "$STREAM_LOG" 2>/dev/null &
+STREAM_PID=$!
+trap '[ -n "${STREAM_PID:-}" ] && kill "$STREAM_PID" 2>/dev/null; rm -f "$STREAM_LOG"' EXIT
 # Launch via `am start` (deterministic activity start) rather than monkey, which
 # occasionally warm-resumes without remounting. Fall back to monkey.
 "${ADB[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
@@ -114,7 +125,7 @@ for _try in $(seq 1 $(( SETTLE + 20 ))); do
   # this same shell). The prior `> "$RAW"` redirect produced an empty file under
   # this script's execution context while an identical interactive command did
   # not — cause never isolated, so avoid the intermediate file entirely.
-  "${ADB[@]}" logcat -d 2>/dev/null | awk '
+  cat "$STREAM_LOG" 2>/dev/null | awk '
     /IDRIS_PATHHIT:/ && !/IDRIS_PATHHIT_HOOK_INSTALLED/ {
       i = index($0, "IDRIS_PATHHIT:")
       rest = substr($0, i + length("IDRIS_PATHHIT:"))
