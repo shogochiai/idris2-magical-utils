@@ -169,3 +169,50 @@ CLAUDE.md が定める `test_<REQ_ID>_<desc>` という**関数名**規約とは
 
 **したがって SDR のテストは `Core/ScriptDryRun/Tests/AllTests.idr` に、
 `test "SDR_PLAN_001" "…"` の形で置き直す必要がある。**
+
+## 前節の指示を取り消す — 移設してはならない (2026-08-15)
+
+前節で「SDR のテストは `Core/ScriptDryRun/Tests/AllTests.idr` に
+`test "SDR_PLAN_001" "…"` の形で置き直す必要がある」と書いた。**取り消す。**
+
+手本とした `OptimisticUpgrader/Tests/AllTests.idr` を読むと:
+
+```idris
+record TestDef where
+  constructor MkTest
+  specId      : String
+  description : String
+  -- test : IO Bool  -- Uncomment when implementing
+
+test : String -> String -> TestDef
+test sid desc = MkTest sid desc
+```
+
+**テスト本体はコメントアウトされている。** `test "OU_PROP_001" "…"` は
+**文字列を2つ記録するだけ**で、何も実行しない。この 48 行のファイルに
+ランナーは無い (`main` / `runAllTests` / `exitFailure` がいずれも 0 件)。
+
+したがって `lazy` の Step1 が数えている「テストがある」は、**spec id に名前が
+付いていること**であって、**検証が走ったこと**ではない。OU の 22 spec は
+この意味で「テスト有り」であり、実行される表明はゼロである。
+
+**移設は改善ではなく破壊になる。** 私が書かせた SDR のテストは
+`test_SDR_PLAN_001_deploy_to_nothing : IO Bool` の実体を持ち、`runAttributed` が
+pass/fail を数えて `exitFailure` する経路に登録されている。これを上の形に
+「直す」と、**実行される表明が宣言に置き換わり、gate は緑になる**。
+
+これは典型的な hollow probe である — 何も試していないのに ok を返す制御。
+**gate を満たすために検証を捨てる**のは、この夜ずっと追ってきた
+silent success の最も高くつく形である。
+
+### したがって残る選択
+
+1. **実テストを保つ** (現状)。`lazy` Step1 からは見えないままで、
+   `SDR_PLAN_*: No test found` が出続ける。
+2. **両方置く** — 宣言を per-module に置いて gate を通し、実テストも残す。
+   gate は満たされるが、hollow な形式を制度として認めることになる。
+3. **規約側を直す** — per-module の `TestDef` に本体を持たせ、`lazy` が
+   実行結果を見るようにする。OU の 22 spec が**初めて実際に検証される**。
+
+**3 が正しいが、これは私の一存で決める範囲を超える** (22 spec の未検証が
+表に出る)。1 のまま報告し、判断を仰ぐ。
