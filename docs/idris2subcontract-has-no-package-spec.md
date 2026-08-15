@@ -136,3 +136,36 @@ $ luci dump-s --pkg pkgs/Idris2Subcontract | grep -c 'OU_'
 新しい spec をどのファイルに置くかを明示し、prefix を既存語彙に揃える
 (`OU` の隣に `REQ_` を混ぜるのか、`SC_FACADE_*` のような別 prefix にするのかは
 未決定。gap-ledger のクラスタ化キーは先頭3トークンなので、ここは適当に決めない)。
+
+## このパッケージのテスト規約 (2026-08-15 実測)
+
+SPEC.toml が入れ子であるのと同じく、**テストもモジュールに同居する**:
+
+```
+src/Subcontract/Standards/ERC7546/OptimisticUpgrader/SPEC.toml
+src/Subcontract/Standards/ERC7546/OptimisticUpgrader/Tests/AllTests.idr
+```
+
+そして**テストは関数名ではなく文字列ラベルで spec に紐づく**:
+
+```idris
+test "OU_PROP_001" "proposeUpgrade creates proposal with correct state"
+```
+
+CLAUDE.md が定める `test_<REQ_ID>_<desc>` という**関数名**規約とは別物である。
+`lazy` の Step1 は「Per-Module test convention」を検査しており、この形でないと
+`No test found` になる。
+
+**実測**: `lazy evm ask pkgs/Idris2Subcontract --steps=1,2` で
+`SDR_PLAN_001..006: No test found` が6件。テストは実在し `allTests` にも登録済み
+だったが、**共有の `Core/Tests/AllTests.idr` に関数名形式で置いた**ため発見されない。
+これは私のプロンプトがその場所と形式を指定した結果である (条項6)。
+
+**対照で危うく逆の結論を出しかけた**: 既存の `OU_*` 22件が `No test found` に
+出ていないので「OU は発見されている」と読んだが、ログ中に `OU_` は**0回**しか
+現れない。検査対象に入っていたかどうかを確かめずに「警告が無い = 通っている」と
+読むところだった。実際に `OU_PROP_001` を含む `.idr` を探して初めて、
+同居した `Tests/AllTests.idr` という正解が出た。
+
+**したがって SDR のテストは `Core/ScriptDryRun/Tests/AllTests.idr` に、
+`test "SDR_PLAN_001" "…"` の形で置き直す必要がある。**
