@@ -24,6 +24,7 @@ modules = Subcontract.Standards.ERC7546.Slots
         , Subcontract.Core.Entry
         , Subcontract.Core.Process
         , Subcontract.Core.Script
+        , Subcontract.Core.ScriptDryRun
         , Subcontract.Core.Capability
         , Subcontract.Core.Bundle
         , Subcontract.Core.StorageCap

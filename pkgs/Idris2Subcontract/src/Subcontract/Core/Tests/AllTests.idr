@@ -7,9 +7,17 @@ import Subcontract.Core.Conflict
 import Subcontract.Core.FR
 import Subcontract.Core.Evidence
 import Subcontract.Core.Outcome
+import Subcontract.Core.Script
+import Subcontract.Core.ScriptDryRun
+import Subcontract.Core.ABI.Sig
+
+import Data.String
 
 import Idris2.TestSuite
 import Idris2.TestSuite.Runner
+
+import System
+import System.Coverage
 
 -- =============================================================================
 -- Conflict Equality Tests
@@ -397,6 +405,76 @@ test_requireJustFR_fail =
     Fail c _ => c == DecodeError
 
 -- =============================================================================
+-- ScriptDryRun Tests
+-- =============================================================================
+
+||| SDR_PLAN_001: deploy yields exactly one PlannedTx with to = Nothing and
+||| data_ = the initcode.
+export
+test_SDR_PLAN_001_deploy_to_nothing : IO Bool
+test_SDR_PLAN_001_deploy_to_nothing =
+  pure $ let plan = planScript (deploy (the (Bytecode "Token") (MkBytecode "60016000526001601ff3")))
+         in case plan.txs of
+              [tx] => tx.to == Nothing &&
+                      tx.data_ == "60016000526001601ff3" &&
+                      tx.label == "deploy"
+              _ => False
+
+||| SDR_PLAN_002: call yields to = Just target and data_ starting with the
+||| 4-byte selector.
+export
+test_SDR_PLAN_002_call_selector_prefix : IO Bool
+test_SDR_PLAN_002_call_selector_prefix =
+  pure $ let tsig = MkSig "transfer" [TAddress, TUint256] [TBool]
+             tsel = selectorOf tsig
+             target = the (Deployed "Token") (MkDeployed 0x1234 0)
+             plan = planScript (call target tsel [0x1111, 100])
+         in case plan.txs of
+              [tx] => tx.to == Just 0x1234 &&
+                      Data.String.isPrefixOf (selectorHex tsel) tx.data_ &&
+                      length tx.data_ >= 8
+              _ => False
+
+||| SDR_PLAN_003: logScript and recordValue append to logs and yield no tx.
+export
+test_SDR_PLAN_003_log_and_record_no_tx : IO Bool
+test_SDR_PLAN_003_log_and_record_no_tx =
+  pure $ let plan = planScript (do logScript "hello"; recordValue "count" 42)
+         in null plan.txs && plan.logs == ["hello", "count = 42"]
+
+||| SDR_PLAN_004: tx order preserves command order across mixed commands.
+export
+test_SDR_PLAN_004_order_preserved : IO Bool
+test_SDR_PLAN_004_order_preserved =
+  pure $ let plan = planScript (do
+                 send 0x1111 100
+                 _ <- deploy (the (Bytecode "Token") (MkBytecode "deadbeef"))
+                 logScript "mid"
+                 send 0x2222 200)
+         in map (\tx => tx.label) plan.txs == ["send", "deploy", "send"] &&
+            map (\tx => tx.to) plan.txs == [Just 0x1111, Nothing, Just 0x2222] &&
+            map (\tx => tx.value) plan.txs == [100, 0, 200]
+
+||| SDR_PLAN_005: send yields to = Just target, value = amount, data_ = "".
+export
+test_SDR_PLAN_005_send_fields : IO Bool
+test_SDR_PLAN_005_send_fields =
+  pure $ let plan = planScript (send 0xABCD 500)
+         in case plan.txs of
+              [tx] => tx.to == Just 0xABCD &&
+                      tx.value == 500 &&
+                      tx.data_ == "" &&
+                      tx.label == "send"
+              _ => False
+
+||| SDR_PLAN_006: assertScript appends to asserts and yields no tx.
+export
+test_SDR_PLAN_006_assert_no_tx : IO Bool
+test_SDR_PLAN_006_assert_no_tx =
+  pure $ let plan = planScript (do assertScript "owner set" True; assertScript "balance ok" False)
+         in null plan.txs && plan.asserts == [("owner set", True), ("balance ok", False)]
+
+-- =============================================================================
 -- Test Runner
 -- =============================================================================
 
@@ -438,12 +516,38 @@ allTests =
   , ("REQ_FR_017: requireFR fail", test_requireFR_fail)
   , ("REQ_FR_018: requireJustFR ok", test_requireJustFR_ok)
   , ("REQ_FR_019: requireJustFR fail", test_requireJustFR_fail)
+  , ("SDR_PLAN_001: deploy to Nothing", test_SDR_PLAN_001_deploy_to_nothing)
+  , ("SDR_PLAN_002: call selector prefix", test_SDR_PLAN_002_call_selector_prefix)
+  , ("SDR_PLAN_003: log/record append to logs", test_SDR_PLAN_003_log_and_record_no_tx)
+  , ("SDR_PLAN_004: tx order preserved", test_SDR_PLAN_004_order_preserved)
+  , ("SDR_PLAN_005: send value/data fields", test_SDR_PLAN_005_send_fields)
+  , ("SDR_PLAN_006: assert appends to asserts", test_SDR_PLAN_006_assert_no_tx)
   ]
+
+||| Run every test, attributing its path hits to `test_<label>` so the coverage
+||| tool can group the numerator per SpecId (a hit counts for REQ_X only under a
+||| `test_REQ_X`-prefixed label). Prints the canonical `Results: P passed,
+||| F failed` line and exits non-zero on any failure.
+runAttributed : TestSuite -> IO (Nat, Nat)
+runAttributed = go 0 0
+  where
+    go : Nat -> Nat -> TestSuite -> IO (Nat, Nat)
+    go p f [] = pure (p, f)
+    go p f ((name, body) :: rest) = do
+      enterTest ("test_" ++ name)
+      ok <- body
+      if ok
+        then do putStrLn ("[PASS] " ++ name); go (S p) f rest
+        else do putStrLn ("[FAIL] " ++ name); go p (S f) rest
 
 ||| Run all tests - entry point for lazy test runner
 export
 runAllTests : IO ()
-runAllTests = runTestSuiteMain allTests
+runAllTests = do
+  (passed, failed) <- runAttributed allTests
+  putStrLn ""
+  putStrLn $ "Results: " ++ show passed ++ " passed, " ++ show failed ++ " failed"
+  if failed > 0 then exitFailure else exitSuccess
 
 export
 main : IO ()
