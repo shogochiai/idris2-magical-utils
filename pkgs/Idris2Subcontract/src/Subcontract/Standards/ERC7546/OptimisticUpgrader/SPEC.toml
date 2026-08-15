@@ -131,3 +131,21 @@ invariant = "isAuditor returns true iff addr in auditors[0..auditorCount]"
 id = "${prefix}_ACL_002"
 title = "Proposer is single address"
 invariant = "Only address at SLOT_PROPOSER can create proposals/submit sig"
+
+[[spec_area]]
+name = "Test Harness"
+
+[[spec]]
+id = "${prefix}_TEST_001"
+title = "Pending entries are not counted as passed or failed"
+invariant = "A TestDef whose body is Pending contributes to the pending count, never to passed or failed"
+
+[[spec]]
+id = "${prefix}_TEST_002"
+title = "Runs body returning False increments failed"
+invariant = "A TestDef whose Runs body returns False is tallied as failed"
+
+[[spec]]
+id = "${prefix}_TEST_003"
+title = "Pending-only run exits 0"
+invariant = "runAllTests exits non-zero only when failed > 0; pending never fails the run"
