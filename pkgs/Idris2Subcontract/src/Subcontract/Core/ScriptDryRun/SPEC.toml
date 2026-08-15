@@ -1,0 +1,46 @@
+# ScriptDryRun (SDR) Specification
+# Pure dry-run planner: Script free monad -> PlannedTx sequence
+#
+# The planner is the auditor-facing artifact of an EVM release: it maps a
+# `Subcontract.Core.Script` program to the sequence of transactions it would
+# send, without any IO, RPC, or signing. Reviewers approve exactly what this
+# planner emits.
+#
+# Resolved SpecIds (prefix "SDR"): SDR_PLAN_001, SDR_PLAN_002, SDR_PLAN_003,
+# SDR_PLAN_004, SDR_PLAN_005, SDR_PLAN_006.
+
+[definitions]
+prefix = "SDR"
+
+[[spec_area]]
+name = "Dry Run Planning"
+
+[[spec]]
+id = "${prefix}_PLAN_001"
+title = "deploy yields one contract-creation PlannedTx"
+invariant = "planScript (deploy bc) has exactly one tx with to == Nothing and data_ == bc.code"
+
+[[spec]]
+id = "${prefix}_PLAN_002"
+title = "call targets the contract with the 4-byte selector prefix"
+invariant = "planScript (call d sel args) has one tx with to == Just d.address and data_ starting with the 4-byte selector hex"
+
+[[spec]]
+id = "${prefix}_PLAN_003"
+title = "logScript and recordValue append to logs and yield no PlannedTx"
+invariant = "planScript (logScript m >> recordValue n v) has txs == [] and logs == [m, n ++ \" = \" ++ show v]"
+
+[[spec]]
+id = "${prefix}_PLAN_004"
+title = "PlannedTx order preserves command order"
+invariant = "planScript (c1 >> c2 >> c3) has txs ordered as c1, c2, c3"
+
+[[spec]]
+id = "${prefix}_PLAN_005"
+title = "send yields a value-carrying transfer with empty data"
+invariant = "planScript (send to amt) has one tx with to == Just to and value == amt and data_ == \"\""
+
+[[spec]]
+id = "${prefix}_PLAN_006"
+title = "assertScript appends to asserts and yields no PlannedTx"
+invariant = "planScript (assertScript m c) has txs == [] and asserts == [(m, c)]"
