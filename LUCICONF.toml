@@ -12,6 +12,7 @@ instance_id = "idris2-magical-utils"
 version = 1
 mode = "standalone"
 executor = "codex"
+executor_model = "opencode:deepseek/deepseek-v4-flash:transport=pty:env=OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=1,OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=1"
 architect = "claude:claude-fable-5"
 source_repo = "shogochiai/idris2-magical-utils"
 build = "pack install-app idris2-lsp-redox"
