@@ -68,3 +68,29 @@ CLAUDE.md の [[lazy]] 登録義務はこう書いている — 未登録のパ�
 
 ここに facade を足せば、facade もまた測られないまま増える。**SPEC.toml が
 facade の前提である。**
+
+## 訂正 (2026-08-15) — 「どのゲートにも載っていない」は言い過ぎだった
+
+直前の節で「ERC-7546 の実装一式は一度も品質ゲートに載っていない」と書いた。
+**SemanticAudit については偽である。** luci は SPEC.toml を2通りに探している:
+
+| 経路 | 探し方 | 入れ子を拾うか |
+|---|---|---|
+| `[[lazy]]` / dump-s (`InstanceConfig.idr:109`) | `projectDir/target/SPEC.toml` のリテラル連結 | 拾わない |
+| `ParityDs.idr:292` | `find pkgs -maxdepth 2 -name SPEC.toml` | 拾わない |
+| `SemanticAudit.idr:77` | `find <srcPath> -name 'SPEC.toml'` (**再帰**) | **拾う** |
+
+したがって正確な主張はこうである: **入れ子の SPEC.toml は dump-s と ParityDs
+からは見えず、SemanticAudit からは見える。** 3つの消費者のうち2つで不可視、
+というのが実態で、「どれからも不可視」ではない。
+
+**なぜ間違えたか**: CLAUDE.md の [[lazy]] 登録義務が「dump-s に出ない / AGA
+gate の対象外 / SemanticAudit の対象外」を**1つの帰結として**並べているので、
+1つ (dump-s の 0件) を測って残り2つを推論した。**測ったのは1つだけだった。**
+これは、まさに「好みではなく測定で決めた」と書いた同じコミットの中で起きている。
+
+**修理方針への影響**: 入れ子ファイルには消費者が在る (SemanticAudit) ので
+「参照されていない孤児だから自由に動かせる」という前提は使えない。ただし
+SemanticAudit の探索は再帰なので、**root に移しても引き続き見つかる** —
+移動そのものは安全である。壊れるとしたら入れ子のパスを literal で持つ何かだが、
+それは grep で1件も無い (この doc 自身を除く)。
