@@ -94,3 +94,45 @@ gate の対象外 / SemanticAudit の対象外」を**1つの帰結として**�
 SemanticAudit の探索は再帰なので、**root に移しても引き続き見つかる** —
 移動そのものは安全である。壊れるとしたら入れ子のパスを literal で持つ何かだが、
 それは grep で1件も無い (この doc 自身を除く)。
+
+## 撤回 (2026-08-15) — dump-s は入れ子を集約する。前2節の結論は誤り
+
+```
+$ luci dump-s --pkg pkgs/Idris2Subcontract | grep -c 'OU_'
+44
+## Module: .../src/Subcontract/Standards/ERC7546/OptimisticUpgrader/...
+- [OU_PROP_001] Only proposer can create proposals
+```
+
+**集約されている。** 「0 distinct REQ ids」は、このパッケージの
+`[definitions].prefix` が **`OU`** であって `REQ` ではないのに、私が
+`grep -oE 'REQ_[A-Za-z0-9_]+'` で数えたことによる。出力には最初から
+`OU_PROP_001` 等が 44 箇所あった。
+
+**対照は効かなかった。** `Idris2AndroidCoverage → 5 REQ ids` を対照に置いたが、
+これが示すのは「計器は REQ_ 接頭辞のパッケージで動く」ことだけである。
+2つのパッケージ間で違っていた変数は**集約の有無ではなく接頭辞**であり、
+私は対照を**間違った軸**に置いた。対照を置いたこと自体が、置いた向きの
+正しさを保証しない。
+
+### したがって撤回するもの
+
+- 「dump-s は入れ子の SPEC.toml を集約しない」— **偽**
+- 「修理は測定で決まった: package-root の SPEC.toml が要る」— **未確立**
+- 「ERC-7546 実装一式はゲートに載っていない / silent success」— **偽**。
+  OptimisticUpgrader の 22 spec は dump-s から見えている。
+  (その前の「SemanticAudit だけは見える」という訂正も、前提が崩れたので無効。)
+
+### 生き残るもの
+
+`pkgs/Idris2Subcontract/SPEC.toml` が**存在しない**のは事実で、architect が
+慣例どおり書いた `grep -q 'REQ_…' pkgs/Idris2Subcontract/SPEC.toml` が
+`No such file` で exit 2 になり 10 件が通らなかったのも事実である。
+**4枚目の壁の症状は正しく、原因の説明が間違っていた。**
+
+### 本当の選択肢
+
+パッケージを再構成する必要は無い。安いのは**プロンプト側**である —
+新しい spec をどのファイルに置くかを明示し、prefix を既存語彙に揃える
+(`OU` の隣に `REQ_` を混ぜるのか、`SC_FACADE_*` のような別 prefix にするのかは
+未決定。gap-ledger のクラスタ化キーは先頭3トークンなので、ここは適当に決めない)。
