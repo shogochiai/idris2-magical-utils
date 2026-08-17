@@ -34,10 +34,17 @@ echo ""
 # Step 1: Idris2 -> Yul
 echo "[1/3] Compiling Idris2 to Yul..."
 
+# Resolve idris2-subcontract relative to THIS script, not to one machine's home.
+# These paths were /Users/bob/code/idris2-subcontract, from before the packages
+# were consolidated into this repo; on any other machine the script died at
+# `cd: no such file or directory` before compiling anything. Both packages are
+# siblings under pkgs/ now, so derive the location instead of naming a home dir.
+SUBCONTRACT_DIR="$(cd "$SCRIPT_DIR/../../Idris2Subcontract" && pwd)"
+
 # Build idris2-subcontract if not built
-if [ ! -d "/Users/bob/code/idris2-subcontract/build/ttc" ]; then
+if [ ! -d "$SUBCONTRACT_DIR/build/ttc" ]; then
   echo "Building idris2-subcontract..."
-  (cd /Users/bob/code/idris2-subcontract && idris2 --build idris2-subcontract.ipkg)
+  (cd "$SUBCONTRACT_DIR" && idris2 --build idris2-subcontract.ipkg)
 fi
 
 # Build idris2-yul if not built
@@ -47,7 +54,7 @@ if [ ! -f "./build/exec/idris2-yul" ]; then
 fi
 
 # Set package path
-export IDRIS2_PACKAGE_PATH="/Users/bob/code/idris2-yul/depends:/Users/bob/code/idris2-subcontract/build/ttc:${IDRIS2_PACKAGE_PATH:-}"
+export IDRIS2_PACKAGE_PATH="$SCRIPT_DIR/../depends:$SUBCONTRACT_DIR/build/ttc:${IDRIS2_PACKAGE_PATH:-}"
 
 # Check if source needs idris2-subcontract package
 if grep -q "import.*Subcontract\|import.*MC\." "$SOURCE" 2>/dev/null; then
