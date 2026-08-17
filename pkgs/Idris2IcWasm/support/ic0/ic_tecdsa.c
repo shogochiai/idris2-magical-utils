@@ -491,6 +491,20 @@ static int parse_signature_reply(uint8_t sig_out[64]) {
     if (reply_size <= 0) return 0;
     ic0_msg_arg_data_copy((int32_t)(uintptr_t)reply, 0, reply_size);
 
+    /* Only a Candid-encoded reply can contain a signature. Without this check the
+     * scan below treats ANY payload of 65+ bytes containing a 0x40 as a
+     * signature, so a rejection message came back as a well-formed r=,s= that
+     * corresponds to no message at all -- indistinguishable from success at the
+     * call site, and different on every call because the text differs. Measured
+     * against mainnet 2026-08-17 while the key name was unroutable: signEvmTxHash
+     * returned hex that recovered to nothing while getEvmAddress reported the
+     * real error. A reject payload is not Candid-framed, so this is the line that
+     * separates the two. */
+    if (reply_size < 4 || reply[0] != 'D' || reply[1] != 'I' ||
+        reply[2] != 'D' || reply[3] != 'L') {
+        return 0;
+    }
+
     if (reply_size >= 82 && reply[17] == 0x40 && 17 + 65 <= reply_size) {
         memcpy(sig_out, reply + 18, 64);
         return 1;
