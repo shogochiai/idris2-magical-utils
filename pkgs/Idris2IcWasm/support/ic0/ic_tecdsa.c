@@ -37,8 +37,14 @@ static const char HEX[] = "0123456789abcdef";
 static uint8_t g_message_hash[32];
 static uint8_t g_derivation_path[128];
 static uint32_t g_derivation_path_len = 0;
-static uint8_t g_key_name[32];
-static uint32_t g_key_name_len = 0;
+/* Initialised, not zeroed: this is a C static, so every canister upgrade resets
+ * it, and nothing in the C layer sets it on the way to a t-ECDSA request. An
+ * uninitialised name meant the first call after each upgrade went out with
+ * whatever the fallback was. `test_key_1` resolves on all subnets. */
+static uint8_t g_key_name[32] = "test_key_1";
+/* Must match the initialiser above: every consumer encodes g_key_name_len bytes,
+ * so leaving this at 0 would send an empty key name and ignore the buffer. */
+static uint32_t g_key_name_len = 10;  /* strlen("test_key_1") */
 
 static uint8_t g_signature[64];
 static uint32_t g_signature_len = 0;
@@ -324,14 +330,22 @@ static uint32_t encode_pubkey_request(uint8_t* buf) {
 }
 
 static void set_key_name_from_type(int64_t key_type) {
-    const char* name = KEY_LOCAL;
-    uint32_t len = (uint32_t)(sizeof(KEY_LOCAL) - 1);
+    /* An unrecognised key type used to fall through to KEY_LOCAL, so any caller
+     * that failed to deliver a key type asked mainnet for `dfx_test_key`, which
+     * exists only under `dfx start`. That is not a local-development default:
+     * the key name lives in a C static, not stable memory, so EVERY canister
+     * upgrade resets it and the next t-ECDSA call on mainnet went out naming a
+     * key the subnet has never heard of. `test_key_1` is present on all subnets,
+     * so an unrecognised type now names something that resolves wherever this
+     * canister runs; genuine local use still asks for KEY_LOCAL explicitly. */
+    const char* name = KEY_TEST;
+    uint32_t len = (uint32_t)(sizeof(KEY_TEST) - 1);
     if (key_type == 0) {
         name = KEY_PRODUCTION;
         len = (uint32_t)(sizeof(KEY_PRODUCTION) - 1);
-    } else if (key_type == 1) {
-        name = KEY_TEST;
-        len = (uint32_t)(sizeof(KEY_TEST) - 1);
+    } else if (key_type == 2) {
+        name = KEY_LOCAL;
+        len = (uint32_t)(sizeof(KEY_LOCAL) - 1);
     }
     memcpy(g_key_name, name, len);
     g_key_name_len = len;
