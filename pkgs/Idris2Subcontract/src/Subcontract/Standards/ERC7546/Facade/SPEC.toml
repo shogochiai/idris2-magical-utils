@@ -1,0 +1,73 @@
+# Facade (FCD) Specification
+# Verified single-contract Solidity facade for a Dictionary-dispersed ERC-7546 call surface
+#
+# ERC-7546 dispatches selectors from a Dictionary, so an explorer cannot display
+# the proxy's call surface. facadeSolidity bundles every FacadeFn into one
+# verified contract source that renders the proxy's functions for explorers.
+
+[definitions]
+prefix = "FCD"
+
+[[spec_area]]
+name = "Contract Envelope"
+
+[[spec]]
+id = "${prefix}_ENV_001"
+title = "Output begins with an SPDX license identifier line"
+invariant = "facadeSolidity output begins with an SPDX license identifier line"
+
+[[spec]]
+id = "${prefix}_ENV_002"
+title = "Output declares pragma solidity ^0.8.20"
+invariant = "facadeSolidity output declares pragma solidity ^0.8.20"
+
+[[spec]]
+id = "${prefix}_ENV_003"
+title = "Output wraps functions in contract <name> block"
+invariant = "facadeSolidity wraps every rendered function inside contract <name> { ... } using the given name"
+
+[[spec_area]]
+name = "Function Rendering"
+
+[[spec]]
+id = "${prefix}_FN_001"
+title = "One external function per FacadeFn with types-only args"
+invariant = "Each FacadeFn renders exactly one function <name>(<types>) whose argument list is Solidity types only, with no parameter names"
+
+[[spec]]
+id = "${prefix}_FN_002"
+title = "View mutability renders external view"
+invariant = "A FacadeFn with mut == View renders the function with external view"
+
+[[spec]]
+id = "${prefix}_FN_003"
+title = "Payable mutability renders external payable"
+invariant = "A FacadeFn with mut == Payable renders the function with external payable"
+
+[[spec]]
+id = "${prefix}_FN_004"
+title = "Nonpayable renders plain external"
+invariant = "A FacadeFn with mut == Nonpayable renders plain external with no extra mutability keyword"
+
+[[spec]]
+id = "${prefix}_FN_005"
+title = "Every emitted function has an empty body"
+invariant = "Every rendered function has an empty body"
+
+[[spec_area]]
+name = "Return Clause"
+
+[[spec]]
+id = "${prefix}_RET_001"
+title = "Empty rets emit no returns clause"
+invariant = "A FacadeFn with rets == [] emits no returns clause"
+
+[[spec]]
+id = "${prefix}_RET_002"
+title = "Single ret emits one-type returns clause"
+invariant = "A FacadeFn with exactly one ret emits returns (<type>)"
+
+[[spec]]
+id = "${prefix}_RET_003"
+title = "Multiple rets emit comma-separated returns clause"
+invariant = "A FacadeFn with multiple rets emits returns (<t1>, <t2>) with Solidity types in order"

@@ -68,3 +68,5 @@ modules = Subcontract.Standards.ERC7546.Slots
         , Subcontract.Standards.ERC7546.Inception.Functions.Vote
         , Subcontract.Standards.ERC7546.Inception.Functions.Resolve
         , Subcontract.Standards.ERC7546.Inception.Tests.AllTests
+        , Subcontract.Standards.ERC7546.Facade
+        , Subcontract.Standards.ERC7546.Facade.Tests.AllTests
