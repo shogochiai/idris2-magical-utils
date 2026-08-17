@@ -44,10 +44,26 @@ forwardToImplementation = do
   dictionary <- sload DICTIONARY_SLOT
 
   -- Prepare STATICCALL to dictionary.getImplementation(bytes4 selector)
-  -- Calldata layout: [SEL_GET_IMPL (4 bytes)][selector padded to 32 bytes]
+  -- Calldata layout: [SEL_GET_IMPL (4 bytes)][selector as bytes4, LEFT-aligned]
+  --
+  -- The selector must be shifted back left before it is stored. getSelector
+  -- returns it RIGHT-aligned (it divides calldataload(0) by 2^224), while ABI
+  -- encoding puts a bytes4 in the HIGH-order bytes of its word -- which is what
+  -- Dictionary reads, since its getImplementation takes calldataload(4) and
+  -- divides by 2^224 to recover the value. Passing the right-aligned form made
+  -- every lookup ask for selector 0x00000000, so the dictionary answered address
+  -- zero and the proxy reverted delegatecalling nothing.
+  --
+  -- Measured on Base mainnet 2026-08-18 against the deployed pair, two eth_calls
+  -- differing only in alignment:
+  --   dc9cc645 a9059cbb000…  -> 0x3178737d…  (the registered implementation)
+  --   dc9cc645 000…a9059cbb  -> 0x0000000…   (nothing registered)
+  -- Both contracts were self-consistent, so this was invisible until they were
+  -- composed on chain.
   shifted <- shl 224 SEL_GET_IMPL
+  selectorArg <- shl 224 selector
   mstore 0 shifted
-  mstore 4 selector
+  mstore 4 selectorArg
 
   -- Get available gas
   availableGas <- gas
