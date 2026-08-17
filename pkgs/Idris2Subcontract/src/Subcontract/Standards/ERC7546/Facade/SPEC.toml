@@ -71,3 +71,38 @@ invariant = "A FacadeFn with exactly one ret emits returns (<type>)"
 id = "${prefix}_RET_003"
 title = "Multiple rets emit comma-separated returns clause"
 invariant = "A FacadeFn with multiple rets emits returns (<t1>, <t2>) with Solidity types in order"
+
+[[spec_area]]
+name = "Content Addressing"
+# Resolved ids under the FCD prefix: FCD_CANON_001, FCD_CANON_002, FCD_HASH_001,
+# FCD_HASH_002, FCD_HASH_003, FCD_ADDR_001.
+
+[[spec]]
+id = "${prefix}_CANON_001"
+title = "Canonical line is name(argTypes)->(retTypes):mutability"
+invariant = "facadeCanonical renders each FacadeFn as one name(argTypes)->(retTypes):mutability line, with retTypes and mutability included"
+
+[[spec]]
+id = "${prefix}_CANON_002"
+title = "Canonical output is order-insensitive via ascending sort of lines"
+invariant = "facadeCanonical sorts the per-function lines ascending and joins them with newlines, so a reordered signature set canonicalizes identically"
+
+[[spec]]
+id = "${prefix}_HASH_001"
+title = "facadeShapeHash is hex keccak256 of facadeCanonical"
+invariant = "facadeShapeHash is the lowercase-hex Keccak256 digest of facadeCanonical"
+
+[[spec]]
+id = "${prefix}_HASH_002"
+title = "Differing return types yield a different shape hash"
+invariant = "Two facades differing only in return types have different facadeShapeHash values"
+
+[[spec]]
+id = "${prefix}_HASH_003"
+title = "Differing mutability yields a different shape hash"
+invariant = "Two facades differing only in mutability have different facadeShapeHash values"
+
+[[spec]]
+id = "${prefix}_ADDR_001"
+title = "facadeCreate2Address is low 20 bytes of keccak256(0xff ++ factory ++ salt ++ initCodeHash)"
+invariant = "facadeCreate2Address returns the low 20 bytes of the EIP-1014 keccak256(0xff ++ factory ++ salt ++ initCodeHash) as an Integer"

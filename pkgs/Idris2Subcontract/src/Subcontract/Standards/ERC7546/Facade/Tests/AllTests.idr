@@ -115,6 +115,22 @@ balanceView = MkFacadeFn (MkSig "balanceOf" [TAddress] [TUint256]) View
 multiRet : FacadeFn
 multiRet = MkFacadeFn (MkSig "positions" [TAddress] [TUint256, TAddress]) View
 
+||| The same transfer signature with a different (uint256) return type.
+transferUintRet : FacadeFn
+transferUintRet = MkFacadeFn (MkSig "transfer" [TAddress, TUint256] [TUint256]) View
+
+||| 32 zero bytes, hex-encoded (EIP-1014 example salt).
+create2SaltZeros : String
+create2SaltZeros = "0000000000000000000000000000000000000000000000000000000000000000"
+
+||| keccak256 of init code 0x00 (EIP-1014 example 1 init code hash).
+create2InitCodeHash00 : String
+create2InitCodeHash00 = "bc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a"
+
+||| EIP-1014 example 1 expected CREATE2 address for a zero factory and salt.
+create2KnownAddress : Integer
+create2KnownAddress = 0x4D1A2e2bB4F88F0250f26Ffff098B0b30B26BF38
+
 ||| Count the rendered `function` keywords in an output string.
 fnCount : String -> Nat
 fnCount out = length (filter (== "function") (words out))
@@ -205,6 +221,57 @@ test_FCD_RET_003 =
   let out = facadeSolidity "RetFacade" [multiRet]
   in pure (isInfixOf "returns (uint256,address)" out)
 
+||| FCD_CANON_001: each FacadeFn renders as one
+||| name(argTypes)->(retTypes):mutability line with types and mutability included.
+export
+test_FCD_CANON_001 : IO Bool
+test_FCD_CANON_001 =
+  pure (facadeCanonical [transferView] == "transfer(address,uint256)->(bool):view"
+        && facadeCanonical [multiRet] == "positions(address)->(uint256,address):view"
+        && facadeCanonical [depositPayable] == "deposit(uint256)->():payable"
+        && facadeCanonical [noopNonpayable] == "noop()->():nonpayable")
+
+||| FCD_CANON_002: the canonical output is order-insensitive because the lines
+||| are sorted ascending before joining.
+export
+test_FCD_CANON_002 : IO Bool
+test_FCD_CANON_002 =
+  let set = [transferView, depositPayable, balanceView]
+      permuted = [balanceView, transferView, depositPayable]
+  in pure (facadeCanonical set == facadeCanonical permuted
+           && facadeCanonical set
+              == "balanceOf(address)->(uint256):view\n"
+                 ++ "deposit(uint256)->():payable\n"
+                 ++ "transfer(address,uint256)->(bool):view")
+
+||| FCD_HASH_001: facadeShapeHash is the lowercase-hex keccak256 of facadeCanonical.
+export
+test_FCD_HASH_001 : IO Bool
+test_FCD_HASH_001 =
+  let set = [transferView, depositPayable]
+  in pure (facadeShapeHash set == keccak256Hex (facadeCanonical set)
+           && length (unpack (facadeShapeHash set)) == 64)
+
+||| FCD_HASH_002: a return-type-only difference produces a different shape hash.
+export
+test_FCD_HASH_002 : IO Bool
+test_FCD_HASH_002 =
+  pure (facadeShapeHash [transferView] /= facadeShapeHash [transferUintRet])
+
+||| FCD_HASH_003: a mutability-only difference produces a different shape hash.
+export
+test_FCD_HASH_003 : IO Bool
+test_FCD_HASH_003 =
+  pure (facadeShapeHash [transferView] /= facadeShapeHash [transferNonpayable])
+
+||| FCD_ADDR_001: facadeCreate2Address matches the EIP-1014 example vector:
+||| low 20 bytes of keccak256(0xff ++ 20-byte factory ++ 32-byte salt ++
+||| 32-byte initCodeHash).
+export
+test_FCD_ADDR_001 : IO Bool
+test_FCD_ADDR_001 =
+  pure (facadeCreate2Address 0 create2SaltZeros create2InitCodeHash00 == create2KnownAddress)
+
 public export
 allTests : List TestDef
 allTests = [
@@ -223,7 +290,15 @@ allTests = [
   -- Return Clause
   test "FCD_RET_001" "Empty rets emit no returns clause" (Runs test_FCD_RET_001),
   test "FCD_RET_002" "Single ret emits one-type returns clause" (Runs test_FCD_RET_002),
-  test "FCD_RET_003" "Multiple rets emit comma-separated returns clause" (Runs test_FCD_RET_003)
+  test "FCD_RET_003" "Multiple rets emit comma-separated returns clause" (Runs test_FCD_RET_003),
+
+  -- Content Addressing
+  test "FCD_CANON_001" "Canonical line is name(argTypes)->(retTypes):mutability" (Runs test_FCD_CANON_001),
+  test "FCD_CANON_002" "Canonical output is order-insensitive via ascending sort" (Runs test_FCD_CANON_002),
+  test "FCD_HASH_001" "Shape hash is hex keccak256 of the canonical form" (Runs test_FCD_HASH_001),
+  test "FCD_HASH_002" "Return-type-only difference yields a different hash" (Runs test_FCD_HASH_002),
+  test "FCD_HASH_003" "Mutability-only difference yields a different hash" (Runs test_FCD_HASH_003),
+  test "FCD_ADDR_001" "CREATE2 address matches EIP-1014 vector" (Runs test_FCD_ADDR_001)
 ]
 
 -- =============================================================================

@@ -612,6 +612,37 @@ squeeze4Bytes st = do
   let b3 = cast {to=Integer} ((w0 `shiftR` 24) .&. 0xff)
   pure ((b0 `prim__shl_Integer` 24) + (b1 `prim__shl_Integer` 16) + (b2 `prim__shl_Integer` 8) + b3)
 
+||| Render one 64-bit lane as 8 little-endian bytes.
+laneToBytes : Word64 -> List Bits8
+laneToBytes w =
+  [ cast ((w `shiftR` 0) .&. 0xff)
+  , cast ((w `shiftR` 8) .&. 0xff)
+  , cast ((w `shiftR` 16) .&. 0xff)
+  , cast ((w `shiftR` 24) .&. 0xff)
+  , cast ((w `shiftR` 32) .&. 0xff)
+  , cast ((w `shiftR` 40) .&. 0xff)
+  , cast ((w `shiftR` 48) .&. 0xff)
+  , cast ((w `shiftR` 56) .&. 0xff)
+  ]
+
+||| Squeeze the full 32-byte digest from the first four lanes (big-endian).
+digestBytes : State -> IO (List Bits8)
+digestBytes st = do
+  w0 <- readState st 0
+  w1 <- readState st 1
+  w2 <- readState st 2
+  w3 <- readState st 3
+  pure (laneToBytes w0 ++ laneToBytes w1 ++ laneToBytes w2 ++ laneToBytes w3)
+
+||| One hex character for a nibble (lowercase).
+hexNibble : Bits8 -> Char
+hexNibble b = if b < 10 then chr (ord '0' + cast {to=Int} b)
+                        else chr (ord 'a' + cast {to=Int} (b - 10))
+
+||| Render a byte list as a lowercase hex string.
+bytesToHex : List Bits8 -> String
+bytesToHex bs = pack (concatMap (\b => [hexNibble (b `div` 16), hexNibble (b `mod` 16)]) bs)
+
 -- =============================================================================
 -- Public API
 -- =============================================================================
@@ -632,3 +663,23 @@ selector input = do
 export
 selectorPure : String -> Integer
 selectorPure input = unsafePerformIO (selector input)
+
+||| Compute the full 32-byte Keccak256 digest of a raw byte sequence.
+|||
+||| Pure wrapper over the buffer-based sponge: pads the message, absorbs it,
+||| and squeezes the first four state lanes as the big-endian digest.
+export
+keccak256Bytes : List Bits8 -> List Bits8
+keccak256Bytes input = unsafePerformIO $ do
+  let padded = padMessage input
+  st <- newState
+  st' <- absorb st padded
+  digestBytes st'
+
+||| Compute the full 32-byte Keccak256 digest of a string, as lowercase hex.
+|||
+||| The input string is treated as a raw byte sequence (ASCII), matching the
+||| selector path above. The output is the 64-character hex digest.
+export
+keccak256Hex : String -> String
+keccak256Hex s = bytesToHex (keccak256Bytes (stringToBytes s))
