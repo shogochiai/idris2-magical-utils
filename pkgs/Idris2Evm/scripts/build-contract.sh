@@ -69,6 +69,47 @@ if [ ! -f "$YUL_FILE" ]; then
     exit 1
 fi
 
+# Optional constructor-time storage writes: CONSTRUCTOR_SSTORE="slot=value[,slot=value...]"
+#
+# Why this is a build step and not Idris: the backend emits a fixed deploy body
+# (datacopy + return) with no hook for constructor logic, and an Idris `sstore`
+# lands in the RUNTIME, which is a setter -- a function anyone can call twice.
+# For ERC-7546 the dictionary binding must be immutable (carl, 2026-08-18:
+# one-time, deployer-only; governance acts on the dictionary's CONTENTS, not on
+# the proxy-to-dictionary bind), and the strongest form of "cannot be rebound"
+# is that no bind function exists at all. Writing the slot in the deploy body
+# gives exactly that: the value is set once while the contract is being created
+# and the deployed runtime contains no way to change it. The AA wallet's
+# initAccount is the cautionary case -- a bind path callable twice is a takeover.
+#
+# The ERC-7546 slot convention is preserved (rather than baking the address into
+# the code as a constant) so that eth_getStorageAt can still show which
+# dictionary this proxy serves.
+if [ -n "${CONSTRUCTOR_SSTORE:-}" ]; then
+    INJECT=""
+    IFS=',' read -ra PAIRS <<< "$CONSTRUCTOR_SSTORE"
+    for pair in "${PAIRS[@]}"; do
+        slot="${pair%%=*}"
+        value="${pair#*=}"
+        if [ "$slot" = "$pair" ] || [ -z "$slot" ] || [ -z "$value" ]; then
+            echo "Error: CONSTRUCTOR_SSTORE entry '$pair' is not slot=value"
+            exit 1
+        fi
+        echo "  constructor sstore($slot, $value)"
+        INJECT="${INJECT}      sstore(${slot}, ${value})\n"
+    done
+    # Insert immediately after the deploy object's `code {`, i.e. the FIRST one,
+    # which runs at creation; the runtime object's `code {` comes later.
+    awk -v inj="$INJECT" '
+        !done && /^[[:space:]]*code[[:space:]]*\{/ { print; printf "%s", inj; done=1; next }
+        { print }
+    ' "$YUL_FILE" > "${YUL_FILE}.bound" && mv "${YUL_FILE}.bound" "$YUL_FILE"
+    if ! grep -q 'sstore' "$YUL_FILE"; then
+        echo "Error: CONSTRUCTOR_SSTORE was requested but no sstore reached the Yul"
+        exit 1
+    fi
+fi
+
 # Step 2: Yul -> EVM bytecode
 echo "[2/3] Compiling Yul to EVM bytecode (--evm-version $EVM_VERSION)..."
 BYTECODE=$(solc --strict-assembly --evm-version "$EVM_VERSION" --bin "$YUL_FILE" 2>&1 | tail -1)
