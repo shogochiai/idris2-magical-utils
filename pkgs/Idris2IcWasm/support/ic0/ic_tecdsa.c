@@ -58,6 +58,18 @@ static int32_t g_evm_address_ready = 0;
 static char g_ecdsa_last_error[256] = "";
 static int32_t g_ecdsa_last_error_len = 0;
 
+/* Which key_type produced g_evm_address_hex / g_ecdsa_last_error above, so a
+ * request for a DIFFERENT key is not silently answered from the wrong one's
+ * cache. Without this, one failed request permanently freezes every later
+ * getEvmAddress call for the rest of the canister's life: the entry point
+ * short-circuits on a cached error before ever calling set_key_name_from_type
+ * or begin_pubkey_call again, so a retry with the correct key never actually
+ * runs. -1 means "no request has completed or failed yet". Measured mainnet
+ * 2026-08-17: a single malformed-argument call cached a dfx_test_key
+ * ChainKeyError, and every subsequent call -- including ones with a correctly
+ * encoded key_type -- returned that same stale error untried. */
+static int64_t g_evm_address_cache_key_type = -1;
+
 static int export_mpz_be32(mpz_t value, uint8_t out[32]) {
     uint8_t tmp[32];
     size_t count = 0;
@@ -853,15 +865,18 @@ static int parse_candid_nat_arg0(const uint8_t* arg_buf, int32_t arg_buf_size, i
 
 const char* icw_tecdsa_get_evm_address_entry(const uint8_t* arg_buf, int32_t arg_buf_size) {
     int64_t key_type = 0;
-    if (ic_tecdsa_get_pubkey_len() > 0) {
-        return g_evm_address_ready ? g_evm_address_hex : "error:address_derivation_failed";
-    }
-    if (ic_tecdsa_get_last_error_len() > 0) {
-        return g_ecdsa_last_error;
-    }
     if (!parse_candid_nat_arg0(arg_buf, arg_buf_size, &key_type)) {
         key_type = 0;
     }
+    if (key_type == g_evm_address_cache_key_type) {
+        if (ic_tecdsa_get_pubkey_len() > 0) {
+            return g_evm_address_ready ? g_evm_address_hex : "error:address_derivation_failed";
+        }
+        if (ic_tecdsa_get_last_error_len() > 0) {
+            return g_ecdsa_last_error;
+        }
+    }
+    g_evm_address_cache_key_type = key_type;
     set_key_name_from_type(key_type);
     if (begin_pubkey_call((int32_t)(uintptr_t)g_hook_pubkey_reply,
                           (int32_t)(uintptr_t)g_hook_pubkey_reject) != 0) {
