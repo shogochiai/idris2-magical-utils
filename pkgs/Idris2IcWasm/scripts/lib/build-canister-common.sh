@@ -2,14 +2,25 @@
 # Shared Idris2IcWasm canister build pipeline.
 # Caller scripts set variables/functions below, then source this file.
 
+# `_c_source_complete` / `_fetch_c_source`: a cached file that EXISTS is not a
+# cached file that is USABLE. Sourced rather than repeated here because
+# build-wasm.sh guards the same /tmp cache and `1e8631ec` already paid for the
+# two copies drifting apart. The measured failure and the reasoning are in
+# lib/fetch-sources.sh.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fetch-sources.sh"
+
 ensure_mini_gmp() {
-    if [ -f "$MINI_GMP/mini-gmp.c" ] && [ -f "$MINI_GMP/gmp.h" ]; then
+    # mini-gmp.h was never checked here, so a run that fetched the .c and lost
+    # the .h was also accepted. Check every file this function is responsible for.
+    if [ -f "$MINI_GMP/mini-gmp.c" ] && [ -f "$MINI_GMP/mini-gmp.h" ] && [ -f "$MINI_GMP/gmp.h" ] \
+       && _c_source_complete "$MINI_GMP/mini-gmp.c" \
+       && _c_source_complete "$MINI_GMP/mini-gmp.h"; then
         return
     fi
     echo "Preparing mini-gmp headers..."
     mkdir -p "$MINI_GMP"
-    curl -sLo "$MINI_GMP/mini-gmp.c" https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c
-    curl -sLo "$MINI_GMP/mini-gmp.h" https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.h
+    _fetch_c_source https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c "$MINI_GMP/mini-gmp.c" || return 1
+    _fetch_c_source https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.h "$MINI_GMP/mini-gmp.h" || return 1
     cat > "$MINI_GMP/gmp.h" << 'GMPEOF'
 #ifndef GMP_WRAPPER_H
 #define GMP_WRAPPER_H
@@ -29,20 +40,37 @@ static inline void mpz_clears(mpz_t x, ...) {
 GMPEOF
 }
 
+# Same defect class as ensure_mini_gmp, and wider: this fetched THIRTY files and
+# then let the presence of ONE of them (`runtime.c`) stand for all of them. Any
+# other file arriving truncated — or not arriving at all — was permanent, because
+# the next run saw runtime.c and returned. Fixing only the mini-gmp half would
+# have left the silent failures and kept the loud one, so both use the same
+# checked fetch.
 ensure_refc_runtime() {
-    if [ ! -f "$REFC_SRC/runtime.c" ]; then
-        echo "Downloading RefC runtime sources..."
-        mkdir -p "$REFC_SRC"
-        for f in memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clock.c buffer.c prim.c refc_util.c; do
-            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f"
-        done
-        for f in runtime.h cBackend.h datatypes.h _datatypes.h refc_util.h mathFunctions.h memoryManagement.h stringOps.h casts.h clock.h buffer.h prim.h threads.h; do
-            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f"
-        done
-        for f in idris_support.c idris_file.c idris_directory.c idris_util.c idris_support.h idris_file.h idris_directory.h idris_util.h; do
-            curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f"
-        done
+    local refc_files=(memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clock.c buffer.c prim.c refc_util.c
+                      runtime.h cBackend.h datatypes.h _datatypes.h refc_util.h mathFunctions.h memoryManagement.h stringOps.h casts.h clock.h buffer.h prim.h threads.h)
+    local c_files=(idris_support.c idris_file.c idris_directory.c idris_util.c idris_support.h idris_file.h idris_directory.h idris_util.h)
+    local f complete=1
+    for f in "${refc_files[@]}" "${c_files[@]}"; do
+        _c_source_complete "$REFC_SRC/$f" || { complete=0; break; }
+    done
+    # Written as an explicit `if`, not `[ ... ] && return`: callers run under
+    # `set -e`, where a trailing AND-list whose left side is false makes the
+    # whole list the function's failing status.
+    if [ "$complete" = "1" ]; then
+        return 0
     fi
+
+    echo "Downloading RefC runtime sources..."
+    mkdir -p "$REFC_SRC"
+    for f in "${refc_files[@]}"; do
+        _c_source_complete "$REFC_SRC/$f" && continue
+        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f" "$REFC_SRC/$f" || return 1
+    done
+    for f in "${c_files[@]}"; do
+        _c_source_complete "$REFC_SRC/$f" && continue
+        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f" "$REFC_SRC/$f" || return 1
+    done
 }
 
 detect_host_gmp_ldflags() {
