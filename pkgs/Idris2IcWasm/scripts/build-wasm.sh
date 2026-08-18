@@ -39,15 +39,25 @@ C_SUPPORT="$IDRIS2_SUPPORT/c"
 MINI_GMP="/tmp/mini-gmp"
 REFC_SRC="/tmp/refc-src"
 
+. "$SCRIPT_DIR/lib/fetch-sources.sh"
+
 # Download mini-gmp if not present.
 # Check every file a consumer needs, not just the first one produced: a partial
 # /tmp/mini-gmp (mini-gmp.c present, headers cleaned away) otherwise satisfies
 # the guard and the build then dies on a missing gmp.h. Same condition as
 # ensure_mini_gmp() in lib/build-canister-common.sh.
-if [ ! -f "$MINI_GMP/mini-gmp.c" ] || [ ! -f "$MINI_GMP/mini-gmp.h" ] || [ ! -f "$MINI_GMP/gmp.h" ]; then
+#
+# EXISTENCE IS NOT ENOUGH, added 2026-08-18 after measuring the state this line's
+# three-row table had no row for: all three files present, mini-gmp.c truncated
+# to 3865 of 4666 lines by an interrupted `curl -sLo` on 2026-08-15 and trusted
+# ever since. See lib/fetch-sources.sh for what it cost and why the check is
+# "ends with a newline" rather than a pinned hash.
+if [ ! -f "$MINI_GMP/gmp.h" ] \
+   || ! _c_source_complete "$MINI_GMP/mini-gmp.c" \
+   || ! _c_source_complete "$MINI_GMP/mini-gmp.h"; then
     mkdir -p "$MINI_GMP"
-    curl -sLo "$MINI_GMP/mini-gmp.c" https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c
-    curl -sLo "$MINI_GMP/mini-gmp.h" https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.h
+    _fetch_c_source https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c "$MINI_GMP/mini-gmp.c"
+    _fetch_c_source https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.h "$MINI_GMP/mini-gmp.h"
     # Create gmp.h wrapper with mpz_inits/mpz_clears stubs (not in mini-gmp)
     cat > "$MINI_GMP/gmp.h" << 'GMPEOF'
 #ifndef GMP_WRAPPER_H
@@ -76,17 +86,22 @@ REFC_FILES="memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clo
 C_FILES="idris_support.c idris_file.c idris_directory.c idris_util.c"
 refc_src_complete() {
     for f in $REFC_FILES $C_FILES; do
-        [ -f "$REFC_SRC/$f" ] || return 1
+        # `[ -f ]` here would repeat, per file, the defect the mini-gmp guard
+        # above just stopped repeating: thirteen files each of which can arrive
+        # truncated from the same unchecked `curl`.
+        _c_source_complete "$REFC_SRC/$f" || return 1
     done
     return 0
 }
 if ! refc_src_complete; then
     mkdir -p "$REFC_SRC"
     for f in $REFC_FILES; do
-        curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f"
+        _c_source_complete "$REFC_SRC/$f" && continue
+        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f" "$REFC_SRC/$f"
     done
     for f in $C_FILES; do
-        curl -sLo "$REFC_SRC/$f" "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f"
+        _c_source_complete "$REFC_SRC/$f" && continue
+        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f" "$REFC_SRC/$f"
     done
 fi
 
