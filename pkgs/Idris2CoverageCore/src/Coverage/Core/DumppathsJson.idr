@@ -86,6 +86,24 @@ parseEffectBoundary (Just s) =
      else PureComputation
 parseEffectBoundary Nothing = PureComputation
 
+||| Per-family refinement of a compiler-emitted boundary. The compiler names the
+||| hole (`UnclassifiedForeign(<cc>)`) but cannot know which harness will drive
+||| the paths; whether that cc is a hole AT ALL is the family's fact
+||| (Coverage.Boundary.Canonical: an EVM opcode prim is executed by revm on every
+||| run, while the same shape of cc on Chez is a real hole). A matching
+||| excludable=True row resolves to the row's recognised boundary (non-blocking
+||| exclusion); an excludable=False row resolves to PureComputation — the
+||| family's runner executes the prim, so the path stays a ReachableObligation.
+||| A cc no row matches stays UnclassifiedForeign (claim-blocking Unknown),
+||| preserving the soundness guarantee for genuinely new holes.
+export
+refineBoundaryWithSpecs : List EffectBoundarySpec -> EffectBoundary -> EffectBoundary
+refineBoundaryWithSpecs specs (UnclassifiedForeign cc) =
+  case find (\s => any (\sub => isInfixOf sub cc) s.ccSubstrings) specs of
+    Nothing  => UnclassifiedForeign cc
+    Just row => if row.excludable then row.boundary else PureComputation
+refineBoundaryWithSpecs _ boundary = boundary
+
 ||| Fact-grounded reclassification: a path whose function transitively reaches an
 ||| unexecutable FFI hole (compiler-computed effect_boundary) is reclassified to
 ||| boundaryClass (UnknownClassification — visible, claim-affecting) instead of
@@ -124,18 +142,19 @@ parsePaths functionName boundary (path :: rest) = do
   there <- parsePaths functionName boundary rest
   pure (here :: there)
 
-parseFunctionObject : JSON -> Either String (List PathObligation)
-parseFunctionObject json = do
+parseFunctionObject : List EffectBoundarySpec -> JSON -> Either String (List PathObligation)
+parseFunctionObject specs json = do
   functionName <- maybeToEither "function object is missing function_name" (getStringField "function_name" json)
-  let boundary = parseEffectBoundary (getStringField "effect_boundary" json)
+  let boundary = refineBoundaryWithSpecs specs
+                   (parseEffectBoundary (getStringField "effect_boundary" json))
   pathsJson <- maybeToEither "function object is missing paths" (getField "paths" json >>= getArray)
   parsePaths functionName boundary pathsJson
 
-parseFunctionObjects : List JSON -> Either String (List PathObligation)
-parseFunctionObjects [] = Right []
-parseFunctionObjects (fn :: rest) = do
-  here <- parseFunctionObject fn
-  there <- parseFunctionObjects rest
+parseFunctionObjects : List EffectBoundarySpec -> List JSON -> Either String (List PathObligation)
+parseFunctionObjects _ [] = Right []
+parseFunctionObjects specs (fn :: rest) = do
+  here <- parseFunctionObject specs fn
+  there <- parseFunctionObjects specs rest
   pure (here ++ there)
 
 export
@@ -148,14 +167,21 @@ looksLikeDumppathsJson content =
     Nothing => False
 
 export
-parseDumppathsJson : String -> Either String (List PathObligation)
-parseDumppathsJson content =
+parseDumppathsJsonWithSpecs : List EffectBoundarySpec -> String -> Either String (List PathObligation)
+parseDumppathsJsonWithSpecs specs content =
   case parse content of
     Nothing => Left "Failed to parse dumppaths JSON"
     Just json => do
       functions <- maybeToEither "dumppaths export is missing functions array"
                     (getField "functions" json >>= getArray)
-      parseFunctionObjects functions
+      parseFunctionObjects specs functions
+
+||| Family-agnostic parse: no boundary specs, so every UnclassifiedForeign hole
+||| stays claim-blocking. Consumers that know their harness pass
+||| `boundarySpecsFor <family>` to parseDumppathsJsonWithSpecs instead.
+export
+parseDumppathsJson : String -> Either String (List PathObligation)
+parseDumppathsJson = parseDumppathsJsonWithSpecs []
 
 export
 loadDumppathsJson : String -> IO (Either String (List PathObligation))

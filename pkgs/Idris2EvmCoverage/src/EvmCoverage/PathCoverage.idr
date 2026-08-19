@@ -12,7 +12,9 @@ import Coverage.Core.DumppathsJson
 import public Coverage.Core.PathCoverage
 import public Coverage.Core.RuntimeHit
 import Coverage.Core.Backend   -- shared isBareRecordProjectionPath (was duplicated here)
+import Coverage.Boundary.Canonical
 import Coverage.Standardization.Types
+import Idris2.CoverageFamily
 
 %default covering
 
@@ -178,7 +180,13 @@ filterPathObligations patterns =
 export
 parseProjectDumppathsJsonMode : Bool -> List ExclPattern -> String -> Either String (List PathObligation)
 parseProjectDumppathsJsonMode honestObservable patterns content = do
-  paths <- parseDumppathsJson content
+  -- EVM-family boundary policy (Coverage.Boundary.Canonical): revm executes the
+  -- EVM opcode prims (`evm:sload`, `evm:sstore`, …) on every run, so a path
+  -- reaching one is a ReachableObligation, not an UnclassifiedForeign Unknown.
+  -- Measured 2026-08-19 on Idris2Tokenomics: without this, 143 of 230 dispatch
+  -- paths were Unknown (claim-blocking) and 111 real trace hits on them were
+  -- discarded (paths_hit 3 where the FNV join finds 114).
+  paths <- parseDumppathsJsonWithSpecs (boundarySpecsFor EvmHash) content
   pure $ reclassifyPathObligationsMode honestObservable patterns paths
 
 export

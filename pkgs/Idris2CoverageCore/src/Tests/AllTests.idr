@@ -453,6 +453,30 @@ test_PATH_BOUNDARY_002 () =
       any (\p => p.pathId == "App.mystery#p0"
               && p.classification == UnknownClassification) paths
 
+||| Per-family refinement (refineBoundaryWithSpecs): the SAME UnclassifiedForeign
+||| hole is family-relative. An `evm:sload` cc parsed with the EvmHash boundary
+||| specs stays a ReachableObligation — revm executes the opcode prims on every
+||| run, so the path opens no harness hole — while the family-agnostic parse of
+||| the SAME document keeps it claim-blocking Unknown (PATH_BOUNDARY_002's
+||| soundness guarantee is untouched for consumers that name no family).
+evmOpcodeBoundaryJson : String
+evmOpcodeBoundaryJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"Token.transfer\",\"effect_boundary\":\"UnclassifiedForeign(evm:sload)\",\"paths\":[{\"path_id\":\"Token.transfer#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+
+test_PATH_BOUNDARY_003 : () -> Bool
+test_PATH_BOUNDARY_003 () =
+  let withFamily = case parseDumppathsJsonWithSpecs (boundarySpecsFor EvmHash) evmOpcodeBoundaryJson of
+                     Left _ => False
+                     Right paths =>
+                       any (\p => p.pathId == "Token.transfer#p0"
+                               && p.classification == ReachableObligation) paths
+      withoutFamily = case parseDumppathsJson evmOpcodeBoundaryJson of
+                        Left _ => False
+                        Right paths =>
+                          any (\p => p.pathId == "Token.transfer#p0"
+                                  && p.classification == UnknownClassification) paths
+  in withFamily && withoutFamily
+
 test_PATH_002 : () -> Bool
 test_PATH_002 () =
   case parseDumppathsJson sampleDumppathsJson of
@@ -641,6 +665,7 @@ allTests =
   , test "PATH_001" "parse dumppaths json" test_PATH_001
   , test "PATH_BOUNDARY_001" "effect_boundary reclassifies ProcessSpawn to ExternalEffectBoundary, keeps Pure" test_PATH_BOUNDARY_001
   , test "PATH_BOUNDARY_002" "unrecognised UnclassifiedForeign boundary stays UnknownClassification (soundness)" test_PATH_BOUNDARY_002
+  , test "PATH_BOUNDARY_003" "evm: opcode hole is Reachable under EvmHash specs, Unknown without a family" test_PATH_BOUNDARY_003
   , test "BOUNDARY_PERFAMILY_001" "canonical boundary policy differs per family (core vs evm vs web)" test_BOUNDARY_PERFAMILY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003

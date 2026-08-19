@@ -55,6 +55,12 @@ boundarySpecsFor EvmHash =
   -- and many are RUNNABLE under revm → NOT excludable (they stay in the denominator).
   -- staticcall to a precompile (ecrecover/sha256) is executed by revm itself.
   [ MkEffectBoundarySpec "evm" CanisterCall ["staticcall", "call"] False  -- runnable in revm
+  -- The EVM opcode prims themselves (`evm:sload`, `evm:sstore`, `evm:caller`,
+  -- `evm:timestamp`, …) are the instruction set revm executes on every run:
+  -- reaching one opens no harness hole, so a path through them stays in the
+  -- denominator. Keyed on the `evm:` cc prefix (a compiler fact), so a new
+  -- opcode binding is captured automatically without per-symbol enumeration.
+  , MkEffectBoundarySpec "evm" PureComputation ["evm:"] False
   ]
 boundarySpecsFor Humanoid =
   -- Declared-unimplemented embodiment layer: no runnable backend yet, so it opens
