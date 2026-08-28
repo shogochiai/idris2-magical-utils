@@ -1747,6 +1747,11 @@ splitTrailingCount s =
 ||| still carrying a trailing `,count`). A line with no tab is treated as an
 ||| unlabelled path-id (backwards-tolerant), so both formats parse. A path-id never
 ||| contains a tab, so rejoining the tail on '\t' is lossless.
+||| Split a hit line into (label, rest). Exported for the same reason as
+||| keepHitLineForSpec: the consumer must strip the label with the SAME rule the
+||| producer used, and lazy's own parser splits on ',' alone — given a labelled line
+||| it would take "<label>\t<pathId>" as the path id and match nothing.
+export
 splitHitLabel : String -> (String, String)
 splitHitLabel s =
   case forget (split (== '\t') s) of
@@ -1758,6 +1763,32 @@ splitHitLabel s =
 export
 pathHitLabel : String -> String
 pathHitLabel line = fst (splitHitLabel (trim line))
+
+||| Does this hit line belong to `req`?
+|||
+||| THREE accepted label shapes, because the attribution label is whatever the suite
+||| passed to `enterTest` and that differs by project:
+|||   test_<REQ>…   the function-name convention this filter was written for
+|||   <REQ>         the BARE id — measured 2026-08-03 in Luci.Tests.AllTests: 1238 of
+|||                 1242 registry rows pass the bare id and ZERO pass a `test_` prefix,
+|||                 because Idris2.TestSuite.runSuite hands enterTest the registry
+|||                 tuple's NAME. Against the old single-shape filter every hit was
+|||                 dropped, so the per-SpecId numerator was structurally 0.
+|||   <REQ>_…       the same id with a suffix (e.g. REQ_X_001_join_and_empty). Uses
+|||                 `req ++ "_"` rather than a bare prefix so REQ_X_001 cannot match
+|||                 REQ_X_0011.
+|||
+||| Exported deliberately. `lazy` needs the SAME rule to filter the labelled aggregate
+||| at read time, and these three shapes were each found by measurement — a second
+||| copy of them is a second thing to keep in step, and the failure mode of drift is a
+||| numerator that is silently 0 for one consumer and correct for the other.
+export
+keepHitLineForSpec : (req : String) -> (line : String) -> Bool
+keepHitLineForSpec req line =
+  let lbl = pathHitLabel line
+  in isPrefixOf ("test_" ++ req) lbl
+     || lbl == req
+     || isPrefixOf (req ++ "_") lbl
 
 parsePathHitLineLocal : String -> Maybe PathRuntimeHit
 parsePathHitLineLocal line =
@@ -1955,11 +1986,7 @@ runExeSlices projectDir relExecPath pathHitsPath = do
           keepLine ln = case specFilter of
                           Nothing => True
                           Just "" => True
-                          Just req =>
-                            let lbl = pathHitLabel ln
-                            in isPrefixOf ("test_" ++ req) lbl
-                               || lbl == req
-                               || isPrefixOf (req ++ "_") lbl
+                          Just req => keepHitLineForSpec req ln
       -- Keep the lines the filter is about to discard. This is the ONLY point where
       -- the label still exists: `keepLine` matches on `pathHitLabel ln`, and the
       -- PathRuntimeHit that survives carries pathId and hitCount only.
