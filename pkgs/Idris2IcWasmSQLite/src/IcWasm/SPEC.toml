@@ -1,0 +1,133 @@
+# IcWasm SQLite Module Specification
+# FFI bindings for SQLite in-memory database with stable memory persistence.
+
+[[spec_area]]
+name = "Result Code Mapping"
+
+[[spec]]
+id = "REQ_SQL_001"
+title = "toSqlResult maps 0 to SqlOk"
+
+[[spec]]
+id = "REQ_SQL_002"
+title = "toSqlResult maps 1 to SqlError"
+
+[[spec]]
+id = "REQ_SQL_003"
+title = "toSqlResult maps 5 to SqlBusy"
+
+[[spec]]
+id = "REQ_SQL_004"
+title = "toSqlResult maps 6 to SqlLocked"
+
+[[spec]]
+id = "REQ_SQL_005"
+title = "toSqlResult maps 7 to SqlNoMem"
+
+[[spec]]
+id = "REQ_SQL_006"
+title = "toSqlResult maps 19 to SqlConstraint"
+
+[[spec]]
+id = "REQ_SQL_007"
+title = "toSqlResult maps 100 to SqlRow"
+
+[[spec]]
+id = "REQ_SQL_008"
+title = "toSqlResult maps 101 to SqlDone"
+
+[[spec]]
+id = "REQ_SQL_009"
+title = "toSqlResult maps unknown code to SqlOther"
+
+[[spec_area]]
+name = "Column Type Mapping"
+
+[[spec]]
+id = "REQ_SQL_010"
+title = "toSqlType maps 1 to SqlInteger"
+
+[[spec]]
+id = "REQ_SQL_011"
+title = "toSqlType maps 2 to SqlFloat"
+
+[[spec]]
+id = "REQ_SQL_012"
+title = "toSqlType maps 3 to SqlText"
+
+[[spec]]
+id = "REQ_SQL_013"
+title = "toSqlType maps 4 to SqlBlob"
+
+[[spec]]
+id = "REQ_SQL_014"
+title = "toSqlType maps 0 to SqlNull (unmapped)"
+
+[[spec]]
+id = "REQ_SQL_015"
+title = "toSqlType maps 99 to SqlNull (unmapped)"
+
+[[spec_area]]
+name = "Equality"
+
+[[spec]]
+id = "REQ_SQL_016"
+title = "SqlResult Eq is reflexive"
+
+[[spec]]
+id = "REQ_SQL_017"
+title = "SqlResult Eq distinguishes different constructors"
+
+[[spec]]
+id = "REQ_SQL_018"
+title = "SqlOther Eq matches same code"
+
+[[spec]]
+id = "REQ_SQL_019"
+title = "SqlOther Eq distinguishes different codes"
+
+[[spec]]
+id = "REQ_SQL_020"
+title = "SqlType Eq is reflexive"
+
+[[spec]]
+id = "REQ_SQL_021"
+title = "SqlType Eq distinguishes different constructors"
+
+[[spec_area]]
+name = "Show Instances"
+
+[[spec]]
+id = "REQ_SQL_022"
+title = "Show SqlOk produces SQLITE_OK"
+
+[[spec]]
+id = "REQ_SQL_023"
+title = "Show SqlError produces SQLITE_ERROR"
+
+[[spec]]
+id = "REQ_SQL_024"
+title = "Show SqlOther produces SQLITE_N"
+
+[[spec]]
+id = "REQ_SQL_025"
+title = "Show SqlInteger produces INTEGER"
+
+[[spec]]
+id = "REQ_SQL_026"
+title = "Show SqlNull produces NULL"
+
+[[spec_area]]
+name = "Data Structures"
+
+[[spec]]
+id = "REQ_SQL_027"
+title = "QueryRow construction preserves columns"
+
+[[spec]]
+id = "REQ_SQL_028"
+title = "QueryRow supports empty columns"
+
+[[spec]]
+id = "REQ_SQL_029"
+title = "SchemaVersion is a Nat type alias"
