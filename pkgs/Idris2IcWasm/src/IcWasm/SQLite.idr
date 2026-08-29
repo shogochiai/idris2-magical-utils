@@ -239,11 +239,40 @@ sqlStrLen : IO Int
 sqlStrLen = primIO prim__sqlStrLen
 
 ||| Write string to buffer (helper)
+|||
+||| The loop is written out rather than expressed as `traverse_`, and that is
+||| load-bearing rather than a style preference.
+|||
+||| `traverse_ f = foldr ((*>) . f) (pure ())`. `foldr` builds the whole
+||| `a *> (b *> (c *> ...))` chain BEFORE any of it runs, so an N-character
+||| statement costs N nested frames. Every SQL statement this canister executes
+||| arrives through here, so the ceiling was not on some exotic path -- it was on
+||| all of them.
+|||
+||| Measured against the DEPLOYED mainnet canister on 2026-08-29, by argument
+||| size: 12000 ok, 16000 `Canister trapped: stack overflow` (IC0502). It
+||| reproduced on THREE unrelated handlers -- `createMemoryNode` (INSERT),
+||| `createMemoryEdge` (INSERT), and `readMemory`/`getInstanceRole` (SELECT with
+||| an interpolated value) -- which is what identified this shared bridge rather
+||| than any one handler's own string handling.
+|||
+||| Two earlier fixes (posts 482 and 489) made the JSON escapers tail-recursive
+||| on the theory that escaping was the per-character recursion. Both landed on
+||| mainnet; the threshold did not move by one byte. The escapers were already
+||| innocent -- `sqlEsc`, `parseJsonFieldValue`, `findSubstrChars`,
+||| `takeJsonValue` and Prelude `unpack` are all accumulator-based. A convincing
+||| mechanism plus a real defect is still not a diagnosis.
 export
 sqlWriteString : String -> IO ()
 sqlWriteString s = do
   sqlStrReset
-  traverse_ (\c => sqlStrPush (cast (ord c))) (unpack s)
+  go (unpack s)
+  where
+    go : List Char -> IO ()
+    go [] = pure ()
+    go (c :: cs) = do
+      sqlStrPush (cast (ord c))
+      go cs
 
 -- =============================================================================
 -- SQL Execution
