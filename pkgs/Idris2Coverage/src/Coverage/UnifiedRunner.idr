@@ -901,13 +901,24 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
       let logTail = case logResult of
                       Left _ => ""
                       Right logContent => unlines (reverse (take 12 (reverse (lines logContent))))
-      in pure $ Left $ "Static chunk " ++ show idx ++ " failed to produce dumppaths JSON (build rc="
+      -- ★NAME THE MODULES (REQ_COV_CHUNK_NAMES_ITS_MODULES_001).★
+      --
+      -- The index alone cannot be acted on. Recovering which module chunk 55 is
+      -- took arithmetic over the leaf-first ordering plus a separate script, and
+      -- the first answer was WRONG: a 2026-09-01 investigation concluded Main.idr
+      -- (79 imports) and the real answer was Luci.Tests.AllTests (159 imports,
+      -- 29,994 lines). `modules` is right here in scope; printing it turns
+      -- "chunk 55 died" into "compiling <name> died", which is the difference
+      -- between a strategy aimed at the right file and one aimed at the wrong one.
+      in pure $ Left $ "Static chunk " ++ show idx ++ " (" ++ joinStrings ", " modules
+                    ++ ") failed to produce dumppaths JSON (build rc="
                     ++ show buildRc ++ if buildRc == 137 then ", likely OOM-killed" else ""
                     ++ "): " ++ show err
                     ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
     Right content =>
       if null (trim content)
-         then pure $ Left $ "Static chunk " ++ show idx ++ " produced empty dumppaths JSON"
+         then pure $ Left $ "Static chunk " ++ show idx ++ " (" ++ joinStrings ", " modules
+                          ++ ") produced empty dumppaths JSON"
          else case parseDumppathsJson content of
                 Left err => pure $ Left $ "Static chunk " ++ show idx ++ " produced unparsable dumppaths JSON: " ++ err
                 Right paths => pure $ Right paths
