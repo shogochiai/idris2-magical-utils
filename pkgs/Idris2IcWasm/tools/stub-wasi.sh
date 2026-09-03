@@ -224,6 +224,10 @@ IMPORT = re.compile(
     r'^(\s*)\(import "(wasi_snapshot_preview1|env)" "([^"]+)" '
     r'\(func (\$[^\s)]+)(.*)\)\)\s*$')
 
+# Any import, not just the ones being stubbed -- used to find where the import
+# section ends so the stubs can be placed after it.
+ANY_IMPORT = re.compile(r'^\s*\(import ')
+
 RESULT = re.compile(r'\(result\s+([^\s)]+)')
 
 NEUTRAL = {
@@ -248,14 +252,32 @@ def body_for(sig):
 
 
 out = []
+stub_lines = []        # stubs go after the last import, not where the import was
+first_stub_pos = None  # fallback position if no import survives
+last_import_pos = None # index in `out` of the last surviving (import ...)
 stubbed = {'wasi_snapshot_preview1': 0, 'env': 0}
 for line in lines:
     m = IMPORT.match(line)
     if not m:
         out.append(line)
+        if ANY_IMPORT.match(line):
+            last_import_pos = len(out) - 1
         continue
     indent, module, name, ident, sig = m.groups()
-    out.append('%s(func %s%s\n%s %s\n%s)' % (indent, ident, sig, indent, body_for(sig), indent))
+    # Do NOT emit here. Both WAT dialects require every import to precede every
+    # non-import definition, so replacing an import IN PLACE invalidates each
+    # import that follows it. Measured 2026-09-03 on GlobalRegistry: the single
+    # leading (import "env" "idris2_recordPathHit") -- the fork's path-coverage
+    # hook -- is emitted by emcc BEFORE the 22 ic0 imports, so stubbing it in
+    # place made binaryen stop with `error: import after non-import` at the first
+    # ic0 import and produce nothing. The wabt path in this same script had the
+    # identical defect and reported it as 22 separate errors.
+    # Safe to defer because the module is entirely name-referenced (measured on
+    # the same build: 103445 `call $name`, 0 `call <index>`), so moving a
+    # definition cannot disturb the index space.
+    stub_lines.append('%s(func %s%s\n%s %s\n%s)' % (indent, ident, sig, indent, body_for(sig), indent))
+    if first_stub_pos is None:
+        first_stub_pos = len(out)
     stubbed[module] += 1
     # env imports are stubbed for parity with the wabt path, but printed
     # individually: a silently-zeroed env import is how a missing .c file once
@@ -263,6 +285,12 @@ for line in lines:
     # ic_schnorr.c note). Naming them here makes that visible in the build log.
     label = 'WASI' if module == 'wasi_snapshot_preview1' else 'env  ** check this is intentional **'
     print('  stubbed %s: %s %s' % (label, name, body_for(sig)), file=sys.stderr)
+
+if stub_lines:
+    at = last_import_pos + 1 if last_import_pos is not None else first_stub_pos
+    out[at:at] = stub_lines
+    print('>>> placed %d stub(s) after the last import (line %d)'
+          % (len(stub_lines), at), file=sys.stderr)
 
 with open(dst, 'w') as f:
     f.write('\n'.join(out))
