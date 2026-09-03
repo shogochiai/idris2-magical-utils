@@ -84,6 +84,9 @@ with open(wat_file, 'r') as f:
 lines = content.split('\n')
 new_lines = []
 stub_funcs = []
+stub_lines = []        # stubs, emitted after the last import (see second pass)
+first_stub_pos = None  # fallback position if no import survives
+last_import_pos = None # index in new_lines of the last surviving (import ...)
 import_count = 0
 wasi_imports = {}  # func_idx -> (name, type_idx)
 
@@ -166,10 +169,32 @@ for line in lines:
             new_line = f'{indent}(func (;{func_idx_num};) (type {type_idx}) {stub_body})'
         else:
             new_line = f'{indent}(func ${func_idx_name} (type {type_idx}) {stub_body})'
-        new_lines.append(new_line)
+        # DO NOT emit the stub here. The WAT grammar requires every (import ...)
+        # to precede every non-import definition, so replacing an import IN PLACE
+        # invalidates each import that follows it. Measured 2026-09-03: emcc emits
+        # (import "env" "idris2_recordPathHit") -- the fork's path-coverage hook --
+        # as the FIRST import, followed by 22 ic0 imports; stubbing it in place
+        # produced exactly 22 'imports must occur before all non-import
+        # definitions' errors and no wasm at all. It went unnoticed while the
+        # stubbed imports happened to sort last.
+        # Deferring is safe here because this module is entirely name-referenced
+        # (measured on the same build: 103445 `call $name`, 0 `call <index>`), so
+        # moving a definition does not disturb the index space.
+        stub_lines.append(new_line)
+        if first_stub_pos is None:
+            first_stub_pos = len(new_lines)
         print(f"  Stubbed: {name} -> {stub_body or '(nop)'}", file=sys.stderr)
     else:
         new_lines.append(line)
+        if re.match(r'\s*\(import ', line):
+            last_import_pos = len(new_lines) - 1
+
+# Re-insert the stubs after the LAST surviving import. If every import was
+# stubbed there is none, so fall back to where the first stub would have gone.
+if stub_lines:
+    at = last_import_pos + 1 if last_import_pos is not None else first_stub_pos
+    new_lines[at:at] = stub_lines
+    print(f">>> Placed {len(stub_lines)} stub(s) after the last import (line {at})", file=sys.stderr)
 
 with open(output_file, 'w') as f:
     f.write('\n'.join(new_lines))
