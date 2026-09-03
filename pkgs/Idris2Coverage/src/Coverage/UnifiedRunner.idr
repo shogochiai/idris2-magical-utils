@@ -1758,6 +1758,11 @@ splitTrailingCount s =
 ||| still carrying a trailing `,count`). A line with no tab is treated as an
 ||| unlabelled path-id (backwards-tolerant), so both formats parse. A path-id never
 ||| contains a tab, so rejoining the tail on '\t' is lossless.
+||| Split a hit line into (label, rest). Exported for the same reason as
+||| keepHitLineForSpec: the consumer must strip the label with the SAME rule the
+||| producer used, and lazy's own parser splits on ',' alone — given a labelled line
+||| it would take "<label>\t<pathId>" as the path id and match nothing.
+export
 splitHitLabel : String -> (String, String)
 splitHitLabel s =
   case forget (split (== '\t') s) of
@@ -1769,6 +1774,32 @@ splitHitLabel s =
 export
 pathHitLabel : String -> String
 pathHitLabel line = fst (splitHitLabel (trim line))
+
+||| Does this hit line belong to `req`?
+|||
+||| THREE accepted label shapes, because the attribution label is whatever the suite
+||| passed to `enterTest` and that differs by project:
+|||   test_<REQ>…   the function-name convention this filter was written for
+|||   <REQ>         the BARE id — measured 2026-08-03 in Luci.Tests.AllTests: 1238 of
+|||                 1242 registry rows pass the bare id and ZERO pass a `test_` prefix,
+|||                 because Idris2.TestSuite.runSuite hands enterTest the registry
+|||                 tuple's NAME. Against the old single-shape filter every hit was
+|||                 dropped, so the per-SpecId numerator was structurally 0.
+|||   <REQ>_…       the same id with a suffix (e.g. REQ_X_001_join_and_empty). Uses
+|||                 `req ++ "_"` rather than a bare prefix so REQ_X_001 cannot match
+|||                 REQ_X_0011.
+|||
+||| Exported deliberately. `lazy` needs the SAME rule to filter the labelled aggregate
+||| at read time, and these three shapes were each found by measurement — a second
+||| copy of them is a second thing to keep in step, and the failure mode of drift is a
+||| numerator that is silently 0 for one consumer and correct for the other.
+export
+keepHitLineForSpec : (req : String) -> (line : String) -> Bool
+keepHitLineForSpec req line =
+  let lbl = pathHitLabel line
+  in isPrefixOf ("test_" ++ req) lbl
+     || lbl == req
+     || isPrefixOf (req ++ "_") lbl
 
 parsePathHitLineLocal : String -> Maybe PathRuntimeHit
 parsePathHitLineLocal line =
@@ -1837,6 +1868,53 @@ parseResultsPF out =
     lastResultsLine []        = Nothing
     lastResultsLine [x]       = Just x
     lastResultsLine (_ :: xs) = lastResultsLine xs
+
+||| Where a run accumulates its UNFILTERED, still-labelled hit lines.
+|||
+||| The emitted `path-hits.txt` is written from the accumulator that `keepLine` has
+||| ALREADY filtered, and `PathRuntimeHit` carries no label, so the attribution is
+||| gone by then. `lazy` caches that file under a key of (compiler, its mtime, source
+||| md5, test md5) — `IDRIS2COV_SPEC_FILTER` is not among them — so a scoped run and a
+||| whole-target run over identical sources collide, and whichever ran last wins.
+||| Measured 2026-08-28: cached files of 3 and 12 lines sat beside 167,445-line ones,
+||| and the 3 and 12 matched the collapsed numerators observed.
+|||
+||| Keeping the labelled lines lets the filter move to READ time, so one expensive run
+||| serves every SpecId.
+|||
+||| The destination is named by `IDRIS2COV_LABELLED_HITS`, NOT derived. The caller
+||| (`lazy`) already computes its artefact dir as `target ++ "/.lazy-cov-artifacts"`,
+||| while this runner derives its project dir independently from the ipkg path
+||| (`getProjectDirForPaths`, see the comment at TestAndCoverage.idr:493). Those two
+||| normally coincide and there is no invariant that says they must — a path built
+||| from the second and read from the first would work until it silently did not.
+||| Unset means write nothing, so every existing caller is bit-for-bit unaffected.
+labelledHitsPath : IO (Maybe String)
+labelledHitsPath = do
+  v <- getEnv "IDRIS2COV_LABELLED_HITS"
+  pure $ case v of
+           Just p => if p == "" then Nothing else Just p
+           Nothing => Nothing
+
+||| Start a run's aggregate EMPTY.
+|||
+||| Without this, appending makes the NEXT run inherit the previous one's hits: a
+||| numerator that is too LARGE and grows run over run, which passes every threshold
+||| and cannot be falsified from the artefact by itself. Called from BOTH entry points
+||| (chunked and whole) — never from runRuntimePathHitsChunks, which recurses per
+||| chunk and would clear what its own earlier chunks just wrote.
+resetLabelledHits : IO ()
+resetLabelledHits = do
+  Just p <- labelledHitsPath
+    | Nothing => pure ()
+  ignore $ writeFile p ""
+
+||| Append one slice's lines exactly as the runner produced them — before keepLine.
+appendLabelledHits : (raw : String) -> IO ()
+appendLabelledHits raw = do
+  Just p <- labelledHitsPath
+    | Nothing => pure ()
+  ignore $ appendFile p raw
 
 ||| Run the built path-coverage exe in IDRIS2COV_TEST_OFFSET/_LIMIT slices,
 ||| accumulating runtime path hits across slices (each a fresh process → bounded
@@ -1919,11 +1997,13 @@ runExeSlices projectDir relExecPath pathHitsPath = do
           keepLine ln = case specFilter of
                           Nothing => True
                           Just "" => True
-                          Just req =>
-                            let lbl = pathHitLabel ln
-                            in isPrefixOf ("test_" ++ req) lbl
-                               || lbl == req
-                               || isPrefixOf (req ++ "_") lbl
+                          Just req => keepHitLineForSpec req ln
+      -- Keep the lines the filter is about to discard. This is the ONLY point where
+      -- the label still exists: `keepLine` matches on `pathHitLabel ln`, and the
+      -- PathRuntimeHit that survives carries pathId and hitCount only.
+      case hitsContent of
+        Left _  => pure ()
+        Right c => appendLabelledHits c
       let sliceHits = case hitsContent of
                         Left _ => []
                         Right c => mapMaybe parsePathHitLineLocal (filter keepLine (lines c))
@@ -2139,6 +2219,8 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
     ||| chunk exes (bounds RUN memory). OOM-safe on both axes.
     runChunkedPathCoverage : String -> List String -> List String -> IO (Either String (String, List PathRuntimeHit))
     runChunkedPathCoverage projectDir projectModules testModules = do
+      -- One of the TWO entry points that must start the labelled aggregate empty.
+      resetLabelledHits
       putStrLn $ "    Large package (" ++ show (length testModules)
               ++ " test / " ++ show (length projectModules)
               ++ " project modules); chunking path coverage to bound memory..."
@@ -2166,6 +2248,11 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
     ||| memory cost is negligible and one clean process is simplest.
     runWholePathCoverage : String -> List String -> List String -> Nat -> IO (Either String (String, List PathRuntimeHit))
     runWholePathCoverage projectDir projectModules testModules timeout = do
+      -- The OTHER entry point. Missing here, a whole-target run would inherit the
+      -- previous run's hits (numerator too large, passes every bar); missing in the
+      -- chunked one, only the last chunk would survive (numerator too small, which
+      -- looks exactly like the defect being repaired).
+      resetLabelledHits
       putStrLn "    Preparing path coverage runner..."
       projectDepends <- readProjectDepends projectDir
       putStrLn $ "    Project dependencies: " ++ show projectDepends
