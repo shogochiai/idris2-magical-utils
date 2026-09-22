@@ -923,8 +923,33 @@ generateYul name defs = do
   -- Add built-in functions
   let builtinFuns = allocatorFunction :: closureFuns
   let allWithBuiltins = builtinFuns ++ dedupedFuns
-  -- Dead code elimination: only keep functions reachable from main
-  let reachableFuns = eliminateDeadCode [mainName] allWithBuiltins
+  -- Dead code elimination: only keep functions reachable from main.
+  --
+  -- A closure body is reached INDIRECTLY: `mk_closure` stores a func_id and
+  -- `apply_closure` switches on it at run time. `eliminateDeadCode` walks
+  -- CALLS BY NAME, so that edge is invisible to it -- rooting only `main`
+  -- deletes apply_closure and, with it, every closure target, because the
+  -- dispatch switch was their only referrer.
+  --
+  -- Measured 2026-09-23 on the evm soundness fixture (four case splits:
+  -- partialMaybe / safeHead / pickIt / runCovered): the emitted Yul was 843
+  -- bytes containing ZERO `if` and ZERO `switch`, with `Main_u_runCovered`
+  -- compiled to a bare `mk_closure(2, 1, 0,0,0,0)` whose body was never
+  -- emitted. Everything downstream followed from that one deletion -- the
+  -- instrumentor had no branches to label, so `observableBranchIdsFromLabels`
+  -- was empty, `classifyDumppathsByObservability` turned every
+  -- ReachableObligation into UnknownClassification, the denominator was 0, and
+  -- `hit <= denominator` made `hit == 0` inevitable. The preflight reported
+  -- that as "numerator dead: revm executed the fixture", naming two layers
+  -- that were both innocent.
+  --
+  -- Rooting the closure targets is CONDITIONAL on there being any, so a
+  -- closure-free contract keeps exactly the code it keeps today.
+  let closureEntries = SortedMap.toList closureIds
+  let closureRoots = if null closureEntries
+                       then []
+                       else "apply_closure" :: map fst closureEntries
+  let reachableFuns = eliminateDeadCode (mainName :: closureRoots) allWithBuiltins
 
   -- Create runtime object (the actual contract logic)
   let runtimeObject = MkYulObject
