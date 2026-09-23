@@ -1135,7 +1135,18 @@ runDispatchSelectors binPath traceOutput selectors = do
   let runOne : (Bool, String) -> IO ()
       runOne (isFirst, sel) = do
         let redir = if isFirst then " > " else " >> "
-        let cmd = runner ++ " --calldata " ++ sel ++ argPad
+        -- `--trace` (added 2026-09-23). Without it the runner emits only its
+        -- summary (`Result: SUCCESS` / `Gas used: N`) and NO opcode or LOG
+        -- rows, so every consumer that reads the trace for fired events finds
+        -- nothing. The single-call path (runIdrisEvmTest) has always passed it;
+        -- only this dispatch path did not.
+        --
+        -- Measured on pkgs/Idris2TextDao with the identity join wired: the Yul
+        -- carried 393 `log1(0,0,FNV(pid))` markers, the trace was 76 rows of
+        -- `Result: SUCCESS / Gas used: 0` with ZERO `LOG` lines, and the FNV
+        -- join therefore reported paths_hit 0 against a denominator of 131.
+        -- The markers were in the bytecode; nothing was asked to record them.
+        let cmd = runner ++ " --trace --calldata " ++ sel ++ argPad
                ++ " --gas 100000000 " ++ runtimePath
                ++ redir ++ traceOutput ++ " 2>/dev/null"
         _ <- system cmd

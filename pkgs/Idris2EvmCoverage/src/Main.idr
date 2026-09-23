@@ -653,7 +653,28 @@ runPathFullPipelineArtifacts opts = do
                 Nothing => YulInstr.runIdrisEvmTest binPath traceOutput
               Right tracePath <- pure tracePathResult
                 | Left err => pure $ Left $ "Pathcov execution failed: " ++ err
-              hitsResult <- analyzePathHitsFromTraceAndLabelsContent denomContent tracePath ""
+              -- IDENTITY JOIN (wired 2026-09-23). In pathcov mode the fork-yul has
+              -- already lowered `prim__recordPathHit "<fn>#pN"` to
+              -- `log1(0,0,FNV(pid))`, so the trace carries the CANONICAL path ids
+              -- and no label map is needed or produced. This line called the
+              -- LABEL join with an empty labels path, which fails the moment the
+              -- mode is enabled:
+              --
+              --     Error: Failed to read labels file: File Not Found
+              --
+              -- `analyzePathHitsFromPathIdTopics` is the join this branch was
+              -- written for -- the same one Core uses for web and dfx, which is
+              -- why neither of those needs a source map: the id the runtime
+              -- reports IS the id the denominator enumerates. It existed here,
+              -- tested (REQ_PATHRT_002/003), with ZERO callers outside its own
+              -- module while the label join had three.
+              --
+              -- Measured on pkgs/Idris2TextDao with EVM_PATHCOV_YUL set: the
+              -- emitted Yul carries 393 log1 markers (the default pipeline's
+              -- instrumented Yul carries one, the ProfileFlush).
+              Right traceContent <- readFile tracePath
+                | Left err => pure $ Left $ "Pathcov trace unreadable: " ++ show err
+              let hitsResult = analyzePathHitsFromPathIdTopics denomContent traceContent
               pure $ map (\hits => (denomContent, hits)) hitsResult
             Nothing => do
               Right (instrPath, labelPath) <- YulInstr.generateAndInstrumentYul ipkgPath outputDir canonicalBranches
