@@ -84,6 +84,9 @@ with open(wat_file, 'r') as f:
 lines = content.split('\n')
 new_lines = []
 stub_funcs = []
+stub_lines = []        # stubs, emitted after the last import (see second pass)
+first_stub_pos = None  # fallback position if no import survives
+last_import_pos = None # index in new_lines of the last surviving (import ...)
 import_count = 0
 wasi_imports = {}  # func_idx -> (name, type_idx)
 
@@ -166,10 +169,32 @@ for line in lines:
             new_line = f'{indent}(func (;{func_idx_num};) (type {type_idx}) {stub_body})'
         else:
             new_line = f'{indent}(func ${func_idx_name} (type {type_idx}) {stub_body})'
-        new_lines.append(new_line)
+        # DO NOT emit the stub here. The WAT grammar requires every (import ...)
+        # to precede every non-import definition, so replacing an import IN PLACE
+        # invalidates each import that follows it. Measured 2026-09-03: emcc emits
+        # (import "env" "idris2_recordPathHit") -- the fork's path-coverage hook --
+        # as the FIRST import, followed by 22 ic0 imports; stubbing it in place
+        # produced exactly 22 'imports must occur before all non-import
+        # definitions' errors and no wasm at all. It went unnoticed while the
+        # stubbed imports happened to sort last.
+        # Deferring is safe here because this module is entirely name-referenced
+        # (measured on the same build: 103445 `call $name`, 0 `call <index>`), so
+        # moving a definition does not disturb the index space.
+        stub_lines.append(new_line)
+        if first_stub_pos is None:
+            first_stub_pos = len(new_lines)
         print(f"  Stubbed: {name} -> {stub_body or '(nop)'}", file=sys.stderr)
     else:
         new_lines.append(line)
+        if re.match(r'\s*\(import ', line):
+            last_import_pos = len(new_lines) - 1
+
+# Re-insert the stubs after the LAST surviving import. If every import was
+# stubbed there is none, so fall back to where the first stub would have gone.
+if stub_lines:
+    at = last_import_pos + 1 if last_import_pos is not None else first_stub_pos
+    new_lines[at:at] = stub_lines
+    print(f">>> Placed {len(stub_lines)} stub(s) after the last import (line {at})", file=sys.stderr)
 
 with open(output_file, 'w') as f:
     f.write('\n'.join(new_lines))
@@ -199,6 +224,10 @@ IMPORT = re.compile(
     r'^(\s*)\(import "(wasi_snapshot_preview1|env)" "([^"]+)" '
     r'\(func (\$[^\s)]+)(.*)\)\)\s*$')
 
+# Any import, not just the ones being stubbed -- used to find where the import
+# section ends so the stubs can be placed after it.
+ANY_IMPORT = re.compile(r'^\s*\(import ')
+
 RESULT = re.compile(r'\(result\s+([^\s)]+)')
 
 NEUTRAL = {
@@ -223,14 +252,32 @@ def body_for(sig):
 
 
 out = []
+stub_lines = []        # stubs go after the last import, not where the import was
+first_stub_pos = None  # fallback position if no import survives
+last_import_pos = None # index in `out` of the last surviving (import ...)
 stubbed = {'wasi_snapshot_preview1': 0, 'env': 0}
 for line in lines:
     m = IMPORT.match(line)
     if not m:
         out.append(line)
+        if ANY_IMPORT.match(line):
+            last_import_pos = len(out) - 1
         continue
     indent, module, name, ident, sig = m.groups()
-    out.append('%s(func %s%s\n%s %s\n%s)' % (indent, ident, sig, indent, body_for(sig), indent))
+    # Do NOT emit here. Both WAT dialects require every import to precede every
+    # non-import definition, so replacing an import IN PLACE invalidates each
+    # import that follows it. Measured 2026-09-03 on GlobalRegistry: the single
+    # leading (import "env" "idris2_recordPathHit") -- the fork's path-coverage
+    # hook -- is emitted by emcc BEFORE the 22 ic0 imports, so stubbing it in
+    # place made binaryen stop with `error: import after non-import` at the first
+    # ic0 import and produce nothing. The wabt path in this same script had the
+    # identical defect and reported it as 22 separate errors.
+    # Safe to defer because the module is entirely name-referenced (measured on
+    # the same build: 103445 `call $name`, 0 `call <index>`), so moving a
+    # definition cannot disturb the index space.
+    stub_lines.append('%s(func %s%s\n%s %s\n%s)' % (indent, ident, sig, indent, body_for(sig), indent))
+    if first_stub_pos is None:
+        first_stub_pos = len(out)
     stubbed[module] += 1
     # env imports are stubbed for parity with the wabt path, but printed
     # individually: a silently-zeroed env import is how a missing .c file once
@@ -238,6 +285,12 @@ for line in lines:
     # ic_schnorr.c note). Naming them here makes that visible in the build log.
     label = 'WASI' if module == 'wasi_snapshot_preview1' else 'env  ** check this is intentional **'
     print('  stubbed %s: %s %s' % (label, name, body_for(sig)), file=sys.stderr)
+
+if stub_lines:
+    at = last_import_pos + 1 if last_import_pos is not None else first_stub_pos
+    out[at:at] = stub_lines
+    print('>>> placed %d stub(s) after the last import (line %d)'
+          % (len(stub_lines), at), file=sys.stderr)
 
 with open(dst, 'w') as f:
     f.write('\n'.join(out))

@@ -481,6 +481,26 @@ extractSourcedir content =
         (_, []) => ""
         (_, _ :: rest) => trim $ pack $ filter (\c => c /= '"') rest
 
+||| The `main` module an ipkg declares, or "" when it declares none.
+|||
+||| Matched on a line whose FIRST field is exactly `main`, not on `isInfixOf`:
+||| `sourcedir`/`brief`/`domain` all contain the substring, and an ipkg that
+||| mentions "main" in its brief would otherwise hand back prose as a module
+||| name.
+extractMainModule : String -> String
+extractMainModule content =
+  case find isMainLine (lines content) of
+    Nothing => ""
+    Just line => case break (== '=') (unpack line) of
+                   (_, []) => ""
+                   (_, _ :: rest) => trim $ pack $ filter (\c => c /= '"') rest
+  where
+    isMainLine : String -> Bool
+    isMainLine l = case words (trim l) of
+                     ("main" :: "=" :: _) => True
+                     ("main=" :: _)       => True
+                     _                    => False
+
 ||| Extract multi-line field from ipkg content (e.g., depends, modules)
 ||| Captures the field and all continuation lines (starting with spaces/comma)
 extractMultiLineField : String -> String -> String
@@ -791,18 +811,47 @@ runDumpcasesAndParse ipkgPath outputPath = do
   let tempMainDir = if null sourcedir then projectDir else projectDir ++ "/" ++ sourcedir
   let tempMainPath = tempMainDir ++ "/" ++ tempMainName ++ ".idr"
 
-  -- NEW: Scan all module files to find exported IO functions
-  -- This enables comprehensive coverage instead of just test coverage
-  let baseDir = if null sourcedir then projectDir else projectDir ++ "/" ++ sourcedir
-  allIOFuncs <- traverse (\m => scanModuleForIOFuncs (baseDir ++ "/" ++ moduleToPath m) m) modules
-  let ioFuncs = preferCoverageEntrypoints $
-                  filter (\f => isWrapperCallableExportName f.funcName) (concat allIOFuncs)
+  -- ENTRY PARITY (2026-09-23). The synthesized wrapper exists for LIBRARY
+  -- packages that declare no main -- its own header says so. When the ipkg DOES
+  -- declare one, using the wrapper anyway enumerates a different program from
+  -- the one the numerator is compiled from, and the two sides of the ratio stop
+  -- describing the same thing.
+  --
+  -- Measured on pkgs/Idris2TextDao (main = TextDAO.Contract.Dispatch):
+  --
+  --   enumeration entry            functions  with-branches  branch nodes
+  --   DumpcasesWrapper.main               63              6            14
+  --   TextDAO.Contract.Dispatch          275             82           248
+  --   the compiled Yul artefact          330             81   (220 case/default)
+  --
+  -- 82 against the artefact's 81; the wrapper's 6 agrees with nothing. Of the 81
+  -- branch-containing Yul functions only TWO demangle to a name the wrapper
+  -- universe knows -- the other 79 are real source functions never enumerated as
+  -- obligations at all. That is why `paths_denominator` equalled the label count
+  -- (4 of 440): the labels can only match what was enumerated.
+  --
+  -- The wrapper reaches exported IO functions. A contract's branch logic is
+  -- neither: it is pure, or unexported, or reached only through dispatch.
+  let declaredMain = extractMainModule ipkgContent
+  let useDeclaredMain = declaredMain /= "" && declaredMain /= tempMainName
 
-  -- Generate comprehensive wrapper that calls all exported IO functions
-  let tempMainContent = generateComprehensiveWrapper modules ioFuncs
-
-  Right () <- writeFile tempMainPath tempMainContent
-    | Left err => pure $ Left $ "Failed to create temp main: " ++ show err
+  entryName <- if useDeclaredMain
+    then do
+      putStrLn $ "  [dumpcases] enumerating from the package's own entry: "
+                 ++ declaredMain ++ " (same entry the numerator compiles)"
+      pure declaredMain
+    else do
+      -- No declared main: synthesize the wrapper, as before.
+      let baseDir = if null sourcedir then projectDir else projectDir ++ "/" ++ sourcedir
+      allIOFuncs <- traverse (\m => scanModuleForIOFuncs (baseDir ++ "/" ++ moduleToPath m) m) modules
+      let ioFuncs = preferCoverageEntrypoints $
+                      filter (\f => isWrapperCallableExportName f.funcName) (concat allIOFuncs)
+      let tempMainContent = generateComprehensiveWrapper modules ioFuncs
+      Right () <- writeFile tempMainPath tempMainContent
+        | Left err => pure tempMainName   -- report below; keep the old shape
+      putStrLn $ "  [dumpcases] ipkg declares no main; synthesizing a wrapper over "
+                 ++ show (length ioFuncs) ++ " exported IO function(s)"
+      pure tempMainName
 
   -- Create temporary ipkg with executable
   let tempIpkgName = "dumpcases-temp-" ++ uid ++ ".ipkg"
@@ -834,11 +883,12 @@ runDumpcasesAndParse ipkgPath outputPath = do
         , sourcedirLine
         , "builddir = \"" ++ tempBuildDirName ++ "\""
         , dependsSection
-        , "main = " ++ tempMainName
+        , "main = " ++ entryName
         , "executable = \"dumpcases-temp\""
         , "opts = \"" ++ dumpcasesFlag ++ actualOutputPath ++ "\""
-        , "modules = " ++ tempMainName
-        , "        , " ++ modulesStr
+        , "modules = " ++ (if useDeclaredMain
+                             then modulesStr
+                             else tempMainName ++ "\n        , " ++ modulesStr)
         ]
 
   Right () <- writeFile tempIpkgPath tempIpkgContent
