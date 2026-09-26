@@ -126,6 +126,64 @@ fcToSourceLoc (MkFC origin (sl, sc) (el, ec)) =
 fcToSourceLoc (MkVirtualFC origin (sl, sc) (el, ec)) =
   Just $ MkSourceLoc (originToModule origin) "" sl sc el ec
 
+||| The FC carried by an ANF node's head. Every constructor has one as its
+||| first field; this is the only way to reach a source position from a
+||| compiled definition, because `ANFDef`/`MkAFun` carries none itself.
+anfFC : ANF -> FC
+anfFC (AV fc _)            = fc
+anfFC (AAppName fc _ _ _)  = fc
+anfFC (AUnderApp fc _ _ _) = fc
+anfFC (AApp fc _ _ _)      = fc
+anfFC (ALet fc _ _ _)      = fc
+anfFC (ACon fc _ _ _ _)    = fc
+anfFC (AOp fc _ _ _)       = fc
+anfFC (AExtPrim fc _ _ _)  = fc
+anfFC (AConCase fc _ _ _)  = fc
+anfFC (AConstCase fc _ _ _)= fc
+anfFC (APrimVal fc _)      = fc
+anfFC (AErased fc)         = fc
+anfFC (ACrash fc _)        = fc
+
+||| The source location stamped on an emitted Yul function.
+|||
+||| `nameToSourceLoc` recovers the MODULE and FUNCTION by un-mangling the name,
+||| and its own docstring says the line/col it returns are 0 — it has no FC to
+||| read. Every emission site used it alone, so every `// @source:` annotation
+||| in the output carried a position of `0:0--0:0`. Measured 2026-09-23 on
+||| pkgs/Idris2TextDao: **330 annotations, 328 of them `0:0--0:0` and the other
+||| two the literal string `NONE`. Not one carried a source position.**
+|||
+||| That is why EVM path attribution had to fall back to matching MANGLED YUL
+||| NAMES against source function names, and why 79 of the 81 branch-containing
+||| Yul functions matched nothing.
+|||
+||| `fcToSourceLoc` — which reads a real line/col — already existed here,
+||| correct and tested, and was reachable only from `fcToComment` (three
+||| expression-level uses). The function-level annotation never called it.
+|||
+||| This combines both: module and function name from the name, position from
+||| the definition body's own FC. A body whose head is `EmptyFC` falls back to
+||| exactly the previous behaviour, so nothing that worked before changes.
+defSourceLoc : Name -> ANF -> Maybe SourceLoc
+defSourceLoc n body =
+  let named = nameToSourceLoc n in
+  case fcToSourceLoc (anfFC body) of
+    Nothing => named
+    Just fcLoc =>
+      case named of
+        Nothing => Just fcLoc
+        Just nm =>
+          -- Module from the FC, which is the authoritative origin; function
+          -- name from the un-mangled name, because an FC carries none. Keeping
+          -- the name-derived module would leave "<generated>"/"<unknown>"
+          -- placeholders on most functions even once the position is real.
+          let modName = if fcLoc.moduleName == "" then nm.moduleName else fcLoc.moduleName in
+          Just ({ moduleName := modName
+                , startLine  := fcLoc.startLine
+                , startCol   := fcLoc.startCol
+                , endLine    := fcLoc.endLine
+                , endCol     := fcLoc.endCol } nm)
+
 ||| Generate a YComment from FC for sourcemap
 ||| Format: /* Module:startLine:startCol--endLine:endCol */
 fcToComment : FC -> Maybe YulStmt
@@ -711,7 +769,7 @@ compileDefCtx ctx (n, MkAFun args body) = do
     , params = map varName args
     , returns = ["result"]
     , body = YBlock (initStmts ++ ptrPreamble ++ bodyStmts)
-    , sourceLoc = nameToSourceLoc n
+    , sourceLoc = defSourceLoc n body
     }
 
 compileDefCtx ctx (n, MkACon tag arity nt) = do
@@ -859,7 +917,7 @@ compileDefCtx ctx (n, MkAError exp) = do
     , params = []
     , returns = []
     , body = YBlock [YExprStmt $ yulCall "revert" [yulNum 0, yulNum 0]]
-    , sourceLoc = nameToSourceLoc n
+    , sourceLoc = defSourceLoc n exp
     }
 
 ||| Compile an ANF definition to a Yul function (with arity map)
@@ -923,13 +981,61 @@ generateYul name defs = do
   -- Add built-in functions
   let builtinFuns = allocatorFunction :: closureFuns
   let allWithBuiltins = builtinFuns ++ dedupedFuns
-  -- Dead code elimination: only keep functions reachable from main
-  let reachableFuns = eliminateDeadCode [mainName] allWithBuiltins
+  -- Dead code elimination: only keep functions reachable from main.
+  --
+  -- A closure body is reached INDIRECTLY: `mk_closure` stores a func_id and
+  -- `apply_closure` switches on it at run time. `eliminateDeadCode` walks
+  -- CALLS BY NAME, so that edge is invisible to it -- rooting only `main`
+  -- deletes apply_closure and, with it, every closure target, because the
+  -- dispatch switch was their only referrer.
+  --
+  -- Measured 2026-09-23 on the evm soundness fixture (four case splits:
+  -- partialMaybe / safeHead / pickIt / runCovered): the emitted Yul was 843
+  -- bytes containing ZERO `if` and ZERO `switch`, with `Main_u_runCovered`
+  -- compiled to a bare `mk_closure(2, 1, 0,0,0,0)` whose body was never
+  -- emitted. Everything downstream followed from that one deletion -- the
+  -- instrumentor had no branches to label, so `observableBranchIdsFromLabels`
+  -- was empty, `classifyDumppathsByObservability` turned every
+  -- ReachableObligation into UnknownClassification, the denominator was 0, and
+  -- `hit <= denominator` made `hit == 0` inevitable. The preflight reported
+  -- that as "numerator dead: revm executed the fixture", naming two layers
+  -- that were both innocent.
+  --
+  -- Rooting the closure targets is CONDITIONAL on there being any, so a
+  -- closure-free contract keeps exactly the code it keeps today.
+  let closureEntries = SortedMap.toList closureIds
+  let closureRoots = if null closureEntries
+                       then []
+                       else "apply_closure" :: map fst closureEntries
+  let reachableFuns = eliminateDeadCode (mainName :: closureRoots) allWithBuiltins
 
   -- Create runtime object (the actual contract logic)
   let runtimeObject = MkYulObject
         { name = "runtime"
-        , code = initMemory ++ [YExprStmt $ yulCall "pop" [yulCall mainName mainArgs]]
+          -- ENTRY APPLICATION (2026-09-23). `main : IO ()` is fixed by the
+          -- language, so main always needs the world token applied. When the
+          -- compiled arity is >= 1 the zero args above supply it. When it is 0,
+          -- main compiled to a VALUE of type `IO ()` -- a closure waiting for
+          -- that token -- and calling it merely allocates the closure and
+          -- discards the pointer, so nothing in the program runs.
+          --
+          -- Measured on the evm soundness fixture: `pop(Main_u_main())` with
+          -- `Main_u_main() { result := Main_u_runCovered() }` and
+          -- `Main_u_runCovered() { result := mk_closure(2, 1, 0,0,0,0) }`. The
+          -- body of closure 2 was emitted (after the DCE fix) and never
+          -- reached: 0 gas, and the ProfileFlush carried 11 counter slots for
+          -- 11 labels with all 11 zero. `hit == 0` then reported as
+          -- "numerator dead: revm executed the fixture".
+          --
+          -- Arity 0 is the discriminator rather than a guess about the return
+          -- value, because main's TYPE decides this, not its shape.
+        , code = initMemory ++
+            [ YExprStmt $ yulCall "pop"
+                [ if mainArity == 0
+                    then yulCall "apply_closure" [yulCall mainName [], yulNum 0]
+                    else yulCall mainName mainArgs
+                ]
+            ]
         , functions = reachableFuns
         , subObjects = []
         }
