@@ -802,6 +802,10 @@ description = "${module_self}/UnifiedRunner SHALL clean up all temporary files (
 id = "REQ_COV_UNI_003"
 description = "${module_self}/UnifiedRunner SHALL exclude test modules from branch coverage calculation"
 
+[[spec]]
+id = "REQ_COV_UNI_PERSIST_001"
+description = "${module_self}/UnifiedRunner.resolveRuntimeBuildDir SHALL return EphemeralRuntimeDir \".idris2-coverage-runtime-<uid>\" when IDRIS2COV_RUNTIME_BUILD_DIR is unset, blank, or not a safe name, and PersistentRuntimeDir <name> (trimmed) otherwise. A safe name (persistentRuntimeDirOk) is non-empty, only [A-Za-z0-9._-], not \".\", not \"build\" (the plain build dir, whose TTCs carry uninstrumented compexpr), and contains no \"..\". runtimeBuildDirCleanup SHALL remove an ephemeral dir entirely and SHALL remove nothing from a persistent one. runtimeChunkNames SHALL give an ephemeral chunk uid-unique runner module, executable and /tmp hits path, and a persistent chunk names that depend only on the chunk index (hits path inside the dir), because the fork bakes the hits path into the program. runtimeInputsDigestCmd SHALL digest every .idr under the sourcedir except Temp* modules, the runner source and ipkg, the compiler's .so, and the content of every installed library .ttc under ~/.idris2 and IDRIS2_PACKAGE_PATH. reuseRuntimeExecutable SHALL be true only for a persistent dir whose non-empty current digest equals the digest stored beside an executable that still exists. runRuntimePathHitsChunk SHALL build in that dir unless it reuses the executable, SHALL delete the stored digest before any build and write it only after a successful one, SHALL print the build's elapsed seconds, the kind of dir, and whether the executable was reused or rebuilt, and SHALL say so when a set value was refused. test-evidence: test_REQ_COV_UNI_PERSIST_001."
+
 [[type]]
 id = "REQ_TYPE_UNI_001"
 text = "There exists a record `TestResult` containing testName, passed, and message fields"
