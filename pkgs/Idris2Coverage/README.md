@@ -66,6 +66,26 @@ The intended use is:
 This is the output surface now consumed by `lazy * ask --steps=4` and
 EtherClaw HardHarness integration.
 
+### Keeping the instrumented build between runs (`IDRIS2COV_RUNTIME_BUILD_DIR`)
+
+For large packages the runtime hits come from a test executable compiled with
+`--dumppathshits`. By default each run compiles it in a fresh
+`.idris2-coverage-runtime-<uid>` and deletes it. With
+`IDRIS2COV_RUNTIME_BUILD_DIR=<name>`, a directory under the project, the
+build is kept. Later runs recompile only changed modules, and they reuse the
+executable outright when a digest of everything it is compiled from is
+unchanged: the project's `.idr` files, the runner and ipkg, the compiler's
+`.so`, and every installed library `.ttc`. Each runtime chunk prints
+`Runtime chunk N build: S s in … (executable reused | rebuilt: inputs digest …)`.
+
+The name must be letters, digits, `.`, `_` or `-`. `build` is refused, because
+a plain build's TTCs carry uninstrumented code, and so is anything containing
+`..`. Refused values fall back to the fresh directory and say so. Use one
+directory per tree, and run one measurement at a time in it. Spec:
+`REQ_COV_UNI_PERSIST_001`. Measured on luci `pkgs/Luci` (186 modules): with the
+executable reused, the instrumented build went from 645 s to 0 s, and the
+universe and hit sets were identical.
+
 ## Key Features
 
 - **Path-first**: Reports exact missing path obligations rather than only function summaries

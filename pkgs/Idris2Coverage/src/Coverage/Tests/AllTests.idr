@@ -836,6 +836,61 @@ test_UNI_006 = do
       let funcs = parseDumpcasesFile content
       in not (null funcs)
 
+||| REQ_COV_UNI_PERSIST_001: the runtime build dir is persistent only for a safe
+||| name (never `build`, never a path out of the project) and falls back to the
+||| old fresh per-uid dir otherwise; an ephemeral dir is removed whole and a
+||| persistent one kept; a persistent chunk uses stable module/exe/hits names
+||| while an ephemeral one uses the uid; and the executable is reused only in a
+||| persistent dir, with a computed digest equal to the stored one and the exe present.
+covering
+test_REQ_COV_UNI_PERSIST_001 : IO Bool
+test_REQ_COV_UNI_PERSIST_001 = do
+  let fresh = ".idris2-coverage-runtime-u1"
+      nameOf : Maybe String -> String
+      nameOf v = runtimeBuildDirName (resolveRuntimeBuildDir v "u1")
+      persistent : Maybe String -> Bool
+      persistent v = case resolveRuntimeBuildDir v "u1" of
+                       PersistentRuntimeDir _ => True
+                       EphemeralRuntimeDir _ => False
+      p = PersistentRuntimeDir "build-pathcov"
+      e = EphemeralRuntimeDir fresh
+      pn = runtimeChunkNames p "/abs/proj" "u1" 0
+      pn2 = runtimeChunkNames p "/abs/proj" "u2" 0
+      en = runtimeChunkNames e "/abs/proj" "u1" 3
+      digest = runtimeInputsDigestCmd "src" "t.ipkg" "src/R.idr" "/fork/idris2"
+  pure $ all id
+    [ nameOf Nothing == fresh
+    , not (persistent Nothing)
+    , nameOf (Just "   ") == fresh
+    , persistent (Just " build-pathcov ")
+    , nameOf (Just " build-pathcov ") == "build-pathcov"
+    , nameOf (Just "build") == fresh
+    , nameOf (Just "..") == fresh
+    , nameOf (Just "a/../../x") == fresh
+    , nameOf (Just "/tmp/x") == fresh
+    , nameOf (Just "a b") == fresh
+    , nameOf (Just ".") == fresh
+    , runtimeBuildDirCleanup e == "rm -rf " ++ fresh
+    , runtimeBuildDirCleanup p == ":"
+    , pn.rcModName == pn2.rcModName
+    , pn.rcExecName == pn2.rcExecName
+    , pn.rcHitsPath == pn2.rcHitsPath
+    , pn.rcHitsPath == "/abs/proj/build-pathcov/pathhits-0.txt"
+    , en.rcModName == "TempPathRunnerChunk_u1"
+    , en.rcHitsPath == "/tmp/idris2_pathhits_chunk_u1_3.txt"
+    , isPrefixOf "TempPathRunnerChunk_" pn.rcModName
+    , isInfixOf "! -name 'Temp*'" digest
+    , isInfixOf "sha256sum t.ipkg src/R.idr" digest
+    , isInfixOf "IDRIS2_PACKAGE_PATH" digest
+    , isInfixOf "_app/$n.so" digest
+    , reuseRuntimeExecutable p "abc" (Just "abc\n") True
+    , not (reuseRuntimeExecutable p "abc" (Just "abd") True)
+    , not (reuseRuntimeExecutable p "abc" Nothing True)
+    , not (reuseRuntimeExecutable p "abc" (Just "abc") False)
+    , not (reuseRuntimeExecutable p "" (Just "") True)
+    , not (reuseRuntimeExecutable e "abc" (Just "abc") True)
+    ]
+
 -- =============================================================================
 -- ChezMangle Tests (MGL_001-004)
 -- =============================================================================
@@ -999,6 +1054,7 @@ allTests =
   , ("REQ_COV_UNI_002", test_UNI_004)
   , ("REQ_COV_UNI_003", test_UNI_005)
   , ("REQ_COV_UNI_004", test_UNI_006)
+  , ("REQ_COV_UNI_PERSIST_001", test_REQ_COV_UNI_PERSIST_001)
   , ("REQ_COV_MGL_001", test_MGL_001)
   , ("REQ_COV_MGL_002", test_MGL_002)
   , ("REQ_COV_MGL_003", test_MGL_003)

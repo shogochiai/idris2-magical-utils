@@ -2095,6 +2095,105 @@ runtimeChunkTestModuleCeiling = 12
 runtimeChunkSize : Nat
 runtimeChunkSize = 8
 
+||| Where a runtime (numerator) chunk compiles its instrumented TTCs.
+|||
+||| The default is a fresh `.idris2-coverage-runtime-<uid>` that the chunk deletes,
+||| so every run recompiles the whole project with `--dumppathshits` from nothing.
+||| `IDRIS2COV_RUNTIME_BUILD_DIR=<name>` names a directory under the project that is
+||| KEPT: the next run hash-checks the TTCs already there and recompiles only the
+||| modules whose source (or imports) changed. It must be a directory used for
+||| nothing else — the fork stores each definition's compiled, instrumented
+||| expression in its TTC (`compexpr`), so a TTC written by a plain `--build` would
+||| be reused as if instrumented and its paths would never report a hit. That is
+||| why `build` itself is refused.
+public export
+data RuntimeBuildDir = PersistentRuntimeDir String | EphemeralRuntimeDir String
+
+||| A name that is safe to splice into an ipkg `builddir` and a shell command, and
+||| that cannot reach outside the project: non-empty, only [A-Za-z0-9._-], not `.`,
+||| `..`, or anything containing `..`, and not the plain build dir `build`.
+export
+persistentRuntimeDirOk : String -> Bool
+persistentRuntimeDirOk d =
+  d /= "" && d /= "." && d /= "build" && not (isInfixOf ".." d)
+    && all (\c => isAlphaNum c || c == '.' || c == '_' || c == '-') (unpack d)
+
+||| REQ_COV_UNI_PERSIST_001. An unset or blank value is the old behaviour; a value
+||| that is not a safe name is ALSO the old behaviour, and the caller says so — a
+||| typo must cost a slow run, never a write outside the project.
+export
+resolveRuntimeBuildDir : (envValue : Maybe String) -> (uid : String) -> RuntimeBuildDir
+resolveRuntimeBuildDir (Just v) uid =
+  if persistentRuntimeDirOk (trim v)
+     then PersistentRuntimeDir (trim v)
+     else EphemeralRuntimeDir (".idris2-coverage-runtime-" ++ uid)
+resolveRuntimeBuildDir Nothing uid = EphemeralRuntimeDir (".idris2-coverage-runtime-" ++ uid)
+
+export
+runtimeBuildDirName : RuntimeBuildDir -> String
+runtimeBuildDirName (PersistentRuntimeDir d) = d
+runtimeBuildDirName (EphemeralRuntimeDir d) = d
+
+||| What the chunk removes from its build dir when it is done. An ephemeral dir
+||| goes entirely. A persistent one keeps everything: its runner module, exe and
+||| hits path have STABLE names (runtimeChunkNames), so the TTCs are what the next
+||| build hash-checks and the exe is what the next run may reuse unrebuilt.
+export
+runtimeBuildDirCleanup : RuntimeBuildDir -> String
+runtimeBuildDirCleanup (EphemeralRuntimeDir d) = "rm -rf " ++ d
+runtimeBuildDirCleanup (PersistentRuntimeDir _) = ":"
+
+||| The names one runtime chunk uses. Ephemeral: unique per run, as before.
+||| Persistent: stable per chunk index — the runner module, the executable, and
+||| the hits file the executable writes (the fork bakes the hits path into the
+||| program at codegen, and opens it with `replace` at start-up, so a reused exe
+||| must write to the same path every time).
+public export
+record RuntimeChunkNames where
+  constructor MkRuntimeChunkNames
+  rcModName  : String
+  rcExecName : String
+  rcHitsPath : String
+
+export
+runtimeChunkNames : RuntimeBuildDir -> (absProjectDir, uid : String) -> (idx : Nat) -> RuntimeChunkNames
+runtimeChunkNames (EphemeralRuntimeDir _) _ uid idx =
+  MkRuntimeChunkNames ("TempPathRunnerChunk_" ++ uid) ("temp-paths-chunk-" ++ uid)
+                      ("/tmp/idris2_pathhits_chunk_" ++ uid ++ "_" ++ show idx ++ ".txt")
+runtimeChunkNames (PersistentRuntimeDir d) absDir _ idx =
+  MkRuntimeChunkNames ("TempPathRunnerChunk_persist_" ++ show idx) ("temp-paths-persist-" ++ show idx)
+                      (absDir ++ "/" ++ d ++ "/pathhits-" ++ show idx ++ ".txt")
+
+||| A shell command printing one digest of every input the chunk's executable is
+||| compiled from: every `.idr` under the sourcedir except generated `Temp*`
+||| modules (the runner imports the tests, which reach the whole package), the
+||| runner source and the ipkg, the compiler's own `.so` (the launcher script is
+||| byte-identical across builds), and the CONTENT of every installed library
+||| `.ttc` the build can resolve (~/.idris2 and IDRIS2_PACKAGE_PATH). Prints ""
+||| on any failure, which never matches a stored digest.
+export
+runtimeInputsDigestCmd : (sourcedir, ipkgName, runnerIdr, compiler : String) -> String
+runtimeInputsDigestCmd sourcedir ipkg runner compiler =
+  "set -o pipefail 2>/dev/null; { "
+    ++ "find " ++ sourcedir ++ " -name '*.idr' ! -name 'Temp*' -print0 | sort -z | xargs -0 sha256sum && "
+    ++ "sha256sum " ++ ipkg ++ " " ++ runner ++ " && "
+    ++ "b=\"$(command -v " ++ compiler ++ " || echo " ++ compiler ++ ")\" && "
+    ++ "r=\"$(readlink -f \"$b\")\" && n=\"$(basename \"$r\")\" && "
+    ++ "if [ -f \"$(dirname \"$r\")/${n}_app/$n.so\" ]; then sha256sum \"$(dirname \"$r\")/${n}_app/$n.so\"; else sha256sum \"$r\"; fi && "
+    ++ "for p in \"$HOME/.idris2/idris2-0.8.0\" $(printf %s \"${IDRIS2_PACKAGE_PATH:-}\" | tr ':' ' '); do "
+    ++ "[ -d \"$p\" ] && find \"$p\" -name '*.ttc' -print0 | sort -z | xargs -0 sha256sum; done; "
+    ++ "} | sha256sum | cut -d' ' -f1"
+
+||| Reuse the executable only in a persistent dir, only when the inputs digest
+||| was computed (non-empty), equals the one stored beside the exe when it was
+||| built, and the exe is still there. Anything else builds.
+export
+reuseRuntimeExecutable : RuntimeBuildDir -> (now : String) -> (stored : Maybe String)
+                      -> (exeExists : Bool) -> Bool
+reuseRuntimeExecutable (EphemeralRuntimeDir _) _ _ _ = False
+reuseRuntimeExecutable (PersistentRuntimeDir _) now stored exeExists =
+  all id [ trim now /= "", map trim stored == Just (trim now), exeExists ]
+
 ||| Run ONE runtime path-hits chunk: build a temp exe over (tempRunner + this
 ||| chunk's test modules), run it with --dumppathshits, return the chunk's hits.
 ||| Each chunk is its own process so the OS reclaims its heap between chunks —
@@ -2111,22 +2210,34 @@ runRuntimePathHitsChunk : (projectDir : String)
                        -> IO (List PathRuntimeHit)
 runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chunkTestModules idx = do
   uid <- getUniqueId
-  let tempModName = "TempPathRunnerChunk_" ++ uid
-  let tempExecName = "temp-paths-chunk-" ++ uid
+  absProjectDir <- toAbsolutePath projectDir
+  envBuildDir <- getEnv "IDRIS2COV_RUNTIME_BUILD_DIR"
+  let rbd = resolveRuntimeBuildDir envBuildDir uid
+  let tempBuildDir = runtimeBuildDirName rbd
+  case (envBuildDir, rbd) of
+    (Just v, EphemeralRuntimeDir _) =>
+      when (trim v /= "") $
+        putStrLn $ "    IDRIS2COV_RUNTIME_BUILD_DIR=" ++ show v
+                ++ " is not a safe directory name (letters, digits, . _ -; not build, not ..);"
+                ++ " building in a fresh directory instead"
+    _ => pure ()
+  let names = runtimeChunkNames rbd absProjectDir uid idx
+  let tempModName = names.rcModName
+  let tempExecName = names.rcExecName
+  let pathHitsPath = names.rcHitsPath
   let tempIdrPath = projectDir ++ "/" ++ sourcedir ++ "/" ++ tempModName ++ ".idr"
   let tempIpkgPath = projectDir ++ "/" ++ tempExecName ++ ".ipkg"
   let tempIpkgName = tempExecName ++ ".ipkg"
-  let tempBuildDir = ".idris2-coverage-runtime-" ++ uid
   let packTomlPath = projectDir ++ "/pack.toml"
   let dumppathsPath = "/tmp/idris2_dumppaths_chunk_" ++ uid ++ "_" ++ show idx ++ ".json"
-  let pathHitsPath = "/tmp/idris2_pathhits_chunk_" ++ uid ++ "_" ++ show idx ++ ".txt"
   let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
+  let inputsFile = projectDir ++ "/" ++ tempBuildDir ++ "/exec/" ++ tempExecName ++ ".inputs"
 
   let cleanup : IO ()
       cleanup = do
         removeFileIfExists tempIdrPath
         removeFileIfExists tempIpkgPath
-        _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
+        _ <- system $ "cd " ++ projectDir ++ " && " ++ runtimeBuildDirCleanup rbd
         removeFileIfExists dumppathsPath
         removeFileIfExists pathHitsPath
 
@@ -2148,7 +2259,48 @@ runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chun
   Right createdPackToml <- writePackTomlIfMissing packTomlPath packTomlContent
     | Left _ => do removeFileIfExists tempIdrPath; removeFileIfExists tempIpkgPath; pure []
 
-  buildResult <- buildIpkgWithClean False projectDir tempIpkgName
+  -- REUSE THE EXECUTABLE when nothing it is compiled from has changed. Measured
+  -- 2026-09-29 on luci pkgs/Luci (186 modules), persistent dir warm and NO source
+  -- change: the build still took 144 s, of which ~119 s was Chez compiling the
+  -- 6.7 MB whole-program .ss — Idris re-runs codegen on every --build, and a warm
+  -- TTC cache cannot shorten that part. The digest covers every input of that
+  -- program (runtimeInputsDigestCmd), so a reuse is the same program.
+  inputsNow <- case rbd of
+    PersistentRuntimeDir _ => do
+      compiler <- map (fromMaybe "idris2") resolveIdris2Override
+      let digestOut = "/tmp/idris2cov-inputs-" ++ uid ++ ".txt"
+      _ <- system ("cd " ++ projectDir ++ " && ( "
+                   ++ runtimeInputsDigestCmd sourcedir tempIpkgName (sourcedir ++ "/" ++ tempModName ++ ".idr") compiler
+                   ++ " ) > " ++ digestOut ++ " 2>/dev/null")
+      r <- readFile digestOut
+      removeFileIfExists digestOut
+      pure (either (const "") trim r)
+    EphemeralRuntimeDir _ => pure ""
+  stored <- readFile inputsFile
+  exeThere <- exists (projectDir ++ "/" ++ tempBuildDir ++ "/exec/" ++ tempExecName)
+  let reuse = reuseRuntimeExecutable rbd inputsNow (either (const Nothing) Just stored) exeThere
+
+  -- Time the build alone: it is the part a persistent build dir can shorten (the
+  -- slices that follow run every test however the exe was built).
+  buildStart <- clockTime Monotonic
+  buildResult <- the (IO (Either String ())) $ if reuse then pure (Right ())
+                 else do
+                   -- a failed or interrupted build must not leave a digest that
+                   -- vouches for whatever exe is left behind
+                   removeFileIfExists inputsFile
+                   buildIpkgWithClean False projectDir tempIpkgName
+  buildEnd <- clockTime Monotonic
+  putStrLn $ "    Runtime chunk " ++ show idx ++ " build: "
+          ++ show (seconds (timeDifference buildEnd buildStart)) ++ " s in "
+          ++ (case rbd of
+                PersistentRuntimeDir d => "persistent build dir " ++ d
+                EphemeralRuntimeDir d => "fresh build dir " ++ d)
+          ++ (if reuse then " (executable reused: inputs digest " ++ substr 0 12 inputsNow ++ " unchanged)"
+              else case rbd of
+                     PersistentRuntimeDir _ =>
+                       if inputsNow == "" then " (rebuilt: inputs digest could not be computed)"
+                                          else " (rebuilt: inputs digest " ++ substr 0 12 inputsNow ++ ")"
+                     EphemeralRuntimeDir _ => "")
   case buildResult of
     Left err => do
       putStrLn $ "    Runtime chunk " ++ show idx ++ " build failed: " ++ err
@@ -2156,6 +2308,7 @@ runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chun
       cleanup
       pure []
     Right () => do
+      when (not reuse && inputsNow /= "") $ ignore (writeFile inputsFile (inputsNow ++ "\n"))
       -- Run the built exe in IDRIS2COV_TEST_OFFSET/_LIMIT slices (≈100 tests per
       -- fresh process) instead of one whole-suite invocation. A single process
       -- that runs ALL of EtherClaw's ~1100 tests under path instrumentation grows
