@@ -137,3 +137,11 @@ ipkg = "idris2-lsp.ipkg"
 type = "local"
 path = "pkgs/Idris2Evm"
 ipkg = "idris2-yul.ipkg"
+
+# idris2-evm-coverage and idris2-subcontract depend on this, but it was declared
+# nowhere at the root, so `pack install-deps` inside pkgs/Idris2DfxCoverage failed
+# with "Unknown package: idris2-test-suite" (clean NixOS box, 2026-09-30).
+[custom.all.idris2-test-suite]
+type = "local"
+path = "pkgs/Idris2TestSuite"
+ipkg = "idris2-test-suite.ipkg"

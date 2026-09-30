@@ -50,7 +50,11 @@ splitPath path =
 ||| This avoids local pack.toml interference when running inside target projects.
 installedIdrisPrelude : String
 installedIdrisPrelude =
-  "APP=\"$(cd /tmp && pack app-path idris2)\""
+  -- Never wait on a prompt inside a measurement: a git fetch that pack runs for a
+  -- dependency must fail, and say why, rather than sit on a host-key or credential
+  -- prompt (44+ minutes, no timeout, clean NixOS box 2026-09-30).
+  "export GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=10'"
+  ++ " && APP=\"$(cd /tmp && pack app-path idris2)\""
   ++ " && export IDRIS2_PACKAGE_PATH=\"$(cd /tmp && pack package-path)\""
   ++ " && export IDRIS2_LIBS=\"$(cd /tmp && pack libs-path)\""
   ++ " && export IDRIS2_DATA=\"$(cd /tmp && pack data-path)\""
@@ -238,20 +242,68 @@ generateTempIpkg pkgName mainMod modules execName depends sourcedir dumpcasesPat
 |||
 ||| @projectPackToml - Content of project's existing pack.toml (empty string if none)
 ||| @return - Complete pack.toml content with idris2-coverage dependency
-generateTempPackToml : String -> String
-generateTempPackToml projectPackToml =
-  let coverageDef = unlines
-        [ "# Auto-generated: idris2-coverage dependency for test profiling"
-        , "# This enables Coverage.Profiler to track function hits during test execution"
-        , "[custom.all.idris2-coverage]"
-        , "type   = \"github\""
-        , "url    = \"git@github.com:shogochiai/idris2-magical-utils.git\""
-        , "commit = \"latest\""
-        , "ipkg   = \"pkgs/Idris2Coverage/idris2-coverage.ipkg\""
-        ]
+||| The idris2-coverage dependency block the temp pack.toml carries.
+||| `Just dir` = a checkout of pkgs/Idris2Coverage on this machine: a `local` dep,
+||| no network. `Nothing` = fetch from GitHub over HTTPS, which a public repository
+||| serves with no credentials. Until 2026-09-30 this was an SSH url: SSH needs a
+||| registered key even for a public repository, and on a machine with no ~/.ssh
+||| the clone waited on the host-key prompt for 44+ minutes with no timeout while
+||| the same `git ls-remote` over HTTPS took 1 s (clean NixOS box).
+export
+coverageDepBlock : Maybe String -> String
+coverageDepBlock (Just dir) = unlines
+  [ "# Auto-generated: idris2-coverage dependency for test profiling (local checkout)"
+  , "[custom.all.idris2-coverage]"
+  , "type   = \"local\""
+  , "path   = \"" ++ dir ++ "\""
+  , "ipkg   = \"idris2-coverage.ipkg\""
+  ]
+coverageDepBlock Nothing = unlines
+  [ "# Auto-generated: idris2-coverage dependency for test profiling"
+  , "# This enables Coverage.Profiler to track function hits during test execution"
+  , "[custom.all.idris2-coverage]"
+  , "type   = \"github\""
+  , "url    = \"https://github.com/shogochiai/idris2-magical-utils.git\""
+  , "commit = \"latest\""
+  , "ipkg   = \"pkgs/Idris2Coverage/idris2-coverage.ipkg\""
+  ]
+
+export
+generateTempPackTomlWith : Maybe String -> String -> String
+generateTempPackTomlWith localCoverage projectPackToml =
+  let coverageDef = coverageDepBlock localCoverage
   in if projectPackToml == ""
        then coverageDef
        else projectPackToml ++ "\n\n" ++ coverageDef
+
+||| The pre-2026-09-30 entry point: no local checkout known, HTTPS from GitHub.
+generateTempPackToml : String -> String
+generateTempPackToml projectPackToml = generateTempPackTomlWith Nothing projectPackToml
+
+||| Where a checkout of pkgs/Idris2Coverage would be, relative to the measured
+||| project: the sibling layout every luci project uses (`../idris2-magical-utils`
+||| beside the repo), one and two levels deeper for a package dir, and ~/code as
+||| a last try. Pure list of candidates; the caller keeps the first that exists.
+export
+localCoverageCandidates : (projectDir : String) -> (home : String) -> List String
+localCoverageCandidates projectDir home =
+  [ projectDir ++ "/../idris2-magical-utils/pkgs/Idris2Coverage"
+  , projectDir ++ "/../../idris2-magical-utils/pkgs/Idris2Coverage"
+  , projectDir ++ "/../../../idris2-magical-utils/pkgs/Idris2Coverage"
+  , home ++ "/code/idris2-magical-utils/pkgs/Idris2Coverage"
+  ]
+
+||| The first candidate that holds idris2-coverage.ipkg, or Nothing.
+findLocalCoverage : String -> IO (Maybe String)
+findLocalCoverage projectDir = do
+  home <- map (fromMaybe "") (getEnv "HOME")
+  go (localCoverageCandidates projectDir home)
+  where
+    go : List String -> IO (Maybe String)
+    go [] = pure Nothing
+    go (d :: ds) = do
+      ok <- exists (d ++ "/idris2-coverage.ipkg")
+      if ok then pure (Just d) else go ds
 
 ||| Parent directory of a path (drop the last "/segment"). "" or "/" at the root.
 parentOf : String -> String
@@ -1024,7 +1076,8 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        uid <- getUniqueId
        let tempBuildDir = ".idris2-static-dumppaths-build-" ++ uid
        projectPackToml <- readProjectPackToml projectDir
-       let packTomlContent = generateTempPackToml projectPackToml
+       localCov <- findLocalCoverage projectDir
+       let packTomlContent = generateTempPackTomlWith localCov projectPackToml
        -- LEAF-FIRST ordering (OOM fix, 2026-07-23): ipkgs conventionally list
        -- ROOT modules (Types/Main) first, so chunk 0 used to compile nearly
        -- the package's ENTIRE dependency closure in one fork process — an
@@ -1233,7 +1286,8 @@ runProjectDumpcasesWithTempIpkg ipkgPath = do
       let tempIpkgName = tempExecName ++ ".ipkg"
       let packTomlPath = projectDir ++ "/pack.toml"
       projectPackToml <- readProjectPackToml projectDir
-      let packTomlContent = generateTempPackToml projectPackToml
+      localCov <- findLocalCoverage projectDir
+      let packTomlContent = generateTempPackTomlWith localCov projectPackToml
       let dumpcasesPath = "/tmp/idris2_dumpcases_project_" ++ uid ++ ".txt"
 
       let runnerSource = generateImportWrapper tempModName projectModules
