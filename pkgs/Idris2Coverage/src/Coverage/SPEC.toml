@@ -821,6 +821,20 @@ description = "Coverage.Core's path join SHALL return, element for element and i
 id = "REQ_COV_PATHS_ARTIFACTS_ONLY_001"
 description = "`idris2-cov paths` SHALL accept --artifacts-only, OFF by default. With it and --emit-artifacts <dir>, the command SHALL write the artifacts and print artifactsOnlyNotice <dir> in place of its own analysis and report. With it and no --emit-artifacts, artifactsOnlyRefusal SHALL return a refusal the command prints before any build, exiting non-zero. Without it the output SHALL be unchanged, because the report has readers: lazy writes it to .lazy-cov-artifacts/cov.log and luci reads that file back (measureGapSets, extractPathsDenominator, scripts/ci/phase4-direct-deps.sh). test-evidence: test_REQ_COV_PATHS_ARTIFACTS_ONLY_001."
 
+# luci feat/step4-diffscope stage 2. A static chunk's dumppaths holds its members'
+# paths and those of loaded modules whose name extends a member's (a chunk of
+# Luci.Preflight also dumps Luci.Preflight.ToolHome; one of Luci.Boundary.DaemonOps,
+# which imports four project modules, dumps DaemonOps only). With paths attributed
+# to the longest module prefix, each module's paths can be a row of their own.
+
+[[spec]]
+id = "REQ_COV_STATIC_MEMO_001"
+description = "Coverage.StaticMemo's pure parts SHALL behave as follows. A row key SHALL be the digest of moduleKeyMaterial: a versioned header, the tool key (this idris2-cov's .so, the fork compiler's .so, every installed library .ttc), the module's source hash, and one line per project module in its transitive import closure (importClosure: transitive, sorted, excluding the module, safe on cycles; importsOfSource: plain and public imports of project modules only) with that module's source hash; changing any one of them SHALL change the material. moduleOfFunction SHALL pick the longest module prefix; groupByModule SHALL keep input order and set apart paths of no project module (a chunk's wrapper), which are never stored; a row SHALL hold only its own module's paths, because a chunk also dumps loaded modules whose name extends a member's. stripGenCounter SHALL remove only the first number of a `.<n>:<m>:` generated name. staleHitIds SHALL return the hit ids that are outside the universe but inside it once counters are stripped, and nothing for a hit merely absent (a record projection, an interface wrapper) or present. extractPathIds SHALL read every path_id of a dumppaths JSON text, commas and escapes included. staticMemoDirFor SHALL turn the memo on only for IDRIS2COV_STATIC_MEMO=\"1\" with a persistent runtime build dir (<abs>/<dir>/static-memo), and SHALL refuse (Left) \"1\" with an ephemeral one. test-evidence: test_REQ_COV_STATIC_MEMO_001."
+
+[[spec]]
+id = "REQ_COV_STATIC_MEMO_002"
+description = "A static memo row SHALL be served only after the run that computed it succeeded: stageRow writes into staging, loadRow reads committed rows only and only under the exact key, commitStaging moves staging into the memo, clearStaging (run start) drops staged rows an interrupted run left without touching committed ones, and discardMemo removes every row. In the chunked static denominator with the memo on, chunk boundaries SHALL be those of the plain path; members with a committed row under their current key SHALL be served from it and only the others built; every built member's paths SHALL be staged under its key (an empty row too); each chunk SHALL print its time, memo/recomputed module and path counts and the recomputed members, and the run a summary with the tool key. At the end of the chunked path coverage run, rows SHALL be committed only when the run produced covered hits and staleHitIds of the served universe against them is empty; with a stale id the memo SHALL be discarded and the denominator recomputed without it. test-evidence: test_REQ_COV_STATIC_MEMO_002."
+
 [[type]]
 id = "REQ_TYPE_UNI_001"
 text = "There exists a record `TestResult` containing testName, passed, and message fields"
