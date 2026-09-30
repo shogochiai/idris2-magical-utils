@@ -1117,7 +1117,10 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
            let excl     = MkLoadedExclusions
                             (prefixPattern "TempStaticDumppaths" "Chunked-dumppaths build scaffolding (generated per-chunk Main wrapper)"
                               :: idris2FullExclusions) "builtin"
-               deduped  = nub paths
+               -- `nub` on PathObligation compares path ids (its Eq instance), so
+               -- this is dedupePathsById. Measured 2026-09-30 on luci pkgs/Luci:
+               -- 24429 obligations, ~88 s as `nub`.
+               deduped  = dedupePathsById paths
                filtered = filterPathObligations excl emptyExclusionConfig deduped
                dropped  = length deduped `minus` length filtered in
            if null filtered
@@ -2542,3 +2545,29 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
           removeFileIfExists pathHitsPath
 
           pure $ Right (dumppathsContent, hits)
+
+-- =============================================================================
+-- `idris2-cov paths --artifacts-only`
+-- =============================================================================
+
+||| The refusal for `--artifacts-only` without `--emit-artifacts`: with no
+||| directory nothing would be written and nothing reported, and an exit 0 with
+||| no output reads as "measured, empty". Nothing when the flags agree.
+|||
+||| The flag is OFF by default because the report it skips has readers: lazy
+||| pipes it into `.lazy-cov-artifacts/cov.log`, and luci reads that file back
+||| (BuildFromThread `measureGapSets`, `extractPathsDenominator`) and so does
+||| luci's scripts/ci/phase4-direct-deps.sh.
+export
+artifactsOnlyRefusal : (artifactsOnly : Bool) -> (emitDir : Maybe String) -> Maybe String
+artifactsOnlyRefusal True Nothing =
+  Just "Error: --artifacts-only needs --emit-artifacts <dir> (otherwise nothing is written and nothing reported)"
+artifactsOnlyRefusal True (Just _) = Nothing
+artifactsOnlyRefusal False _ = Nothing
+
+||| What `--artifacts-only` prints in place of the report, so the skip is said.
+export
+artifactsOnlyNotice : (emitDir : String) -> String
+artifactsOnlyNotice dir =
+  "artifacts written to " ++ dir
+    ++ "; this process's own analysis and report skipped (--artifacts-only)"

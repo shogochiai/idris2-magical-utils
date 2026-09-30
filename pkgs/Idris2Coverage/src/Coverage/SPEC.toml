@@ -806,6 +806,21 @@ description = "${module_self}/UnifiedRunner SHALL exclude test modules from bran
 id = "REQ_COV_UNI_PERSIST_001"
 description = "${module_self}/UnifiedRunner.resolveRuntimeBuildDir SHALL return EphemeralRuntimeDir \".idris2-coverage-runtime-<uid>\" when IDRIS2COV_RUNTIME_BUILD_DIR is unset, blank, or not a safe name, and PersistentRuntimeDir <name> (trimmed) otherwise. A safe name (persistentRuntimeDirOk) is non-empty, only [A-Za-z0-9._-], not \".\", not \"build\" (the plain build dir, whose TTCs carry uninstrumented compexpr), and contains no \"..\". runtimeBuildDirCleanup SHALL remove an ephemeral dir entirely and SHALL remove nothing from a persistent one. runtimeChunkNames SHALL give an ephemeral chunk uid-unique runner module, executable and /tmp hits path, and a persistent chunk names that depend only on the chunk index (hits path inside the dir), because the fork bakes the hits path into the program. runtimeInputsDigestCmd SHALL digest every .idr under the sourcedir except Temp* modules, the runner source and ipkg, the compiler's .so, and the content of every installed library .ttc under ~/.idris2 and IDRIS2_PACKAGE_PATH. reuseRuntimeExecutable SHALL be true only for a persistent dir whose non-empty current digest equals the digest stored beside an executable that still exists. runRuntimePathHitsChunk SHALL build in that dir unless it reuses the executable, SHALL delete the stored digest before any build and write it only after a successful one, SHALL print the build's elapsed seconds, the kind of dir, and whether the executable was reused or rebuilt, and SHALL say so when a set value was refused. test-evidence: test_REQ_COV_UNI_PERSIST_001."
 
+# Measured 2026-09-30 on luci pkgs/Luci (24429 obligations, 135978 hit lines,
+# 12185 distinct hit ids), step4 with the runtime executable reused: idris2-cov
+# spent 405 s in its own analysis + report after writing the artifacts, lazy
+# 229 s in the same analysis, and the chunk merge `nub paths` 88 s. A bench on
+# the same artifacts put 313 s in buildPathCoverageResultFromHits and 80 s in
+# evidenceCounts, all of it `nub`/`elem` over lists.
+
+[[spec]]
+id = "REQ_COV_PATH_SETJOIN_001"
+description = "Coverage.Core's path join SHALL return, element for element and in the same order, what its list form returned: dedupePathsById keeps the first obligation of each path id in input order; coveredPathIds keeps the first occurrence of each covered id in hit order; pathCoverageMeasurement's denominator, excluded and unknown id lists are the distinct obligation ids of their classes in path order, and its covered ids are the distinct hit ids that are in the denominator, in hit order; buildPathCoverageResult's covered, missing and observedOutsideDenominator lists, evidenceCounts and renderPathEvidence agree with the nub/elem definitions they replace. Deduplication and membership SHALL be n log n (Coverage.Core.OrdNub: nubOrdOn / nubOrd / inSet over Data.SortedSet), never nub or elem over a list that grows with the package. UnifiedRunner's chunk merge SHALL dedupe with dedupePathsById, which equals the `nub` it replaces because PathObligation's Eq compares path ids. test-evidence: test_REQ_COV_PATH_SETJOIN_001."
+
+[[spec]]
+id = "REQ_COV_PATHS_ARTIFACTS_ONLY_001"
+description = "`idris2-cov paths` SHALL accept --artifacts-only, OFF by default. With it and --emit-artifacts <dir>, the command SHALL write the artifacts and print artifactsOnlyNotice <dir> in place of its own analysis and report. With it and no --emit-artifacts, artifactsOnlyRefusal SHALL return a refusal the command prints before any build, exiting non-zero. Without it the output SHALL be unchanged, because the report has readers: lazy writes it to .lazy-cov-artifacts/cov.log and luci reads that file back (measureGapSets, extractPathsDenominator, scripts/ci/phase4-direct-deps.sh). test-evidence: test_REQ_COV_PATHS_ARTIFACTS_ONLY_001."
+
 [[type]]
 id = "REQ_TYPE_UNI_001"
 text = "There exists a record `TestResult` containing testName, passed, and message fields"

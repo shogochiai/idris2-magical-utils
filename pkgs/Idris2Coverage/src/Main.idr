@@ -49,9 +49,10 @@ record Options where
   dumppathsJson : Maybe String   -- explicit --dumppaths-json input path
   pathHitsPath : Maybe String    -- optional runtime path-hit file
   emitArtifacts : Maybe String   -- dir to write produced dumppaths.json + path-hits.txt
+  artifactsOnly : Bool           -- --artifacts-only: with --emit-artifacts, write them and stop
 
 defaultOptions : Options
-defaultOptions = MkOptions JSON Nothing Nothing (Just ".") [] False False Nothing False False 10 False Nothing Nothing Nothing
+defaultOptions = MkOptions JSON Nothing Nothing (Just ".") [] False False Nothing False False 10 False Nothing Nothing Nothing False
 
 -- =============================================================================
 -- Argument Parsing
@@ -73,6 +74,8 @@ parseArgs ("--path-hits" :: path :: rest) opts =
   parseArgs rest ({ pathHitsPath := Just path } opts)
 parseArgs ("--emit-artifacts" :: dir :: rest) opts =
   parseArgs rest ({ emitArtifacts := Just dir } opts)
+parseArgs ("--artifacts-only" :: rest) opts =
+  parseArgs rest ({ artifactsOnly := True } opts)
 parseArgs ("--top" :: n :: rest) opts =
   let k : Nat = fromMaybe 10 (parsePositive n)
   in parseArgs rest ({ topK := k } opts)
@@ -139,6 +142,9 @@ OPTIONS:
   --path-hits       Optional newline or csv file of covered path ids
   --emit-artifacts  Write produced dumppaths.json + path-hits.txt to <dir>
                     (lets a caller re-run analysis in-process; build stays here)
+  --artifacts-only  With --emit-artifacts: write the artifacts and skip this process's
+                    own analysis and report. Off by default, because luci reads the
+                    report back from lazy's cov.log (measureGapSets, extractPathsDenominator)
   --top N           Number of high impact targets to include (default: 10)
   --report-leak     Found stdlib/compiler funcs in targets? Report them!
                     Creates a PR automatically. Your help keeps this fresh.
@@ -377,6 +383,13 @@ findTestModulesForPaths ipkg = do
 
 runPaths : Options -> IO ()
 runPaths opts = do
+  -- Refused before any build: without a directory nothing would be written and
+  -- nothing reported, and an exit 0 with no output reads as "measured, empty".
+  case artifactsOnlyRefusal opts.artifactsOnly opts.emitArtifacts of
+    Just msg => do
+      putStrLn msg
+      exitWith (ExitFailure 2)
+    Nothing => pure ()
   loadedExcl <- loadPathExclusionsForCLI
   pathHitsResult <- loadPathHits opts.pathHitsPath
   case pathHitsResult of
@@ -431,15 +444,17 @@ runPaths opts = do
               Right () <- writeFile (dir ++ "/path-hits.txt") (unlines hitLines)
                 | Left werr => putStrLn $ "Warning: failed to write path-hits.txt: " ++ show werr
               pure ()
-          case analyzePathCoverageFromContent loadedExcl emptyExclusionConfig content hits of
-            Left err => putStrLn $ "Error: " ++ err
-            Right result =>
-              if opts.jsonOutput
-                 then putStrLn $ pathCoverageReportToJson result
-                 else do
-                   -- v2: the canonical evidence renderer — counts, no percent.
-                   putStrLn $ renderPathEvidence "" result
-                   putStrLn $ pathMeasurementSummary result.measurement
+          if opts.artifactsOnly
+             then putStrLn $ artifactsOnlyNotice (fromMaybe "" opts.emitArtifacts)
+             else case analyzePathCoverageFromContent loadedExcl emptyExclusionConfig content hits of
+               Left err => putStrLn $ "Error: " ++ err
+               Right result =>
+                 if opts.jsonOutput
+                    then putStrLn $ pathCoverageReportToJson result
+                    else do
+                      -- v2: the canonical evidence renderer — counts, no percent.
+                      putStrLn $ renderPathEvidence "" result
+                      putStrLn $ pathMeasurementSummary result.measurement
 
 -- =============================================================================
 -- Branches Command

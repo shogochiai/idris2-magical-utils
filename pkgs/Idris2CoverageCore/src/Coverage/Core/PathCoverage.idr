@@ -7,6 +7,7 @@ import Data.String
 
 import Coverage.Core.Types
 import Coverage.Core.RuntimeHit
+import Coverage.Core.OrdNub
 import Coverage.Standardization.Types
 import Coverage.Standardization.Model
 
@@ -147,37 +148,38 @@ public export
 filterPaths : (PathObligation -> Bool) -> List PathObligation -> List PathObligation
 filterPaths predicate = filter predicate
 
+||| One obligation per path id, the first one, in input order. The `seen` list
+||| this replaces made it quadratic: 23962 ms for 23901 paths on luci pkgs/Luci.
 public export
 dedupePathsById : List PathObligation -> List PathObligation
-dedupePathsById paths = reverse (go [] [] paths)
-  where
-    go : List String -> List PathObligation -> List PathObligation -> List PathObligation
-    go _ acc [] = acc
-    go seen acc (path :: rest) =
-      if elem path.pathId seen
-         then go seen acc rest
-         else go (path.pathId :: seen) (path :: acc) rest
+dedupePathsById = nubOrdOn (.pathId)
 
+||| Every id list here is built with `nubOrd` and every membership test goes
+||| through a set built once. The lists are the same, element for element and
+||| in the same order, as the `nub`/`elem` forms produced: `nubOrd` keeps first
+||| occurrences in input order, and a filter against a set keeps what a filter
+||| against the list kept.
 public export
 pathCoverageMeasurement : List PathObligation -> List String -> CoverageMeasurement
 pathCoverageMeasurement paths hitPathIds =
   let uniquePaths = dedupePathsById paths
       obligations = map pathObligationToCoverageObligation uniquePaths
       denominatorIds =
-        nub $ map (.obligationId) $
+        nubOrd $ map (.obligationId) $
           filter (\ob => countsAsDenominator ob.classification) obligations
       excludedIds =
-        nub $ map (.obligationId) $
+        nubOrd $ map (.obligationId) $
           filter (\ob => mustBeExcluded ob.classification) obligations
       -- claim-blocking ids: any class whose `blocksClaim` is True — currently
       -- UnknownClassification (untriaged foreign prim) and StubbedReach (stub/spy
       -- hit). Using `blocksClaim` not `== UnknownClassification` keeps this gate
       -- totality-anchored: a new blocking class cannot slip past silently.
       unknownIds =
-        nub $ map (.obligationId) $
+        nubOrd $ map (.obligationId) $
           filter (\ob => blocksClaim ob.classification) obligations
+      denominatorSet = fromList denominatorIds
       coveredIds =
-        filter (\oid => elem oid denominatorIds) (nub hitPathIds)
+        filter (inSet denominatorSet) (nubOrd hitPathIds)
   in MkCoverageMeasurement denominatorIds coveredIds excludedIds unknownIds
 
 public export
@@ -185,17 +187,19 @@ buildPathCoverageResult : List PathObligation -> List String -> PathCoverageResu
 buildPathCoverageResult paths hitPathIds =
   let uniquePaths = dedupePathsById paths
       measurement = pathCoverageMeasurement uniquePaths hitPathIds
+      coveredSet = fromList measurement.coveredIds
+      denominatorSet = fromList measurement.denominatorIds
       covered =
-        filter (\path => elem path.pathId measurement.coveredIds) uniquePaths
+        filter (\path => inSet coveredSet path.pathId) uniquePaths
       missing =
-        filter (\path => elem path.pathId measurement.denominatorIds
-                      && not (elem path.pathId measurement.coveredIds)) uniquePaths
+        filter (\path => inSet denominatorSet path.pathId
+                      && not (inSet coveredSet path.pathId)) uniquePaths
       obligations = map pathObligationToCoverageObligation uniquePaths
       -- Keep what coveredIds throws away. This changes NO bucket: every count in
       -- the report is derived from `measurement`, which is untouched. It only
       -- stops the evidence being unrecoverable.
       outside =
-        filter (\oid => not (elem oid measurement.denominatorIds)) (nub hitPathIds)
+        filter (\oid => not (inSet denominatorSet oid)) (nubOrd hitPathIds)
   in MkPathCoverageResult
        uniquePaths
        covered
@@ -249,8 +253,10 @@ evidenceCounts : PathCoverageResult -> EvidenceCounts
 evidenceCounts result =
   let denomIds = denominatorIds result.measurement
       exclIds  = excludedIds result.measurement
+      denomSet = fromList denomIds
+      exclSet  = fromList exclIds
       limbo    = filter
-                   (\p => not (elem p.pathId denomIds) && not (elem p.pathId exclIds))
+                   (\p => not (inSet denomSet p.pathId) && not (inSet exclSet p.pathId))
                    result.allPaths
   in MkEvidenceCounts
        (length result.allPaths)
@@ -277,9 +283,11 @@ public export
 renderPathEvidence : (headerLabel : String) -> PathCoverageResult -> String
 renderPathEvidence headerLabel result =
   let c = evidenceCounts result
+      denomSet = fromList (denominatorIds result.measurement)
+      exclSet = fromList (excludedIds result.measurement)
       unknownPaths = filter
-                       (\p => not (elem p.pathId (denominatorIds result.measurement))
-                           && not (elem p.pathId (excludedIds result.measurement)))
+                       (\p => not (inSet denomSet p.pathId)
+                           && not (inSet exclSet p.pathId))
                        result.allPaths
   in joinBy "\n" $
        [ "# " ++ headerLabel ++ "Path Coverage Report"
@@ -304,8 +312,8 @@ renderPathEvidence headerLabel result =
        -- needs here is the SPLIT, because the two destinations behave in
        -- opposite directions on the rate.
        ++ (let outside = result.observedOutsideDenominator
-               inUnknown = length (filter (\i => elem i (unknownIds result.measurement)) outside)
-               inExcluded = length (filter (\i => elem i (excludedIds result.measurement)) outside)
+               inUnknown = length (filter (inSet (fromList (unknownIds result.measurement))) outside)
+               inExcluded = length (filter (inSet exclSet) outside)
            in if null outside
                  then []
                  else [ ""

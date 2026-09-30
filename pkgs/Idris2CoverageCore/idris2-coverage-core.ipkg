@@ -17,6 +17,7 @@ modules = Coverage.Core.Types
         , Coverage.Boundary.Canonical
         , Coverage.Core.PathCoverage
         , Coverage.Core.Backend
+        , Coverage.Core.OrdNub
         , Coverage.Core.RuntimeHit
         , Coverage.Core.ObligationMap
         , Coverage.Core.HighImpact

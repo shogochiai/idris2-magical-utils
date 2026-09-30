@@ -18,6 +18,8 @@ import Coverage.UnifiedRunner
 import Coverage.TestCoverage
 import Coverage.Config
 import Coverage.DumpcasesParser
+import Coverage.Standardization.Types
+import Coverage.Standardization.Model
 import Data.List
 import Data.String
 import Data.Maybe
@@ -959,6 +961,114 @@ test_CFG_003 = do
       && emptyExclusionConfig.packageNames == []
 
 -- =============================================================================
+-- REQ_COV_PATH_SETJOIN_001 / REQ_COV_PATHS_ARTIFACTS_ONLY_001
+-- =============================================================================
+
+-- The list forms the set joins replaced, copied verbatim from Coverage.Core
+-- (2026-09-30, before the change), kept here as the reference they must equal.
+refDedupe : List PathObligation -> List PathObligation
+refDedupe paths = reverse (go [] [] paths)
+  where
+    go : List String -> List PathObligation -> List PathObligation -> List PathObligation
+    go _ acc [] = acc
+    go seen acc (path :: rest) =
+      if elem path.pathId seen
+         then go seen acc rest
+         else go (path.pathId :: seen) (path :: acc) rest
+
+refMeasurement : List PathObligation -> List String -> CoverageMeasurement
+refMeasurement paths hitPathIds =
+  let obligations = map pathObligationToCoverageObligation (refDedupe paths)
+      den = nub $ map (.obligationId) $ filter (\ob => countsAsDenominator ob.classification) obligations
+      exc = nub $ map (.obligationId) $ filter (\ob => mustBeExcluded ob.classification) obligations
+      unk = nub $ map (.obligationId) $ filter (\ob => blocksClaim ob.classification) obligations
+      cov = filter (\oid => elem oid den) (nub hitPathIds)
+  in MkCoverageMeasurement den cov exc unk
+
+setjoinPath : String -> String -> ObligationClass -> PathObligation
+setjoinPath pid fn cls = MkPathObligation pid fn "M" cls "reached_clause" Nothing [] Nothing 1
+
+||| REQ_COV_PATH_SETJOIN_001: verifies that the set-based join returns the same
+||| lists, in the same order, as the nub/elem definitions it replaced (copied
+||| above as refDedupe / refMeasurement). The fixture has a duplicated path id
+||| whose FIRST obligation must survive (functionName "first"), duplicated hit
+||| lines, a zero-count hit, hits on an excluded, an unknown and a nonexistent
+||| id (all outside the denominator), and ids whose hit order differs from path
+||| order. Checked: dedupePathsById, coveredPathIds, the four measurement lists,
+||| buildPathCoverageResult's covered / missing / outside lists, evidenceCounts,
+||| and renderPathEvidence's unknown / excluded split lines.
+covering
+test_REQ_COV_PATH_SETJOIN_001 : IO Bool
+test_REQ_COV_PATH_SETJOIN_001 = do
+  let paths =
+        [ setjoinPath "M.a#p0" "first" ReachableObligation
+        , setjoinPath "M.b#p0" "b" LogicallyUnreachable
+        , setjoinPath "M.a#p0" "second" ReachableObligation
+        , setjoinPath "M.c#p0" "c" UnknownClassification
+        , setjoinPath "M.case block in f,go#p0" "d" ReachableObligation
+        , setjoinPath "M.e#p0" "e" StubbedReach
+        , setjoinPath "M.case block in f,go#p0" "d2" ReachableObligation
+        , setjoinPath "M.f#p1" "f" ReachableObligation
+        , setjoinPath "M.g#p0" "g" CompilerInsertedArtifact
+        ]
+      hits = map (uncurry MkPathRuntimeHit)
+        [ ("M.case block in f,go#p0", 2), ("M.b#p0", 1), ("M.case block in f,go#p0", 1)
+        , ("M.zz#p9", 1), ("M.a#p0", 0), ("M.e#p0", 1), ("M.a#p0", 1), ("M.c#p0", 1) ]
+      refHitIds = nub (map (.pathId) (filter isPathCovered hits))
+      refUniq = refDedupe paths
+      refM = refMeasurement paths refHitIds
+      refCovered = filter (\p => elem p.pathId refM.coveredIds) refUniq
+      refMissing = filter (\p => elem p.pathId refM.denominatorIds && not (elem p.pathId refM.coveredIds)) refUniq
+      refOutside = filter (\oid => not (elem oid refM.denominatorIds)) refHitIds
+      refLimbo = filter (\p => not (elem p.pathId refM.denominatorIds) && not (elem p.pathId refM.excludedIds)) refUniq
+      m = pathCoverageMeasurement paths (coveredPathIds hits)
+      r = buildPathCoverageResultFromHits paths hits
+      c = evidenceCounts r
+      ev = renderPathEvidence "" r
+      ids : List PathObligation -> List String
+      ids = map (.pathId)
+  pure $ all id
+    [ ids (dedupePathsById paths) == ids refUniq
+    , map (.functionName) (dedupePathsById paths) == map (.functionName) refUniq
+    , map (.functionName) (dedupePathsById paths) == ["first", "b", "c", "d", "e", "f", "g"]
+    , coveredPathIds hits == refHitIds
+    , m.denominatorIds == refM.denominatorIds
+    , m.coveredIds == refM.coveredIds
+    , m.excludedIds == refM.excludedIds
+    , m.unknownIds == refM.unknownIds
+    , ids r.allPaths == ids refUniq
+    , ids r.coveredPaths == ids refCovered
+    , ids r.missingPaths == ids refMissing
+    , r.observedOutsideDenominator == refOutside
+    , not (null refOutside)
+    , not (null refMissing)
+    , c.pathsTotal == length refUniq
+    , c.pathsDenominator == length refM.denominatorIds
+    , c.pathsHit == length refM.coveredIds
+    , c.pathsExcluded == length refM.excludedIds
+    , c.pathsUnknown == length refLimbo
+    , isInfixOf ("  in unknown  : " ++ show (length (filter (\i => elem i refM.unknownIds) refOutside))) ev
+    , isInfixOf ("  in excluded : " ++ show (length (filter (\i => elem i refM.excludedIds) refOutside))) ev
+    ]
+
+||| REQ_COV_PATHS_ARTIFACTS_ONLY_001: verifies the --artifacts-only decision.
+||| Checked: the flag without --emit-artifacts is refused, and the refusal names
+||| the missing flag; with a directory, and without the flag at all, nothing is
+||| refused; the notice printed in place of the report names the directory and
+||| says the report was skipped.
+test_REQ_COV_PATHS_ARTIFACTS_ONLY_001 : IO Bool
+test_REQ_COV_PATHS_ARTIFACTS_ONLY_001 =
+  pure $ all id
+    [ isJust (artifactsOnlyRefusal True Nothing)
+    , maybe False (isInfixOf "--emit-artifacts") (artifactsOnlyRefusal True Nothing)
+    , isNothing (artifactsOnlyRefusal True (Just "/tmp/art"))
+    , isNothing (artifactsOnlyRefusal False Nothing)
+    , isNothing (artifactsOnlyRefusal False (Just "/tmp/art"))
+    , isInfixOf "/tmp/art" (artifactsOnlyNotice "/tmp/art")
+    , isInfixOf "skipped" (artifactsOnlyNotice "/tmp/art")
+    ]
+
+-- =============================================================================
 -- All Tests
 -- =============================================================================
 
@@ -1055,6 +1165,8 @@ allTests =
   , ("REQ_COV_UNI_003", test_UNI_005)
   , ("REQ_COV_UNI_004", test_UNI_006)
   , ("REQ_COV_UNI_PERSIST_001", test_REQ_COV_UNI_PERSIST_001)
+  , ("REQ_COV_PATH_SETJOIN_001", test_REQ_COV_PATH_SETJOIN_001)
+  , ("REQ_COV_PATHS_ARTIFACTS_ONLY_001", test_REQ_COV_PATHS_ARTIFACTS_ONLY_001)
   , ("REQ_COV_MGL_001", test_MGL_001)
   , ("REQ_COV_MGL_002", test_MGL_002)
   , ("REQ_COV_MGL_003", test_MGL_003)
