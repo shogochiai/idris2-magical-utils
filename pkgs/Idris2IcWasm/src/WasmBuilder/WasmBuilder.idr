@@ -1798,6 +1798,38 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
 ||| section: proc_exit from wasi_snapshot_preview1").
 ||| @inputWasm Input WASM with WASI imports
 ||| @outputWasm Output WASM with stubs
+-- Echo "<wasm-dis path>\n<wasm-as path>" iff a usable binaryen pair
+-- exists. Order: PATH; the binaryen emscripten itself is configured with
+-- (`em-config BINARYEN_ROOT`); $EMSDK/upstream/bin; then next to emcc,
+-- with emcc resolved to its real path first. The last step alone missed
+-- both machines measured 2026-10-01: on a Mac emcc is a ~/.local/bin symlink
+-- into ~/emsdk (so `../bin` beside the symlink holds no wasm-dis), and on
+-- NixOS emcc sits in the emscripten store path with binaryen in its own
+-- store path. Both builds then skipped the WASI stub, and the replica
+-- rejected the wasm: "invalid import section ... fd_close from
+-- wasi_snapshot_preview1".
+public export
+binaryenProbe : String
+binaryenProbe =
+  "d=\"$(command -v wasm-dis 2>/dev/null || true)\"; "
+  ++ "if [ -z \"$d\" ] && command -v em-config >/dev/null 2>&1; then "
+  ++   "r=\"$(em-config BINARYEN_ROOT 2>/dev/null || true)\"; "
+  ++   "[ -n \"$r\" ] && [ -x \"$r/bin/wasm-dis\" ] && d=\"$r/bin/wasm-dis\"; "
+  ++ "fi; "
+  ++ "if [ -z \"$d\" ] && [ -n \"${EMSDK:-}\" ] && [ -x \"$EMSDK/upstream/bin/wasm-dis\" ]; then "
+  ++   "d=\"$EMSDK/upstream/bin/wasm-dis\"; "
+  ++ "fi; "
+  ++ "if [ -z \"$d\" ] && command -v emcc >/dev/null 2>&1; then "
+  ++   "for c in \"$(readlink -f \"$(command -v emcc)\" 2>/dev/null)\" \"$(command -v emcc)\"; do "
+  ++     "e=\"$(dirname \"$c\")/../bin/wasm-dis\"; "
+  ++     "if [ -x \"$e\" ]; then d=\"$e\"; break; fi; "
+  ++   "done; "
+  ++ "fi; "
+  ++ "a=\"${d%wasm-dis}wasm-as\"; "
+  ++ "if [ -n \"$d\" ] && [ -x \"$d\" ] && [ -x \"$a\" ]; then "
+  ++   "printf '%s\\n%s\\n' \"$d\" \"$a\"; "
+  ++ "fi"
+
 public export
 stubWasi : String -> String -> IO (Either String ())
 stubWasi inputWasm outputWasm = do
@@ -1864,21 +1896,6 @@ stubWasi inputWasm outputWasm = do
                   (_, wasiCheck, _) <- executeCommand $ toWat ++ " " ++ outputWasm ++ " 2>/dev/null | grep -c wasi_snapshot_preview1 || echo 0"
                   putStrLn $ "        WASI imports stubbed (remaining: " ++ trim wasiCheck ++ ")"
                   pure $ Right ()
-  where
-    -- Echo "<wasm-dis path>\n<wasm-as path>" iff a usable binaryen pair
-    -- exists: PATH first, then the emsdk-bundled copy next to emcc
-    -- (<emsdk>/upstream/emscripten/emcc → <emsdk>/upstream/bin/wasm-dis).
-    binaryenProbe : String
-    binaryenProbe =
-      "d=\"$(command -v wasm-dis 2>/dev/null || true)\"; "
-      ++ "if [ -z \"$d\" ] && command -v emcc >/dev/null 2>&1; then "
-      ++   "e=\"$(dirname \"$(command -v emcc)\")/../bin/wasm-dis\"; "
-      ++   "[ -x \"$e\" ] && d=\"$e\"; "
-      ++ "fi; "
-      ++ "a=\"${d%wasm-dis}wasm-as\"; "
-      ++ "if [ -n \"$d\" ] && [ -x \"$d\" ] && [ -x \"$a\" ]; then "
-      ++   "printf '%s\\n%s\\n' \"$d\" \"$a\"; "
-      ++ "fi"
 
 -- =============================================================================
 -- Main Build Function

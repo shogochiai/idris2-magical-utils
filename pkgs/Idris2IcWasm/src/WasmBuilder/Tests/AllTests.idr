@@ -160,6 +160,34 @@ test_REQ_WASM_ENTRY_002 () =
        , ipkgForMain "Main" [mainIpkg, testIpkg] == Just "canister-main.ipkg"
        ]
 
+-- REQ_WASM_WASI_005: verifies the order in which binaryen is looked for.
+-- Checked: the probe consults PATH, then em-config BINARYEN_ROOT, then
+-- $EMSDK/upstream/bin, then emcc resolved by readlink -f, in that order, and
+-- requires both wasm-dis and wasm-as to be executable before printing them.
+test_REQ_WASM_WASI_005 : () -> Bool
+test_REQ_WASM_WASI_005 () =
+  let p : String
+      p = binaryenProbe
+      at : String -> Maybe Nat
+      at needle = indexOfSub needle p
+  in all id
+       [ isJust (at "command -v wasm-dis")
+       , isJust (at "em-config BINARYEN_ROOT")
+       , isJust (at "EMSDK/upstream/bin/wasm-dis")
+       , isJust (at "readlink -f")
+       , at "command -v wasm-dis" < at "em-config BINARYEN_ROOT"
+       , at "em-config BINARYEN_ROOT" < at "EMSDK/upstream/bin/wasm-dis"
+       , at "EMSDK/upstream/bin/wasm-dis" < at "readlink -f"
+       , isJust (at "[ -x \"$a\" ]")
+       ]
+  where
+    indexOfSub : String -> String -> Maybe Nat
+    indexOfSub needle hay = go 0 (unpack hay)
+      where
+        go : Nat -> List Char -> Maybe Nat
+        go _ [] = Nothing
+        go i cs@(_ :: rest) = if isPrefixOf (unpack needle) cs then Just i else go (S i) rest
+
 -- =============================================================================
 -- Test Runner
 -- =============================================================================
@@ -179,6 +207,7 @@ allTests =
   , test "REQ_WASM_REFC_003" "No generated C names the ipkg reason" test_REQ_WASM_REFC_003
   , test "REQ_WASM_ENTRY_001" "Endpoints are argument-less IO exports" test_REQ_WASM_ENTRY_001
   , test "REQ_WASM_ENTRY_002" "Canister ipkg is the one whose main is Main" test_REQ_WASM_ENTRY_002
+  , test "REQ_WASM_WASI_005" "binaryen found via em-config, EMSDK, real emcc" test_REQ_WASM_WASI_005
   ]
 
 ||| Run an indexed slice of tests (for chunked IC coverage probes). Slicing the
