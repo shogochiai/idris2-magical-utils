@@ -1370,6 +1370,8 @@ compileToRefC opts buildDir = do
 ||| fork copy it had just made, leaving master's runtime.h next to the fork's
 ||| pathcov.c (master has no pathcov.c: HTTP 404). Override with
 ||| IDRIS2_ICWASM_REFC_REPO (owner/name) and IDRIS2_ICWASM_REFC_REF (commit).
+||| The shell pipeline keeps the same default in scripts/lib/fetch-sources.sh
+||| (ICWASM_REFC_REF); change both together.
 
 public export
 refcPinnedRepo : String
@@ -1392,6 +1394,13 @@ refcRuntimeFiles =
   ++ map (\f => ("c", f))
     [ "idris_support.c", "idris_file.c", "idris_directory.c", "idris_util.c"
     , "idris_support.h", "idris_file.h", "idris_directory.h", "idris_util.h" ]
+
+||| A C source or header text that can be trusted: non-empty and ending in a
+||| newline (a download cut short almost never ends on one). Same rule as
+||| scripts/lib/fetch-sources.sh `_c_source_complete`.
+public export
+sourceTextComplete : String -> Bool
+sourceTextComplete s = not (null s) && isSuffixOf "\n" s
 
 ||| The URL of one support file at a pinned commit of a fork.
 public export
@@ -1427,7 +1436,7 @@ prepareRefCRuntime = do
         "cp " ++ localRefc ++ "/../c/*.c " ++ localRefc ++ "/../c/*.h " ++ refcSrc ++ "/ 2>/dev/null; true"
       putStrLn $ "        RefC runtime from the local fork: " ++ localRefc
 
-  present <- traverse (\sf => map (\ok => (sf, ok)) (fileReadable (refcSrc ++ "/" ++ snd sf))) refcRuntimeFiles
+  present <- traverse (\sf => map (\ok => (sf, ok)) (sourceComplete (refcSrc ++ "/" ++ snd sf))) refcRuntimeFiles
   let missing = map fst (filter (not . snd) present)
   Right () <- fetchRefcFiles refcSrc missing
     | Left err => pure (Left err)
@@ -1438,10 +1447,14 @@ prepareRefCRuntime = do
   putStrLn "        Runtime ready"
   pure $ Right (refcSrc, miniGmp)
   where
-    fileReadable : String -> IO Bool
-    fileReadable p = do
+    -- Present is not usable: a C source cut short by an interrupted download
+    -- reads fine and fails the build later with a compiler error that names
+    -- the wrong component. Same rule as scripts/lib/fetch-sources.sh
+    -- `_c_source_complete`: non-empty and ending in a newline.
+    sourceComplete : String -> IO Bool
+    sourceComplete p = do
       r <- readFile p
-      pure (either (const False) (const True) r)
+      pure (either (const False) sourceTextComplete r)
 
     findLocalRefcRuntime : IO (Maybe String)
     findLocalRefcRuntime = do
@@ -1484,7 +1497,10 @@ prepareRefCRuntime = do
       rcs <- traverse (\sf => do
                 rc <- system $ "curl -fsSLo " ++ refcSrc ++ "/" ++ snd sf ++ " " ++ refcRawUrl repo ref sf
                 pure (snd sf, rc)) missing
-      case filter (\(_, rc) => rc /= 0) rcs of
+      complete <- traverse (\(f, rc) => do
+                    r <- readFile (refcSrc ++ "/" ++ f)
+                    pure (f, rc == 0 && either (const False) sourceTextComplete r)) rcs
+      case filter (\(_, ok) => not ok) complete of
         [] => pure (Right ())
         failed => pure $ Left $ "Could not fetch RefC runtime file(s) from " ++ repo ++ "@" ++ ref
                              ++ ": " ++ joinBy ", " (map fst failed)
@@ -1492,8 +1508,8 @@ prepareRefCRuntime = do
 
     ensureMiniGmp : String -> IO (Either String ())
     ensureMiniGmp miniGmp = do
-      haveC <- fileReadable (miniGmp ++ "/mini-gmp.c")
-      haveH <- fileReadable (miniGmp ++ "/mini-gmp.h")
+      haveC <- sourceComplete (miniGmp ++ "/mini-gmp.c")
+      haveH <- sourceComplete (miniGmp ++ "/mini-gmp.h")
       okC <- if haveC then pure True else map (== 0) $ system $
                "curl -fsSLo " ++ miniGmp ++ "/mini-gmp.c https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c"
       okH <- if haveH then pure True else map (== 0) $ system $
@@ -1503,7 +1519,8 @@ prepareRefCRuntime = do
          else do
            Right () <- writeFile (miniGmp ++ "/gmp.h") gmpWrapper
              | Left err => pure $ Left $ "Failed to write gmp.h: " ++ show err
-           pure (Right ())
+           okW <- sourceComplete (miniGmp ++ "/gmp.h")
+           pure (if okW then Right () else Left "gmp.h was written but does not read back complete")
 
 ||| Step 3: Compile C to WASM using Emscripten
 |||

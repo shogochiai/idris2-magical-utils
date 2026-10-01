@@ -48,7 +48,7 @@ GMPEOF
 # checked fetch.
 ensure_refc_runtime() {
     local refc_files=(memoryManagement.c runtime.c stringOps.c mathFunctions.c casts.c clock.c buffer.c prim.c refc_util.c
-                      runtime.h cBackend.h datatypes.h _datatypes.h refc_util.h mathFunctions.h memoryManagement.h stringOps.h casts.h clock.h buffer.h prim.h threads.h)
+                      runtime.h cBackend.h _datatypes.h refc_util.h mathFunctions.h memoryManagement.h stringOps.h casts.h clock.h buffer.h prim.h threads.h)
     local c_files=(idris_support.c idris_file.c idris_directory.c idris_util.c idris_support.h idris_file.h idris_directory.h idris_util.h)
     local f complete=1
     for f in "${refc_files[@]}" "${c_files[@]}"; do
@@ -61,15 +61,20 @@ ensure_refc_runtime() {
         return 0
     fi
 
-    echo "Downloading RefC runtime sources..."
+    # The local fork's own copy first (the runtime of the compiler that
+    # generated the C), then only the still-missing files from the pinned fork
+    # commit (lib/fetch-sources.sh: refc_raw_url). Never master: see there.
     mkdir -p "$REFC_SRC"
+    copy_local_fork_refc "$REFC_SRC" || echo "No local fork support/refc found"
     for f in "${refc_files[@]}"; do
         _c_source_complete "$REFC_SRC/$f" && continue
-        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f" "$REFC_SRC/$f" || return 1
+        echo "Fetching $f from $ICWASM_REFC_REPO@$ICWASM_REFC_REF"
+        _fetch_c_source "$(refc_raw_url refc "$f")" "$REFC_SRC/$f" || return 1
     done
     for f in "${c_files[@]}"; do
         _c_source_complete "$REFC_SRC/$f" && continue
-        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f" "$REFC_SRC/$f" || return 1
+        echo "Fetching $f from $ICWASM_REFC_REPO@$ICWASM_REFC_REF"
+        _fetch_c_source "$(refc_raw_url c "$f")" "$REFC_SRC/$f" || return 1
     done
 }
 
@@ -261,7 +266,15 @@ link_canister_wasm() {
     fi
     include_dirs+=(${EXTRA_INCLUDE_DIRS[@]+"${EXTRA_INCLUDE_DIRS[@]}"})
 
-    local force_includes=("$REFC_INCLUDE/datatypes.h" "$REFC_INCLUDE/cBackend.h" "$MINI_GMP/gmp.h")
+    # datatypes.h is the OLD RefC name; the fork (and master) ship only
+    # _datatypes.h, which cBackend.h includes itself. Force-include the old
+    # header only when a real one is present (the copy once committed under
+    # support/refc/ is the text "404: Not Found", a saved error page).
+    local force_includes=()
+    if _c_source_complete "$REFC_INCLUDE/datatypes.h" && ! grep -q "^404: Not Found" "$REFC_INCLUDE/datatypes.h"; then
+        force_includes+=("$REFC_INCLUDE/datatypes.h")
+    fi
+    force_includes+=("$REFC_INCLUDE/cBackend.h" "$MINI_GMP/gmp.h")
     force_includes+=(${EXTRA_FORCE_INCLUDES[@]+"${EXTRA_FORCE_INCLUDES[@]}"})
 
     local emcc_flags=(
@@ -322,8 +335,24 @@ stub_wasi_imports() {
             echo "WASI stubbing failed, using original WASM"
             cp "$OUTPUT_WASM" "$OUTPUT_STUBBED_WASM"
         }
+    elif command -v python3 >/dev/null 2>&1 && pair="$(find_binaryen_pair)"; then
+        # No wabt: binaryen (often bundled with emscripten, see find_binaryen_pair)
+        # and the stub script the WasmBuilder path uses, which reads both WAT
+        # dialects. -all: emcc output uses post-MVP features wasm-as rejects by default.
+        local dis as wat
+        dis="$(printf '%s\n' "$pair" | sed -n 1p)"; as="$(printf '%s\n' "$pair" | sed -n 2p)"
+        wat="$BUILD_DIR/$(basename "$DEFAULT_OUTPUT_NAME").wat"
+        echo "wabt not found - stubbing WASI imports with binaryen ($dis)"
+        if "$dis" "$OUTPUT_WASM" -o "$wat" \
+           && python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../support/tools/stub_wasi.py" "$wat" "$wat.stubbed" \
+           && "$as" -all "$wat.stubbed" -o "$OUTPUT_STUBBED_WASM"; then
+            echo "WASI imports stubbed (remaining: $("$dis" "$OUTPUT_STUBBED_WASM" 2>/dev/null | grep -c wasi_snapshot_preview1 || true))"
+        else
+            echo "WARNING: binaryen WASI stubbing failed, using original WASM (the replica will reject wasi_snapshot_preview1 imports)"
+            cp "$OUTPUT_WASM" "$OUTPUT_STUBBED_WASM"
+        fi
     else
-        echo "wabt not found, skipping WASI stubbing"
+        echo "WARNING: neither wabt nor binaryen (with python3) found - skipping WASI stubbing; the replica will reject wasi_snapshot_preview1 imports"
         cp "$OUTPUT_WASM" "$OUTPUT_STUBBED_WASM"
     fi
 }

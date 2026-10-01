@@ -45,6 +45,11 @@ id = "${prefix}_RT_004"
 title = "RefC runtime is fetched from a pinned fork commit, file by file"
 invariant = "refcRawUrl builds raw.githubusercontent.com/<refcPinnedRepo>/<refcPinnedRef>/support/<subdir>/<file> (overridable by IDRIS2_ICWASM_REFC_REPO / IDRIS2_ICWASM_REFC_REF) and never names master; refcRuntimeFiles lists the refc files the build compiles or force-includes, pathcov.c and pathcov.h included, and the support/c files; prepareRefCRuntime fetches only the files the local fork copy lacks, with curl -f so an HTTP error fails the step, and checks mini-gmp separately so a missing mini-gmp never refetches RefC. test-evidence: test_REQ_WASM_RT_004"
 
+[[spec]]
+id = "${prefix}_RT_005"
+title = "Runtime sources count as present only when complete"
+invariant = "sourceTextComplete holds for a non-empty text ending in a newline and for nothing else; prepareRefCRuntime treats a RefC file, mini-gmp.c or mini-gmp.h that is absent OR incomplete as missing and fetches it again, re-checks every fetched file and fails naming any that is still incomplete, and checks that the gmp.h wrapper it writes reads back complete. The shell pipeline (scripts/lib/fetch-sources.sh `_c_source_complete`) applies the same rule. test-evidence: test_REQ_WASM_RT_005"
+
 [[spec_area]]
 name = "Emscripten Compilation"
 

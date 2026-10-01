@@ -94,14 +94,17 @@ refc_src_complete() {
     return 0
 }
 if ! refc_src_complete; then
+    # Local fork copy first, then only the missing files from the pinned fork
+    # commit; never master (lib/fetch-sources.sh: refc_raw_url).
     mkdir -p "$REFC_SRC"
+    copy_local_fork_refc "$REFC_SRC" || echo "No local fork support/refc found"
     for f in $REFC_FILES; do
         _c_source_complete "$REFC_SRC/$f" && continue
-        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/$f" "$REFC_SRC/$f"
+        _fetch_c_source "$(refc_raw_url refc "$f")" "$REFC_SRC/$f"
     done
     for f in $C_FILES; do
         _c_source_complete "$REFC_SRC/$f" && continue
-        _fetch_c_source "https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/$f" "$REFC_SRC/$f"
+        _fetch_c_source "$(refc_raw_url c "$f")" "$REFC_SRC/$f"
     done
 fi
 

@@ -71,3 +71,75 @@ _fetch_c_source() {
     fi
     mv "$tmp" "$dst"
 }
+
+# ---------------------------------------------------------------------------
+# RefC runtime: the local fork first, then a PINNED fork commit, never master.
+#
+# Measured 2026-10-01 (WasmBuilder, same rule): fetching from
+# idris-lang/Idris2 master put master's runtime.h next to the fork's
+# pathcov.c (master has no pathcov.c: HTTP 404). Keep the default ref equal to
+# WasmBuilder.refcPinnedRef (src/WasmBuilder/WasmBuilder.idr); override both
+# with IDRIS2_ICWASM_REFC_REPO / IDRIS2_ICWASM_REFC_REF.
+# ---------------------------------------------------------------------------
+ICWASM_REFC_REPO="${IDRIS2_ICWASM_REFC_REPO:-shogochiai/Idris2}"
+ICWASM_REFC_REF="${IDRIS2_ICWASM_REFC_REF:-ddcef732df62a17d2d3fb6ec7e1ee908330209a8}"
+
+# refc_raw_url <subdir: refc|c> <file>
+refc_raw_url() {
+    echo "https://raw.githubusercontent.com/$ICWASM_REFC_REPO/$ICWASM_REFC_REF/support/$1/$2"
+}
+
+# The local fork's support/refc, same order as WasmBuilder.findLocalRefcRuntime:
+# the fork root from IDRIS2_PATHCOV_FORK_BIN / IDRIS2_BIN (<root>/build/exec/idris2),
+# ~/code/idrislang-idris2, ~/.idris2, pack installs. Prints nothing if none.
+local_fork_refc_dir() {
+    local bin="${IDRIS2_PATHCOV_FORK_BIN:-${IDRIS2_BIN:-}}" d
+    local cands=()
+    case "$bin" in */build/exec/idris2) cands+=("${bin%/build/exec/idris2}/support/refc") ;; esac
+    cands+=("$HOME/code/idrislang-idris2/support/refc" "$HOME/.idris2/idris2-0.8.0/support/refc")
+    for d in $(ls -td "$HOME"/.local/state/pack/install/*/idris2/idris2-0.8.0/support/refc 2>/dev/null); do cands+=("$d"); done
+    for d in "${cands[@]}"; do
+        if [ -f "$d/runtime.c" ] && [ -f "$d/cBackend.h" ] && [ -f "$d/_datatypes.h" ]; then
+            echo "$d"; return 0
+        fi
+    done
+    return 1
+}
+
+# copy_local_fork_refc <dest>: copy the fork's support/refc and support/c into
+# <dest>; rc 1 when there is no local fork copy.
+copy_local_fork_refc() {
+    local dest="$1" d
+    d="$(local_fork_refc_dir)" || return 1
+    mkdir -p "$dest"
+    cp "$d"/*.c "$d"/*.h "$dest"/ 2>/dev/null
+    cp "$d"/../c/*.c "$d"/../c/*.h "$dest"/ 2>/dev/null
+    echo "RefC runtime from the local fork: $d"
+}
+
+# find_binaryen_pair: print "<wasm-dis>\n<wasm-as>" when both are executable.
+# Same order as WasmBuilder.binaryenProbe: PATH, em-config BINARYEN_ROOT,
+# $EMSDK/upstream/bin, then ../bin beside emcc resolved by readlink -f.
+find_binaryen_pair() {
+    local d="" r="" e="" c a
+    d="$(command -v wasm-dis 2>/dev/null || true)"
+    if [ -z "$d" ] && command -v em-config >/dev/null 2>&1; then
+        r="$(em-config BINARYEN_ROOT 2>/dev/null || true)"
+        [ -n "$r" ] && [ -x "$r/bin/wasm-dis" ] && d="$r/bin/wasm-dis"
+    fi
+    if [ -z "$d" ] && [ -n "${EMSDK:-}" ] && [ -x "$EMSDK/upstream/bin/wasm-dis" ]; then
+        d="$EMSDK/upstream/bin/wasm-dis"
+    fi
+    if [ -z "$d" ] && command -v emcc >/dev/null 2>&1; then
+        for c in "$(readlink -f "$(command -v emcc)" 2>/dev/null)" "$(command -v emcc)"; do
+            e="$(dirname "$c")/../bin/wasm-dis"
+            if [ -x "$e" ]; then d="$e"; break; fi
+        done
+    fi
+    a="${d%wasm-dis}wasm-as"
+    if [ -n "$d" ] && [ -x "$d" ] && [ -x "$a" ]; then
+        printf '%s\n%s\n' "$d" "$a"
+        return 0
+    fi
+    return 1
+}
