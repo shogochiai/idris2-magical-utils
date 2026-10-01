@@ -1370,6 +1370,8 @@ compileToRefC opts buildDir = do
 ||| fork copy it had just made, leaving master's runtime.h next to the fork's
 ||| pathcov.c (master has no pathcov.c: HTTP 404). Override with
 ||| IDRIS2_ICWASM_REFC_REPO (owner/name) and IDRIS2_ICWASM_REFC_REF (commit).
+||| The shell pipeline keeps the same default in scripts/lib/fetch-sources.sh
+||| (ICWASM_REFC_REF); change both together.
 
 public export
 refcPinnedRepo : String
