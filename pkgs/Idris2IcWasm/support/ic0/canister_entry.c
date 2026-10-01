@@ -25,7 +25,16 @@ extern void ic0_trap(int32_t src, int32_t size);
 
 /* Forward declaration from Idris2 generated code */
 extern void* __mainExpression_0(void);  /* Idris2 main entry - returns IO closure */
+/* The build force-includes the RefC headers (cBackend.h, so runtime.h) and
+ * defines IDRIS2_ICWASM_HAS_REFC_HEADERS. runtime.h then already declares
+ * idris2_trampoline with RefC's own value type (Idris2_Value * in the fork /
+ * 0.8.0, Value * before), and a second declaration as void* is a conflicting
+ * declaration: emcc "conflicting types for 'idris2_trampoline'", which is what
+ * every build that fell back to this file hit. Declare it only when the
+ * headers are absent; a void * closure converts implicitly to either type. */
+#ifndef IDRIS2_ICWASM_HAS_REFC_HEADERS
 extern void* idris2_trampoline(void*);  /* Execute Idris2 closure (RefC runtime) */
+#endif
 
 /* Initialize Idris2 runtime - call once at canister_init */
 static int idris2_initialized = 0;

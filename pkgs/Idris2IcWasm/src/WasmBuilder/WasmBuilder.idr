@@ -564,17 +564,44 @@ public export
 didMethodToExport : DidMethod -> ExportedFunc
 didMethodToExport dm = MkExportedFunc dm.name (show dm.returnType) dm.isQuery True
 
-||| Parse export declarations from Idris source
-||| Looks for pattern: export\n funcName : Type
-||| Returns list of exported functions
-parseExportedFunctions : String -> List ExportedFunc
-parseExportedFunctions content =
+||| Does the type have an arrow outside every parenthesis? `A -> IO ()` does;
+||| `IO (A -> B)` does not.
+public export
+hasTopLevelArrow : String -> Bool
+hasTopLevelArrow ty = go (the Integer 0) (unpack ty)
+  where
+    go : Integer -> List Char -> Bool
+    go _ [] = False
+    go d ('(' :: cs) = go (d + 1) cs
+    go d (')' :: cs) = go (d - 1) cs
+    go d ('-' :: '>' :: cs) = if d <= 0 then True else go d cs
+    go d (_ :: cs) = go d cs
+
+||| A canister endpoint is an exported IO action that takes no arguments: the
+||| generated entry calls it with no Idris arguments and the call's own
+||| arguments are read through ic0. Measured 2026-10-01: a subagent-written
+||| Main.idr exported `registerProducer : CanisterState -> Principal -> IO ()`
+||| and seven more like it; none can be an entry point, and taking them as
+||| endpoints ended in "Failed to infer RefC arity for one or more exports".
+public export
+isEndpointType : String -> Bool
+isEndpointType ty = isPrefixOf "IO" (trim ty) && not (hasTopLevelArrow ty)
+
+||| Every `export` or `public export` signature of the source, endpoint or not.
+||| Looks for the pattern: `export` (or `public export`) on its own line, then
+||| `funcName : Type` on the next.
+public export
+exportedDeclarations : String -> List ExportedFunc
+exportedDeclarations content =
   let ls = lines content
   in parseLines ls []
   where
     -- Check if a line is "export" keyword alone
+    -- `public export` exports too. Only the bare form was accepted before, so a
+    -- Main.idr written with `public export` throughout parsed as 0 exports and
+    -- the build fell back to the static template (measured 2026-10-01).
     isExportLine : String -> Bool
-    isExportLine line = trim line == "export"
+    isExportLine line = let t = trim line in t == "export" || t == "public export"
 
     -- Parse type signature line: "funcName : Type"
     parseTypeSig : String -> Maybe (String, String)
@@ -610,6 +637,18 @@ parseExportedFunctions content =
                  in parseLines rest (ef :: acc)
                Nothing => parseLines (line2 :: rest) acc
         else parseLines (line2 :: rest) acc
+
+||| The canister endpoints of a Main.idr: its exported declarations whose type
+||| is an argument-less IO action (isEndpointType).
+public export
+parseExportedFunctions : String -> List ExportedFunc
+parseExportedFunctions = filter (isEndpointType . returnType) . exportedDeclarations
+
+||| The exported declarations that are NOT endpoints, so the build can say what
+||| it left out instead of leaving them out silently.
+public export
+nonEndpointExports : String -> List ExportedFunc
+nonEndpointExports = filter (not . isEndpointType . returnType) . exportedDeclarations
 
 -- =============================================================================
 -- canister_entry.c Generation
@@ -1047,16 +1086,86 @@ resolvePackagesFromProject projectDir = do
   deps <- traverse resolvePackagesFromIpkg (filter (not . null) (lines (trim output)))
   pure (concat deps)
 
+||| An ipkg path with its text ("" when unreadable).
+readIpkgText : String -> IO (String, String)
+readIpkgText p = do
+  t <- readFile p
+  pure (p, either (const "") id t)
+
+||| The module a `--main` path names: `src/Main.idr` is `Main`, `src/A/B.idr` is `A.B`.
+public export
+mainModuleName : String -> String
+mainModuleName p =
+  let noExt = if isSuffixOf ".idr" p then substr 0 (minus (length p) 4) p else p
+      noSrc = if isPrefixOf "src/" noExt then substr 4 (length noExt) noExt else noExt
+  in pack (map (\c => if c == '/' then '.' else c) (unpack noSrc))
+
+||| The `main =` module of an ipkg text, if it declares one.
+public export
+ipkgMainOf : String -> Maybe String
+ipkgMainOf text =
+  case mapMaybe mainLine (map trim (lines text)) of
+    (m :: _) => Just m
+    [] => Nothing
+  where
+    mainLine : String -> Maybe String
+    mainLine l = case break (== '=') (unpack l) of
+                   (k, '=' :: v) => if trim (pack k) == "main" then Just (trim (pack v)) else Nothing
+                   _ => Nothing
+
+||| Of the project's ipkgs (path, text), the one whose `main =` is the canister's
+||| main module. Measured 2026-10-01: findIpkg prefers `*canister*.ipkg`, which
+||| is case-sensitive, so for `WagyuDaoCanister.ipkg` + `wagyu-dao-canister-tests.ipkg`
+||| it built the TESTS ipkg; RefC then failed on the test framework's coverage
+||| primitive (`Unknown primitive: System_Coverage_prim__enterTest`) and no C appeared.
+public export
+ipkgForMain : (mainModule : String) -> List (String, String) -> Maybe String
+ipkgForMain m ipkgs = map fst (find (\pt => ipkgMainOf (snd pt) == Just m) ipkgs)
+
+||| Why a RefC build of an ipkg generated no C, when the ipkg itself says so.
+||| `pack --cg refc build` on a LIBRARY ipkg (no `main =`, no `executable =`)
+||| type-checks the modules and generates no code at all, exit 0. Measured
+||| 2026-10-01 (wagyu-dao canister written by a subagent): the canister ipkg had
+||| neither, no C appeared, and the build went on with an unrelated file
+||| (`xargs ls -t` on empty input lists the working directory) until emcc failed
+||| on something else entirely.
+public export
+ipkgNoCodegenReason : (ipkgPath, ipkgText : String) -> Maybe String
+ipkgNoCodegenReason path text =
+  let keys = mapMaybe keyOf (map trim (lines text))
+      missing = filter (\k => not (elem k keys)) ["main", "executable"]
+  in case missing of
+       [] => Nothing
+       ks => Just $ path ++ " declares no " ++ joinBy " and no " (map (\k => "`" ++ k ++ " =`") ks)
+                 ++ ", so RefC generates no code for it (a canister ipkg needs `main = Main`"
+                 ++ " and `executable = <name>`)"
+  where
+    keyOf : String -> Maybe String
+    keyOf l = case break (== '=') (unpack l) of
+                (k, '=' :: _) => Just (trim (pack k))
+                _ => Nothing
+
 public export
 compileToRefC : BuildOptions -> String -> IO (Either String String)
 compileToRefC opts buildDir = do
   putStrLn "      Step 1: Idris2 → C (RefC backend)"
 
-  -- Try to find ipkg file for proper dependency resolution
-  Just ipkgFile <- findIpkg opts.projectDir
+  -- Try to find ipkg file for proper dependency resolution. The ipkg whose
+  -- `main =` is the canister's main module wins; without one, findIpkg's
+  -- name-based choice stands, and the build says what each ipkg declares.
+  Just fallbackIpkg <- findIpkg opts.projectDir
     | Nothing => do
         putStrLn "        No .ipkg file found, using direct compilation"
         compileDirectly opts buildDir
+  (_, ipkgList, _) <- executeCommand $ "find " ++ opts.projectDir ++ " -maxdepth 1 -name '*.ipkg' -type f | sort"
+  ipkgTexts <- traverse readIpkgText (filter (not . null) (lines (trim ipkgList)))
+  let wantMain = mainModuleName opts.mainModule
+  ipkgFile <- case ipkgForMain wantMain ipkgTexts of
+    Just p => pure p
+    Nothing => do
+      putStrLn $ "        WARNING: no .ipkg declares `main = " ++ wantMain ++ "`; using " ++ fallbackIpkg
+              ++ " (" ++ joinBy ", " (map (\pt => fst pt ++ ": main = " ++ fromMaybe "(none)" (ipkgMainOf (snd pt))) ipkgTexts) ++ ")"
+      pure fallbackIpkg
 
   -- For test builds: generate temp Main.idr in /tmp (atomic, never touches original)
   if opts.forTestBuild
@@ -1093,7 +1202,7 @@ compileToRefC opts buildDir = do
       let findCmd =
             "sh -c 'find "
             ++ joinBy " " candidateDirs
-            ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
+            ++ " -name \"*.c\" -exec ls -t {} + 2>/dev/null | head -1'"
       let clearCmd =
             "sh -c 'find "
             ++ joinBy " " candidateDirs
@@ -1118,7 +1227,11 @@ compileToRefC opts buildDir = do
       -- Find generated C file in either the project build dir or temp build dir
       (_, cFile, _) <- executeCommand findCmd
       if null (trim cFile)
-        then pure $ Left $ "No C file generated by RefC\n" ++ cErr ++ cOut
+        then do
+          ipkgText <- either (const "") id <$> readFile ipkg
+          pure $ Left $ "No C file generated by RefC"
+                       ++ maybe "" (\r => ": " ++ r) (ipkgNoCodegenReason ipkg ipkgText)
+                       ++ "\n" ++ cErr ++ cOut
         else do
           putStrLn $ "        Generated: " ++ trim cFile
           pure $ Right (trim cFile)
@@ -1202,7 +1315,7 @@ compileToRefC opts buildDir = do
             let findCmd =
                   "sh -c 'find "
                   ++ joinBy " " candidateDirs
-                  ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
+                  ++ " -name \"*.c\" -exec ls -t {} + 2>/dev/null | head -1'"
             (_, cFile, _) <- executeCommand findCmd
             if null (trim cFile)
               then pure $ Left $ "No C file generated by RefC\n" ++ stderr
@@ -1242,7 +1355,7 @@ compileToRefC opts buildDir = do
       -- the absence of an artefact is all we detect, and this text is all we
       -- have to explain it.
       (_, cOut, cErr) <- executeCommand cmd
-      let findCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" 2>/dev/null | xargs ls -t 2>/dev/null | head -1'"
+      let findCmd = "sh -c 'find " ++ buildDir' ++ " -name \"*.c\" -exec ls -t {} + 2>/dev/null | head -1'"
       (_, cFile, _) <- executeCommand findCmd
       if null (trim cFile)
         then pure $ Left $ "No C file generated by RefC\n" ++ cErr ++ cOut
@@ -1250,7 +1363,49 @@ compileToRefC opts buildDir = do
           putStrLn $ "        Generated: " ++ trim cFile
           pure $ Right (trim cFile)
 
-||| Step 2: Download/locate RefC runtime dependencies
+||| Where a missing RefC runtime file is fetched from: a FIXED commit of the
+||| fork the compiler is built from, never `master`. Measured 2026-10-01 (dev
+||| machine, wagyu-dao canister): a missing `/tmp/mini-gmp/mini-gmp.c` sent the
+||| build to fetch the whole RefC runtime from idris-lang/Idris2 master over the
+||| fork copy it had just made, leaving master's runtime.h next to the fork's
+||| pathcov.c (master has no pathcov.c: HTTP 404). Override with
+||| IDRIS2_ICWASM_REFC_REPO (owner/name) and IDRIS2_ICWASM_REFC_REF (commit).
+
+public export
+refcPinnedRepo : String
+refcPinnedRepo = "shogochiai/Idris2"
+
+public export
+refcPinnedRef : String
+refcPinnedRef = "ddcef732df62a17d2d3fb6ec7e1ee908330209a8"
+
+||| The RefC runtime files a canister build needs, as (support subdir, file).
+public export
+refcRuntimeFiles : List (String, String)
+refcRuntimeFiles =
+  map (\f => ("refc", f))
+    [ "memoryManagement.c", "runtime.c", "stringOps.c", "mathFunctions.c", "casts.c"
+    , "clock.c", "buffer.c", "prim.c", "refc_util.c", "pathcov.c"
+    , "runtime.h", "cBackend.h", "_datatypes.h", "refc_util.h", "mathFunctions.h"
+    , "memoryManagement.h", "stringOps.h", "casts.h", "clock.h", "buffer.h"
+    , "prim.h", "threads.h", "pathcov.h" ]
+  ++ map (\f => ("c", f))
+    [ "idris_support.c", "idris_file.c", "idris_directory.c", "idris_util.c"
+    , "idris_support.h", "idris_file.h", "idris_directory.h", "idris_util.h" ]
+
+||| The URL of one support file at a pinned commit of a fork.
+public export
+refcRawUrl : (repo, ref : String) -> (subdirAndFile : (String, String)) -> String
+refcRawUrl repo ref (sub, f) =
+  "https://raw.githubusercontent.com/" ++ repo ++ "/" ++ ref ++ "/support/" ++ sub ++ "/" ++ f
+
+||| Step 2: Locate (or fetch, pinned) the RefC runtime and mini-gmp.
+|||
+||| The local fork's `support/refc` and `support/c` come first. Only the files
+||| still missing are fetched, from refcPinnedRepo@refcPinnedRef with
+||| `curl -f`, so a 404 is a failure and never a file holding an error page.
+||| mini-gmp is checked on its own: a missing mini-gmp no longer causes the RefC
+||| runtime to be fetched again.
 |||
 ||| Returns (refcSrcDir, miniGmpDir)
 public export
@@ -1260,34 +1415,34 @@ prepareRefCRuntime = do
 
   let refcSrc = "/tmp/refc-src"
   let miniGmp = "/tmp/mini-gmp"
+  _ <- system $ "mkdir -p " ++ refcSrc ++ " " ++ miniGmp
 
   mLocalRefc <- findLocalRefcRuntime
   case mLocalRefc of
-    Nothing => pure ()
+    Nothing => putStrLn "        No local fork support/refc found"
     Just localRefc => do
       _ <- system $
-        "mkdir -p " ++ refcSrc ++ " && " ++
-        "rm -f " ++ refcSrc ++ "/datatypes.h && " ++
-        "cp " ++ localRefc ++ "/*.c " ++ localRefc ++ "/*.h " ++ refcSrc ++ "/ 2>/dev/null || true"
-      pure ()
+        "rm -f " ++ refcSrc ++ "/datatypes.h; " ++
+        "cp " ++ localRefc ++ "/*.c " ++ localRefc ++ "/*.h " ++ refcSrc ++ "/ 2>/dev/null; " ++
+        "cp " ++ localRefc ++ "/../c/*.c " ++ localRefc ++ "/../c/*.h " ++ refcSrc ++ "/ 2>/dev/null; true"
+      putStrLn $ "        RefC runtime from the local fork: " ++ localRefc
 
-  -- Check if already available. Prefer the local installed Idris2 support
-  -- files, because GitHub master can drift away from the compiler in use.
-  Right _ <- readFile (refcSrc ++ "/runtime.c")
-    | Left _ => downloadRuntime refcSrc miniGmp
+  present <- traverse (\sf => map (\ok => (sf, ok)) (fileReadable (refcSrc ++ "/" ++ snd sf))) refcRuntimeFiles
+  let missing = map fst (filter (not . snd) present)
+  Right () <- fetchRefcFiles refcSrc missing
+    | Left err => pure (Left err)
 
-  Right _ <- readFile (refcSrc ++ "/cBackend.h")
-    | Left _ => downloadRuntime refcSrc miniGmp
-
-  Right _ <- readFile (refcSrc ++ "/_datatypes.h")
-    | Left _ => downloadRuntime refcSrc miniGmp
-
-  Right _ <- readFile (miniGmp ++ "/mini-gmp.c")
-    | Left _ => downloadRuntime refcSrc miniGmp
+  Right () <- ensureMiniGmp miniGmp
+    | Left err => pure (Left err)
 
   putStrLn "        Runtime ready"
   pure $ Right (refcSrc, miniGmp)
   where
+    fileReadable : String -> IO Bool
+    fileReadable p = do
+      r <- readFile p
+      pure (either (const False) (const True) r)
+
     findLocalRefcRuntime : IO (Maybe String)
     findLocalRefcRuntime = do
       -- Fork-first: the forked compiler's support/refc carries the path-hit
@@ -1319,44 +1474,36 @@ prepareRefCRuntime = do
     gmpWrapper : String
     gmpWrapper = "#ifndef GMP_WRAPPER_H\n#define GMP_WRAPPER_H\n#include \"mini-gmp.h\"\n#include <stdarg.h>\nstatic inline void mpz_inits(mpz_t x, ...) {\n    va_list ap; va_start(ap, x); mpz_init(x);\n    while ((x = va_arg(ap, mpz_ptr)) != NULL) mpz_init(x);\n    va_end(ap);\n}\nstatic inline void mpz_clears(mpz_t x, ...) {\n    va_list ap; va_start(ap, x); mpz_clear(x);\n    while ((x = va_arg(ap, mpz_ptr)) != NULL) mpz_clear(x);\n    va_end(ap);\n}\n#endif\n"
 
-    downloadRuntime : String -> String -> IO (Either String (String, String))
-    downloadRuntime refcSrc miniGmp = do
-      putStrLn "        Downloading RefC runtime..."
+    fetchRefcFiles : String -> List (String, String) -> IO (Either String ())
+    fetchRefcFiles _ [] = pure (Right ())
+    fetchRefcFiles refcSrc missing = do
+      repo <- fromMaybe refcPinnedRepo <$> getEnv "IDRIS2_ICWASM_REFC_REPO"
+      ref  <- fromMaybe refcPinnedRef  <$> getEnv "IDRIS2_ICWASM_REFC_REF"
+      putStrLn $ "        Fetching " ++ show (length missing) ++ " RefC file(s) from "
+              ++ repo ++ "@" ++ ref ++ ": " ++ joinBy ", " (map snd missing)
+      rcs <- traverse (\sf => do
+                rc <- system $ "curl -fsSLo " ++ refcSrc ++ "/" ++ snd sf ++ " " ++ refcRawUrl repo ref sf
+                pure (snd sf, rc)) missing
+      case filter (\(_, rc) => rc /= 0) rcs of
+        [] => pure (Right ())
+        failed => pure $ Left $ "Could not fetch RefC runtime file(s) from " ++ repo ++ "@" ++ ref
+                             ++ ": " ++ joinBy ", " (map fst failed)
+                             ++ " (no local fork support/refc either; set IDRIS2_BIN to the fork)"
 
-      -- Download RefC sources
-      let refcFiles : List String = ["memoryManagement.c", "runtime.c", "stringOps.c",
-                       "mathFunctions.c", "casts.c", "clock.c", "buffer.c",
-                       "prim.c", "refc_util.c"]
-      let refcHeaders : List String = ["runtime.h", "cBackend.h", "_datatypes.h",
-                         "refc_util.h", "mathFunctions.h", "memoryManagement.h",
-                         "stringOps.h", "casts.h", "clock.h", "buffer.h",
-                         "prim.h", "threads.h"]
-      let cFiles : List String = ["idris_support.c", "idris_file.c", "idris_directory.c", "idris_util.c"]
-      let cHeaders : List String = ["idris_support.h", "idris_file.h", "idris_directory.h", "idris_util.h"]
-
-      _ <- system $ "mkdir -p " ++ refcSrc ++ " " ++ miniGmp
-
-      -- Download refc files
-      _ <- traverse_ (\f => system $
-        "curl -sLo " ++ refcSrc ++ "/" ++ f ++
-        " https://raw.githubusercontent.com/idris-lang/Idris2/master/support/refc/" ++ f)
-        (refcFiles ++ refcHeaders)
-
-      -- Download c support files
-      _ <- traverse_ (\f => system $
-        "curl -sLo " ++ refcSrc ++ "/" ++ f ++
-        " https://raw.githubusercontent.com/idris-lang/Idris2/master/support/c/" ++ f)
-        (cFiles ++ cHeaders)
-
-      -- Download mini-gmp
-      _ <- system $ "curl -sLo " ++ miniGmp ++ "/mini-gmp.c https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c"
-      _ <- system $ "curl -sLo " ++ miniGmp ++ "/mini-gmp.h https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.h"
-
-      -- Create gmp.h wrapper
-      Right _ <- writeFile (miniGmp ++ "/gmp.h") gmpWrapper
-        | Left err => pure $ Left $ "Failed to write gmp.h: " ++ show err
-
-      pure $ Right (refcSrc, miniGmp)
+    ensureMiniGmp : String -> IO (Either String ())
+    ensureMiniGmp miniGmp = do
+      haveC <- fileReadable (miniGmp ++ "/mini-gmp.c")
+      haveH <- fileReadable (miniGmp ++ "/mini-gmp.h")
+      okC <- if haveC then pure True else map (== 0) $ system $
+               "curl -fsSLo " ++ miniGmp ++ "/mini-gmp.c https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.c"
+      okH <- if haveH then pure True else map (== 0) $ system $
+               "curl -fsSLo " ++ miniGmp ++ "/mini-gmp.h https://gmplib.org/repo/gmp/raw-file/tip/mini-gmp/mini-gmp.h"
+      if not (okC && okH)
+         then pure $ Left "Could not fetch mini-gmp (gmplib.org)"
+         else do
+           Right () <- writeFile (miniGmp ++ "/gmp.h") gmpWrapper
+             | Left err => pure $ Left $ "Failed to write gmp.h: " ++ show err
+           pure (Right ())
 
 ||| Step 3: Compile C to WASM using Emscripten
 |||
@@ -1651,6 +1798,38 @@ compileToWasmWithEntry cFile refcSrc miniGmp ic0Support canisterEntryPath output
 ||| section: proc_exit from wasi_snapshot_preview1").
 ||| @inputWasm Input WASM with WASI imports
 ||| @outputWasm Output WASM with stubs
+-- Echo "<wasm-dis path>\n<wasm-as path>" iff a usable binaryen pair
+-- exists. Order: PATH; the binaryen emscripten itself is configured with
+-- (`em-config BINARYEN_ROOT`); $EMSDK/upstream/bin; then next to emcc,
+-- with emcc resolved to its real path first. The last step alone missed
+-- both machines measured 2026-10-01: on a Mac emcc is a ~/.local/bin symlink
+-- into ~/emsdk (so `../bin` beside the symlink holds no wasm-dis), and on
+-- NixOS emcc sits in the emscripten store path with binaryen in its own
+-- store path. Both builds then skipped the WASI stub, and the replica
+-- rejected the wasm: "invalid import section ... fd_close from
+-- wasi_snapshot_preview1".
+public export
+binaryenProbe : String
+binaryenProbe =
+  "d=\"$(command -v wasm-dis 2>/dev/null || true)\"; "
+  ++ "if [ -z \"$d\" ] && command -v em-config >/dev/null 2>&1; then "
+  ++   "r=\"$(em-config BINARYEN_ROOT 2>/dev/null || true)\"; "
+  ++   "[ -n \"$r\" ] && [ -x \"$r/bin/wasm-dis\" ] && d=\"$r/bin/wasm-dis\"; "
+  ++ "fi; "
+  ++ "if [ -z \"$d\" ] && [ -n \"${EMSDK:-}\" ] && [ -x \"$EMSDK/upstream/bin/wasm-dis\" ]; then "
+  ++   "d=\"$EMSDK/upstream/bin/wasm-dis\"; "
+  ++ "fi; "
+  ++ "if [ -z \"$d\" ] && command -v emcc >/dev/null 2>&1; then "
+  ++   "for c in \"$(readlink -f \"$(command -v emcc)\" 2>/dev/null)\" \"$(command -v emcc)\"; do "
+  ++     "e=\"$(dirname \"$c\")/../bin/wasm-dis\"; "
+  ++     "if [ -x \"$e\" ]; then d=\"$e\"; break; fi; "
+  ++   "done; "
+  ++ "fi; "
+  ++ "a=\"${d%wasm-dis}wasm-as\"; "
+  ++ "if [ -n \"$d\" ] && [ -x \"$d\" ] && [ -x \"$a\" ]; then "
+  ++   "printf '%s\\n%s\\n' \"$d\" \"$a\"; "
+  ++ "fi"
+
 public export
 stubWasi : String -> String -> IO (Either String ())
 stubWasi inputWasm outputWasm = do
@@ -1717,21 +1896,6 @@ stubWasi inputWasm outputWasm = do
                   (_, wasiCheck, _) <- executeCommand $ toWat ++ " " ++ outputWasm ++ " 2>/dev/null | grep -c wasi_snapshot_preview1 || echo 0"
                   putStrLn $ "        WASI imports stubbed (remaining: " ++ trim wasiCheck ++ ")"
                   pure $ Right ()
-  where
-    -- Echo "<wasm-dis path>\n<wasm-as path>" iff a usable binaryen pair
-    -- exists: PATH first, then the emsdk-bundled copy next to emcc
-    -- (<emsdk>/upstream/emscripten/emcc → <emsdk>/upstream/bin/wasm-dis).
-    binaryenProbe : String
-    binaryenProbe =
-      "d=\"$(command -v wasm-dis 2>/dev/null || true)\"; "
-      ++ "if [ -z \"$d\" ] && command -v emcc >/dev/null 2>&1; then "
-      ++   "e=\"$(dirname \"$(command -v emcc)\")/../bin/wasm-dis\"; "
-      ++   "[ -x \"$e\" ] && d=\"$e\"; "
-      ++ "fi; "
-      ++ "a=\"${d%wasm-dis}wasm-as\"; "
-      ++ "if [ -n \"$d\" ] && [ -x \"$d\" ] && [ -x \"$a\" ]; then "
-      ++   "printf '%s\\n%s\\n' \"$d\" \"$a\"; "
-      ++ "fi"
 
 -- =============================================================================
 -- Main Build Function
@@ -1822,6 +1986,13 @@ parseRefCExportArities modulePrefix cContent exports =
     parseOne : List String -> ExportedFunc -> Maybe (String, RefCArity)
     parseOne ls ef = findSignature (targetName ef) ls
 
+||| The non-.did exports whose RefC symbol was not found, by name.
+public export
+exportsWithoutArity : String -> List ExportedFunc -> List (String, RefCArity) -> List String
+exportsWithoutArity modulePrefix exports arities =
+  let names = map fst arities
+  in map (.name) (filter (\ef => not ef.fromDid && not ((modulePrefix ++ "_" ++ ef.name) `elem` names)) exports)
+
 allRealExportsHaveArities : String -> List ExportedFunc -> List (String, RefCArity) -> Bool
 allRealExportsHaveArities modulePrefix exports arities =
   let names = map fst arities
@@ -1864,6 +2035,10 @@ generateCanisterEntry opts cFile ic0Support = do
   -- Deduplicate by function name (keep first occurrence)
   let exports = nubBy (\a, b => a.name == b.name) rawExports
   putStrLn $ "        Parsed exports: " ++ show (length exports) ++ " functions"
+  let skipped = nonEndpointExports mainContent
+  when (not (null skipped)) $
+    putStrLn $ "        Not endpoints (exported, but not an argument-less IO action): "
+            ++ joinBy ", " (map (\e => e.name ++ " : " ++ e.returnType) skipped)
 
   -- Try to find and parse .did file for Candid-aware stub generation
   (didMethods, typeDefs) <- do
@@ -1915,9 +2090,13 @@ generateCanisterEntry opts cFile ic0Support = do
   if null normalizedExports
     then do
       -- No exports found, use static canister_entry.c
+      putStrLn $ "        No endpoints in " ++ opts.mainModule ++ ": using the minimal "
+              ++ ic0Support ++ "/canister_entry.c (the canister exposes no methods)"
       pure $ Right (ic0Support ++ "/canister_entry.c")
     else if not (allRealExportsHaveArities modulePrefix normalizedExports cArities)
-      then pure $ Left $ "Failed to infer RefC arity for one or more exports"
+      then pure $ Left $ "Failed to infer RefC arity for: "
+                ++ joinBy ", " (exportsWithoutArity modulePrefix normalizedExports cArities)
+                ++ " (no RefC symbol of that name in " ++ cFile ++ "; an endpoint main never reaches is removed by RefC dead-code elimination)"
     else do
       -- Generate dynamic canister_entry.c with Candid-aware stubs
       let entryC = generateCanisterEntryC modulePrefix cArities normalizedExports didMethods typeDefs opts.instrumentBranchProbes opts.instrumentPathHits
