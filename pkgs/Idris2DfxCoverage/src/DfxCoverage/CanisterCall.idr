@@ -620,6 +620,13 @@ startReplica opts = do
     then pure (Right ())
     else pure (Left $ if null stderr then stdout else stderr)
 
+||| Did THIS run start the local replica (and so must stop it)? Only on the local
+||| network, only when none was running before, and only when the start succeeded.
+||| A replica that was already up belongs to someone else and is left alone.
+public export
+replicaStartedHere : (network : String) -> (wasRunning : Bool) -> (startSucceeded : Bool) -> Bool
+replicaStartedHere network wasRunning ok = network == "local" && not wasRunning && ok
+
 ||| Stop local replica
 public export
 stopReplica : DeployOptions -> IO ()
@@ -698,12 +705,14 @@ deployCanister opts = do
       pure $ DeploySuccess (trim canisterId)
     else pure $ DeployError (if null stderr then stdout else stderr)
 
-||| Ensure canister is deployed: build WASM, start replica, deploy
-||| Returns canister ID on success
-||| If forTestBuild is True, dynamically generates test Main from Tests.AllTests
+||| ensureDeployed, plus whether THIS call started the local replica, so the
+||| caller can stop what it started. Measured 2026-10-01/02 on a NixOS dev
+||| machine: every dfx phase-2 run started `dfx start --clean --background`
+||| and left dfx + pocket-ic running after it ended, failed or not (three runs,
+||| three orphaned replicas, each reparented to the user systemd).
 public export
-ensureDeployed : DeployOptions -> IO (Either String String)
-ensureDeployed opts = do
+ensureDeployedTracked : DeployOptions -> IO (Either String String, Bool)
+ensureDeployedTracked opts = do
   ensureProjectIc0Support opts.projectDir
   installCanisterDepsViaPack opts.instrumentPathHits opts.projectDir
   -- Step 1: Build WASM (always rebuild to avoid cache bugs)
@@ -720,7 +729,7 @@ ensureDeployed opts = do
   when opts.forTestBuild $ putStrLn "    Building with test code (dynamically generated from Tests.AllTests)..."
   buildResult <- buildWasmViaIcWasmCli opts mainModulePath testModPath
   case buildResult of
-    Left err => pure (Left $ "WASM build failed: " ++ err)
+    Left err => pure (Left $ "WASM build failed: " ++ err, False)
     Right wasmPath => do
       putStrLn $ "    WASM built: " ++ wasmPath
 
@@ -737,27 +746,35 @@ ensureDeployed opts = do
           putStrLn "    Deploying non-instrumented WASM (function coverage unavailable)"
           pure wasmPath
 
-      -- Step 3: Start replica if needed (for local network)
-      when (opts.network == "local") $ do
-        running <- isReplicaRunning opts
-        unless running $ do
-          putStrLn "    Starting local replica..."
-          Right () <- startReplica opts
-            | Left err => pure ()  -- Will fail at deploy anyway
-          pure ()
+      -- Step 3: Start replica if needed (for local network). Remember whether
+      -- this call started it: only then is it this run's to stop.
+      wasRunning <- if opts.network == "local" then isReplicaRunning opts else pure True
+      startOk <- if wasRunning then pure False else do
+        putStrLn "    Starting local replica..."
+        r <- startReplica opts
+        pure (either (const False) (const True) r)  -- a failed start fails at deploy anyway
+      let started = replicaStartedHere opts.network wasRunning startOk
 
       -- Step 4: Install WASM directly (skips dfx build which validates .did)
       result <- installWasm opts deployWasm
       case result of
-        DeploySuccess cid => pure (Right cid)
-        DeployError err => pure (Left $ "Deploying: " ++ opts.canisterName ++ "\n" ++ err)
+        DeploySuccess cid => pure (Right cid, started)
+        DeployError err => pure (Left $ "Deploying: " ++ opts.canisterName ++ "\n" ++ err, started)
         DeployAlreadyRunning => do
           -- Get existing canister ID
           let idCmd = "cd " ++ opts.projectDir ++ " && " ++
                       opts.dfxPath ++ " canister id " ++ opts.canisterName ++
                       " --network " ++ opts.network ++ " 2>/dev/null"
           (_, canisterId, _) <- executeCommand idCmd
-          pure (Right (trim canisterId))
+          pure (Right (trim canisterId), started)
+
+||| Ensure canister is deployed: build WASM, start replica, deploy
+||| Returns canister ID on success
+||| If forTestBuild is True, dynamically generates test Main from Tests.AllTests
+||| (The replica this starts, if any, is NOT stopped; see ensureDeployedTracked.)
+public export
+ensureDeployed : DeployOptions -> IO (Either String String)
+ensureDeployed opts = map fst (ensureDeployedTracked opts)
 
 -- =============================================================================
 -- Result Analysis

@@ -13,6 +13,7 @@ import DfxCoverage.IcWasm.IcpPublicNameParser
 import DfxCoverage.DumpcasesParser
 import DfxCoverage.PathRuntime
 import DfxCoverage.SourceMap.SourceMapParser
+import DfxCoverage.CanisterCall
 
 %default covering
 
@@ -270,10 +271,25 @@ test_PATH_002 () =
 
 ||| All tests
 export
+-- REQ_DFXCOV_REPLICA_001: verifies who owns the local replica.
+-- Checked: a run that started the local replica owns it; one that found it
+-- already running, one whose start failed, and one on a non-local network
+-- (where nothing is started) do not.
+test_REQ_DFXCOV_REPLICA_001 : () -> Bool
+test_REQ_DFXCOV_REPLICA_001 () =
+  all id
+    [ replicaStartedHere "local" False True
+    , not (replicaStartedHere "local" True True)
+    , not (replicaStartedHere "local" True False)
+    , not (replicaStartedHere "local" False False)
+    , not (replicaStartedHere "ic" False True)
+    ]
+
 allTests : List TestDef
 allTests =
   -- Exclusions
   [ test "EXCL_001" "PatternType equality" test_EXCL_001
+  , test "REQ_DFXCOV_REPLICA_001" "A run stops only the replica it started" test_REQ_DFXCOV_REPLICA_001
   , test "EXCL_002" "exactPattern creation" test_EXCL_002
   , test "EXCL_003" "prefixPattern creation" test_EXCL_003
   , test "EXCL_004" "suffixPattern creation" test_EXCL_004

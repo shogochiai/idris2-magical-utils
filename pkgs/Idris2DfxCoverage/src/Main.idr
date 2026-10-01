@@ -1224,8 +1224,8 @@ runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPa
             , instrumentPathHits := True
             , forTestBuild := True
             } defaultDeployOptions
-      deployResult' <- the (IO (Either String String)) (ensureDeployed deployOpts)
-      case deployResult' of
+      (deployResult', startedReplica) <- ensureDeployedTracked deployOpts
+      result <- the (IO (Either String (String, List PathRuntimeHit))) $ case deployResult' of
         Left err => pure $ Left err
         Right _ => do
           -- Probe via CHUNKED methods only (each runs a small slice of the test
@@ -1279,6 +1279,13 @@ runNumeratorInProcess opts ipkgPath staticProjectDir staticIpkgName staticIpkgPa
                             pure ()
                           Nothing => pure ()
                         pure $ Right (dumppathsContent, hits)
+      -- Stop the replica only if this run started it, on every outcome: a run
+      -- that found one already up leaves it up; a run that started one and then
+      -- failed (deploy rejected, probe failed) no longer leaves it behind.
+      when startedReplica $ do
+        putStrLn "    Stopping the local replica this run started..."
+        stopReplica deployOpts
+      pure result
 
 ||| Derive the chez WRAPPER script path from argv[0]. A Chez-backed Idris exe is
 ||| `<dir>/<name>` (wrapper, sets DYLD/LD_LIBRARY_PATH) and `<dir>/<name>_app/<name>.so`
