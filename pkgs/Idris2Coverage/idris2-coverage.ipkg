@@ -22,6 +22,7 @@ modules = Main
         , Coverage.PathAnalysis
         , Coverage.Complexity
         , Coverage.TestHint
+        , Coverage.StaticMemo
         , Coverage.UnifiedRunner
         , Coverage.DumpcasesParser
         , Coverage.TestCoverage

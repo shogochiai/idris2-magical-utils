@@ -11,6 +11,9 @@ import Coverage.Core.DumppathsJson
 import Coverage.Exclusions
 import Coverage.PathCoverage
 import Coverage.Standardization.Types
+import Coverage.StaticMemo
+import Coverage.Core.OrdNub
+import Data.SortedMap
 import System
 import System.Clock
 import System.File
@@ -892,6 +895,24 @@ runStaticDumppathsJsonWhole ipkgPath = do
       in pure $ Left $ "Failed to read static dumppaths JSON: " ++ show err
                     ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
 
+-- =============================================================================
+-- Static chunk timing
+-- =============================================================================
+
+||| The per-chunk line of the chunked static denominator:
+||| `Static chunk <idx>: <ms> ms, <k> modules, <n> paths [<modules>]`, or
+||| `FAILED` in place of the path count. Milliseconds, so a chunk that took
+||| less than a second is not printed as zero.
+export
+staticChunkTimingLine : (idx : Nat) -> (elapsed : Clock Duration) -> (modules : List String)
+                     -> (paths : Maybe Nat) -> String
+staticChunkTimingLine idx d mods paths =
+  let ms = seconds d * 1000 + nanoseconds d `div` 1000000 in
+  "    Static chunk " ++ show idx ++ ": " ++ show ms ++ " ms, "
+    ++ show (length mods) ++ " modules, "
+    ++ maybe "FAILED" (\n => show n ++ " paths") paths
+    ++ " [" ++ joinBy ", " mods ++ "]"
+
 runStaticDumppathsJsonChunk : String -> String -> String -> List String -> String -> List String -> Nat -> IO (Either String (List PathObligation))
 runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends packTomlContent modules idx = do
   uid <- getUniqueId
@@ -1051,8 +1072,79 @@ resolveStaticChunkSize hasPrebuilt = do
              else if mb < 1024 then 2 else if mb < 2048 then 3 else 4
         Nothing => if hasPrebuilt then 8 else 4
 
-runStaticDumppathsJsonChunks : String -> String -> IO (Either String String)
-runStaticDumppathsJsonChunks ipkgPath wholeErr = do
+||| One line per chunk when the static memo is on: what it held, how much came
+||| from memo and how much was computed, and what it cost.
+export
+staticChunkMemoLine : (idx : Nat) -> (elapsed : Clock Duration) -> (modules, recomputed : List String)
+                   -> (memoPaths : Nat) -> (freshPaths : Maybe Nat) -> String
+staticChunkMemoLine idx d mods recomputed memoPaths fresh =
+  let ms = seconds d * 1000 + nanoseconds d `div` 1000000 in
+  "    Static chunk " ++ show idx ++ ": " ++ show ms ++ " ms, "
+    ++ show (length mods) ++ " modules (memo " ++ show (minus (length mods) (length recomputed))
+    ++ " / recomputed " ++ show (length recomputed) ++ "), paths memo " ++ show memoPaths
+    ++ " / recomputed " ++ maybe "FAILED" show fresh
+    ++ " [" ++ joinBy ", " mods ++ "]"
+    ++ (if null recomputed then "" else " recomputed: [" ++ joinBy ", " recomputed ++ "]")
+
+||| The chunked static denominator with the per-module memo (Coverage.StaticMemo).
+||| Chunk boundaries are the ones the plain path uses; inside a chunk, members
+||| with a committed row under their current key are served from it and only
+||| the others are built. Every computed member's paths are staged as its row
+||| (an empty row too, so a module with no paths is not rebuilt every time).
+||| Staged rows become memo only when the caller commits them.
+runStaticChunksWithMemo : (memoDir, projectDir, sourcedir, tempBuildDir : String)
+                       -> (deps : List String) -> (packTomlContent : String)
+                       -> (keys : SortedMap String String) -> (toolKey : String)
+                       -> (modulesLongestFirst : List String)
+                       -> (chunks : List (List String))
+                       -> IO (Either String (List PathObligation))
+runStaticChunksWithMemo memoDir projectDir sourcedir tempBuildDir deps packToml keys tool longest chunks = do
+  clearStaging memoDir
+  go chunks 0 [] 0 0 0 0
+  where
+    keyOf : String -> String
+    keyOf m = fromMaybe "" (lookup m keys)
+
+    rowOf : String -> IO (String, Maybe (List PathObligation))
+    rowOf m = do
+      r <- loadRow memoDir m (keyOf m)
+      pure (m, r >>= \json => either (const Nothing) Just (parseDumppathsJson json))
+
+    go : List (List String) -> Nat -> List PathObligation -> Nat -> Nat -> Nat -> Nat
+      -> IO (Either String (List PathObligation))
+    go [] _ acc mm rm mp rp = do
+      putStrLn $ "    Static memo: modules memo " ++ show mm ++ " / recomputed " ++ show rm
+              ++ "; paths memo " ++ show mp ++ " / recomputed " ++ show rp
+              ++ "; tool key " ++ substr 0 12 tool
+      fflush stdout
+      pure (Right acc)
+    go (mods :: rest) idx acc mm rm mp rp = do
+      t0 <- clockTime Monotonic
+      loaded <- the (IO (List (String, Maybe (List PathObligation)))) (traverse rowOf mods)
+      let served : List PathObligation = concatMap (\(_, r) => fromMaybe [] r) loaded
+      let dirty : List String = mapMaybe (\(m, r) => if isNothing r then Just m else Nothing) loaded
+      fresh <- if null dirty
+                 then pure (the (Either String (List PathObligation)) (Right []))
+                 else runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir deps packToml dirty idx
+      t1 <- clockTime Monotonic
+      case fresh of
+        Left err => do
+          putStrLn $ staticChunkMemoLine idx (timeDifference t1 t0) mods dirty (length served) Nothing
+          pure (Left err)
+        Right freshPaths => do
+          let (grouped, _) = groupByModule longest freshPaths
+          staged <- traverse (\m => stageRow memoDir m (keyOf m)
+                                      (pathObligationsToDumppathsJson (fromMaybe [] (lookup m grouped)))) dirty
+          when (any not staged) $
+            putStrLn "    Static memo: a row could not be staged; that module is computed again next run"
+          putStrLn $ staticChunkMemoLine idx (timeDifference t1 t0) mods dirty (length served) (Just (length freshPaths))
+          fflush stdout
+          go rest (idx + 1) (freshPaths ++ served ++ acc)
+             (mm + minus (length mods) (length dirty)) (rm + length dirty)
+             (mp + length served) (rp + length freshPaths)
+
+runStaticDumppathsJsonChunks : (memoDir : Maybe String) -> String -> String -> IO (Either String String)
+runStaticDumppathsJsonChunks memoDir ipkgPath wholeErr = do
   let (projectDir, _) = splitPath ipkgPath
   Right ipkgContent <- readFile ipkgPath
     | Left err => pure $ Left $ wholeErr ++ "\nChunked fallback could not read ipkg: " ++ show err
@@ -1103,7 +1195,19 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        chunkSize <- resolveStaticChunkSize hasPrebuiltForSizing
        let chunks = chunkList chunkSize headMods ++ map (\m => [m]) tailMods
        putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons, chunk size " ++ show chunkSize ++ (if hasPrebuiltForSizing then " (prebuilt TTC found)" else " (no prebuilt TTC — colder/smaller chunks)") ++ ")..."
-       chunkResults <- runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent chunks 0 []
+       let srcPathOf = \m => projectDir ++ "/" ++ sourcedir ++ "/"
+                             ++ pack (map (\c => if c == '.' then '/' else c) (unpack m)) ++ ".idr"
+       chunkResults <- the (IO (Either String (List PathObligation))) $ case memoDir of
+         Nothing => runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent chunks 0 []
+         Just dir => do
+           keysR <- staticMemoKeys dir srcPathOf projectModules
+           case keysR of
+             Left why => do
+               putStrLn $ "    Static memo: not used this run (" ++ why ++ "); every chunk is computed"
+               runChunks projectDir sourcedir tempBuildDir projectDepends packTomlContent chunks 0 []
+             Right (tool, keys) =>
+               runStaticChunksWithMemo dir projectDir sourcedir tempBuildDir projectDepends packTomlContent
+                 keys tool (sortBy (\a, b => compare (length b) (length a)) projectModules) chunks
        _ <- system $ "cd " ++ projectDir ++ " && rm -rf " ++ tempBuildDir
        case chunkResults of
          Left err => pure $ Left $ wholeErr ++ "\nChunked fallback failed: " ++ err
@@ -1165,7 +1269,13 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
     runChunks : String -> String -> String -> List String -> String -> List (List String) -> Nat -> List PathObligation -> IO (Either String (List PathObligation))
     runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
     runChunks projectDir sourcedir tempBuildDir deps packTomlContent (mods :: rest) idx acc = do
+      chunkStart <- clockTime Monotonic
       result <- runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir deps packTomlContent mods idx
+      chunkEnd <- clockTime Monotonic
+      -- One line per chunk: what it held and what it cost. Stage 2 of luci
+      -- feat/step4-diffscope predicts and checks its savings chunk by chunk.
+      putStrLn $ staticChunkTimingLine idx (timeDifference chunkEnd chunkStart) mods
+          (either (const Nothing) (Just . length) result)
       -- Do NOT wipe tempBuildDir between chunks. Found 2026-07-28 (alice,
       -- jiwph principal), root-caused from live artifacts on a stalled run:
       -- when the project has no prebuilt build/ttc (hasPrebuilt=False,
@@ -1213,9 +1323,11 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
 staticWholeModuleCeiling : Nat
 staticWholeModuleCeiling = 40
 
+||| The static denominator, with the per-module memo in `memoDir` when given
+||| (only the chunked path uses it; a whole-package build has no chunks).
 export
-runStaticDumppathsJson : String -> IO (Either String String)
-runStaticDumppathsJson ipkgPath = do
+runStaticDumppathsJsonWith : (memoDir : Maybe String) -> String -> IO (Either String String)
+runStaticDumppathsJsonWith memoDir ipkgPath = do
   -- Install the project's custom LOCAL deps into the forked compiler's package
   -- path FIRST. runStaticDumppathsJsonWhole builds the project's REAL ipkg with a
   -- direct `idris2 --build` (the only path that honours --dumppaths-json), which
@@ -1238,13 +1350,17 @@ runStaticDumppathsJson ipkgPath = do
       putStrLn $ "    Large package (" ++ show modCount
               ++ " modules > " ++ show staticWholeModuleCeiling
               ++ "); skipping whole-package dumppaths and chunking directly..."
-      runStaticDumppathsJsonChunks ipkgPath
+      runStaticDumppathsJsonChunks memoDir ipkgPath
         ("Whole-package dumppaths skipped for large package (" ++ show modCount ++ " modules).")
     else do
       whole <- runStaticDumppathsJsonWhole ipkgPath
       case whole of
         Right content => pure $ Right content
-        Left err => runStaticDumppathsJsonChunks ipkgPath err
+        Left err => runStaticDumppathsJsonChunks memoDir ipkgPath err
+
+export
+runStaticDumppathsJson : String -> IO (Either String String)
+runStaticDumppathsJson = runStaticDumppathsJsonWith Nothing
 
 ||| Split "path/to/project.ipkg" into ("path/to", "project.ipkg")
 splitIpkgPathLocal : String -> (String, String)
@@ -2191,6 +2307,22 @@ runtimeBuildDirName : RuntimeBuildDir -> String
 runtimeBuildDirName (PersistentRuntimeDir d) = d
 runtimeBuildDirName (EphemeralRuntimeDir d) = d
 
+||| Where the static per-module memo lives, if it is on. It is on only when
+||| IDRIS2COV_STATIC_MEMO is "1" AND the runtime build dir is persistent: the
+||| memo sits inside that dir (`<dir>/static-memo`), which callers already keep
+||| between runs and out of git. Asked for with an ephemeral dir, the answer is a
+||| refusal to print, not a memo in a directory that is deleted after the run.
+export
+staticMemoDirFor : (memoEnv : Maybe String) -> RuntimeBuildDir -> (absProjectDir : String)
+                -> Either String (Maybe String)
+staticMemoDirFor (Just v) (PersistentRuntimeDir d) abs =
+  if trim v == "1" then Right (Just (abs ++ "/" ++ d ++ "/static-memo")) else Right Nothing
+staticMemoDirFor (Just v) (EphemeralRuntimeDir _) _ =
+  if trim v == "1"
+     then Left "IDRIS2COV_STATIC_MEMO=1 needs a persistent IDRIS2COV_RUNTIME_BUILD_DIR; the static memo is OFF this run"
+     else Right Nothing
+staticMemoDirFor Nothing _ _ = Right Nothing
+
 ||| What the chunk removes from its build dir when it is done. An ephemeral dir
 ||| goes entirely. A persistent one keeps everything: its runner module, exe and
 ||| hits path have STABLE names (runtimeChunkNames), so the TTCs are what the next
@@ -2397,6 +2529,42 @@ runRuntimePathHitsChunks projectDir sourcedir deps packTomlContent (mods :: rest
   runRuntimePathHitsChunks projectDir sourcedir deps packTomlContent rest (idx + 1) (hits ++ acc)
 
 ||| Build and run test modules with forked Idris2 path instrumentation enabled.
+||| The end of a run that used the static memo: decide whether its staged rows
+||| become memo, and whether the denominator it served can stand.
+|||
+||| - No covered hit at all: the run did not measure; nothing is committed
+|||   (a failed run must never become a row that later runs replay).
+||| - A hit id outside the universe whose counter-stripped form IS in the
+|||   universe (staleHitIds): a row was served after its ids moved. The memo is
+|||   discarded and the denominator recomputed with no memo, so the run reports
+|||   the cold answer rather than a quietly wrong one.
+||| - Otherwise the staged rows are committed.
+settleStaticMemo : (memoDir, ipkgPath, denomJson : String) -> List PathRuntimeHit
+                -> IO (Either String (String, List PathRuntimeHit))
+settleStaticMemo dir ipkgPath denomJson hits = do
+  let hitIds = map (.pathId) (filter isPathCovered hits)
+  if null hitIds
+     then do
+       putStrLn "    Static memo: the run produced no covered hits; staged rows NOT committed"
+       pure (Right (denomJson, hits))
+     else do
+       let stale = staleHitIds (extractPathIds denomJson) hitIds
+       case stale of
+         [] => do
+           ok <- commitStaging dir
+           putStrLn $ if ok then "    Static memo: staged rows committed"
+                            else "    Static memo: staged rows could NOT be committed (next run computes them again)"
+           pure (Right (denomJson, hits))
+         (s :: _) => do
+           putStrLn $ "    Static memo: " ++ show (length stale)
+                   ++ " hit ids match the universe only with the compiler counter stripped (e.g. "
+                   ++ s ++ "); memo DISCARDED, denominator recomputed without it"
+           discardMemo dir
+           cold <- runStaticDumppathsJsonWith Nothing ipkgPath
+           case cold of
+             Left err => pure (Left ("Chunked path coverage: static denominator (memo discarded) failed: " ++ err))
+             Right c => pure (Right (c, hits))
+
 ||| Returns static dumppaths JSON plus runtime path hits from the executed test binary.
 |||
 ||| For large test suites (> runtimeChunkTestModuleCeiling test modules) the
@@ -2444,7 +2612,13 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       -- never builds the whole package in one process.
       Just projectIpkgPath <- findProjectIpkgPath projectDir
         | Nothing => pure $ Left "Chunked path coverage: no project ipkg found for static denominator"
-      denomResult <- runStaticDumppathsJson projectIpkgPath
+      memoEnv <- getEnv "IDRIS2COV_STATIC_MEMO"
+      rbdEnv <- getEnv "IDRIS2COV_RUNTIME_BUILD_DIR"
+      absProjectDir <- toAbsolutePath projectDir
+      memoDir <- case staticMemoDirFor memoEnv (resolveRuntimeBuildDir rbdEnv "static-memo") absProjectDir of
+                   Left why => do putStrLn ("    " ++ why); pure Nothing
+                   Right d => pure d
+      denomResult <- runStaticDumppathsJsonWith memoDir projectIpkgPath
       case denomResult of
         Left err => pure $ Left $ "Chunked path coverage: static denominator failed: " ++ err
         Right denomJson => do
@@ -2452,7 +2626,9 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
           -- process so peak memory stays bounded.
           let chunks = chunkList runtimeChunkSize testModules
           hits <- runRuntimePathHitsChunks projectDir sourcedir projectDepends packTomlContent chunks 0 []
-          pure $ Right (denomJson, hits)
+          case memoDir of
+            Nothing => pure $ Right (denomJson, hits)
+            Just dir => settleStaticMemo dir projectIpkgPath denomJson hits
 
     ||| The original whole-suite single build+run, kept for small suites where the
     ||| memory cost is negligible and one clean process is simplest.

@@ -20,6 +20,10 @@ import Coverage.Config
 import Coverage.DumpcasesParser
 import Coverage.Standardization.Types
 import Coverage.Standardization.Model
+import Coverage.StaticMemo
+import Data.SortedMap
+import Data.SortedSet
+import Data.Either
 import Data.List
 import Data.String
 import Data.Maybe
@@ -963,6 +967,104 @@ test_CFG_003 = do
 -- =============================================================================
 -- REQ_COV_PATH_SETJOIN_001 / REQ_COV_PATHS_ARTIFACTS_ONLY_001
 -- =============================================================================
+||| REQ_COV_STATIC_MEMO_001: verifies the pure parts of the static memo.
+||| Checked: stripGenCounter removes only the first counter of a
+||| `.<n>:<m>:` generated name and leaves other digits alone; staleHitIds
+||| reports a hit whose counter moved and not one the name filter merely
+||| dropped (a record projection), nor an id that is in the universe;
+||| importsOfSource keeps project imports (plain and public) and drops library
+||| ones; importClosure is transitive, excludes the module itself, is sorted and
+||| survives a cycle; moduleOfFunction picks the longest module; groupByModule
+||| keeps order and sets wrapper paths apart; extractPathIds reads ids with
+||| commas and escapes; moduleKeyMaterial names the tool, the module and every
+||| dependency with its hash, so changing any of them changes the material;
+||| staticMemoDirFor turns the memo on only with "1" and a persistent dir, and
+||| refuses (Left) "1" with an ephemeral one.
+covering
+test_REQ_COV_STATIC_MEMO_001 : IO Bool
+test_REQ_COV_STATIC_MEMO_001 = do
+  let known : SortedSet String
+      known = fromList ["A", "A.B", "C", "D"]
+      imports : SortedMap String (List String)
+      imports = fromList [("A", ["A.B"]), ("A.B", ["C"]), ("C", ["A"]), ("D", [])]
+      hashes : SortedMap String String
+      hashes = fromList [("A", "h1"), ("A.B", "h2"), ("C", "h3"), ("D", "h4")]
+      hashes2 : SortedMap String String
+      hashes2 = fromList [("A", "h1"), ("A.B", "h2"), ("C", "hX"), ("D", "h4")]
+      mat : String
+      mat = moduleKeyMaterial "T1" hashes (importClosure imports "A") "A"
+      p : String -> String -> PathObligation
+      p pid fn = MkPathObligation pid fn "M" ReachableObligation "reached_clause" Nothing [] Nothing 1
+      gr : (SortedMap String (List PathObligation), List PathObligation)
+      gr = groupByModule ["A.B", "A", "C"]
+                     [p "A.B.f#p0" "A.B.f", p "A.g#p0" "A.g", p "T.main#p0" "TempStaticDumppaths_x.main", p "A.B.h#p0" "A.B.h"]
+      json : String
+      json = "{\"functions\":[{\"function_name\":\"M.f,go\",\"paths\":[{\"path_id\":\"M.case block in f,go#p0\",\"x\":1},{\"path_id\": \"M.q\\\"x#p1\"}]}]}"
+  pure $ all id
+    [ stripGenCounter "Luci.Preflight.12766:734:firstJust#p0" == "Luci.Preflight.#:734:firstJust#p0"
+    , stripGenCounter "M.case block in f,go#p0" == "M.case block in f,go#p0"
+    , stripGenCounter "M.{__con:2207}#p0" == "M.{__con:2207}#p0"
+    , stripGenCounter "M.f2#p10" == "M.f2#p10"
+    , staleHitIds ["M.12766:734:go#p0", "M.f#p0"] ["M.12767:734:go#p0"] == ["M.12767:734:go#p0"]
+    , staleHitIds ["M.12766:734:go#p0", "M.f#p0"] ["M.Rec.field#p0", "M.f#p0", "M.12766:734:go#p0"] == []
+    , importsOfSource known "module X\nimport A\nimport public C\nimport Data.List\n  import D\n" == ["A", "C", "D"]
+    , importClosure imports "A" == ["A.B", "C"]
+    , importClosure imports "D" == []
+    , moduleOfFunction ["A.B", "A"] "A.B.f" == Just "A.B"
+    , moduleOfFunction ["A.B", "A"] "A.Bx.f" == Just "A"
+    , moduleOfFunction ["A.B", "A"] "Z.f" == Nothing
+    , map (map (.pathId)) (Data.SortedMap.lookup "A.B" (Builtin.fst gr)) == Just ["A.B.f#p0", "A.B.h#p0"]
+    , map (map (.pathId)) (Data.SortedMap.lookup "A" (Builtin.fst gr)) == Just ["A.g#p0"]
+    , map (.pathId) (Builtin.snd gr) == ["T.main#p0"]
+    , extractPathIds json == ["M.case block in f,go#p0", "M.q\"x#p1"]
+    , isInfixOf "tool T1" mat
+    , isInfixOf "module A h1" mat
+    , isInfixOf "dep A.B h2" mat
+    , isInfixOf "dep C h3" mat
+    , mat /= moduleKeyMaterial "T2" hashes (importClosure imports "A") "A"
+    , mat /= moduleKeyMaterial "T1" hashes2 (importClosure imports "A") "A"
+    , staticMemoDirFor (Just "1") (PersistentRuntimeDir "build-pathcov") "/p" == Right (Just "/p/build-pathcov/static-memo")
+    , staticMemoDirFor (Just "0") (PersistentRuntimeDir "build-pathcov") "/p" == Right Nothing
+    , staticMemoDirFor Nothing (PersistentRuntimeDir "build-pathcov") "/p" == Right Nothing
+    , isLeft (staticMemoDirFor (Just "1") (EphemeralRuntimeDir ".x") "/p")
+    ]
+
+||| REQ_COV_STATIC_MEMO_002: verifies the static memo's row life cycle on a real
+||| directory. Checked: a staged row is NOT served before it is committed; after
+||| commitStaging it is served with the exact JSON staged, and under its own key
+||| only; clearStaging drops staged rows that were never committed (an
+||| interrupted run) without touching committed ones; discardMemo removes every
+||| committed row.
+covering
+test_REQ_COV_STATIC_MEMO_002 : IO Bool
+test_REQ_COV_STATIC_MEMO_002 = do
+  pid <- getPID
+  let dir = "/tmp/idris2cov-static-memo-test-" ++ show pid
+  _ <- system ("rm -rf " ++ dir)
+  clearStaging dir
+  s1 <- stageRow dir "M.A" "k1" "{\"functions\":[]}"
+  before <- loadRow dir "M.A" "k1"
+  c1 <- commitStaging dir
+  after <- loadRow dir "M.A" "k1"
+  otherKey <- loadRow dir "M.A" "k2"
+  s2 <- stageRow dir "M.B" "k9" "{\"functions\":[]}"
+  clearStaging dir
+  c2 <- commitStaging dir
+  dropped <- loadRow dir "M.B" "k9"
+  kept <- loadRow dir "M.A" "k1"
+  discardMemo dir
+  gone <- loadRow dir "M.A" "k1"
+  _ <- system ("rm -rf " ++ dir)
+  pure $ all id
+    [ s1, s2, c1, c2
+    , isNothing before
+    , after == Just "{\"functions\":[]}"
+    , isNothing otherKey
+    , isNothing dropped
+    , isJust kept
+    , isNothing gone
+    ]
+
 
 -- The list forms the set joins replaced, copied verbatim from Coverage.Core
 -- (2026-09-30, before the change), kept here as the reference they must equal.
@@ -1167,6 +1269,8 @@ allTests =
   , ("REQ_COV_UNI_PERSIST_001", test_REQ_COV_UNI_PERSIST_001)
   , ("REQ_COV_PATH_SETJOIN_001", test_REQ_COV_PATH_SETJOIN_001)
   , ("REQ_COV_PATHS_ARTIFACTS_ONLY_001", test_REQ_COV_PATHS_ARTIFACTS_ONLY_001)
+  , ("REQ_COV_STATIC_MEMO_001", test_REQ_COV_STATIC_MEMO_001)
+  , ("REQ_COV_STATIC_MEMO_002", test_REQ_COV_STATIC_MEMO_002)
   , ("REQ_COV_MGL_001", test_MGL_001)
   , ("REQ_COV_MGL_002", test_MGL_002)
   , ("REQ_COV_MGL_003", test_MGL_003)

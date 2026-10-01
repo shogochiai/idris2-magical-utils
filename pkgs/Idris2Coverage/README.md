@@ -186,3 +186,22 @@ Optional:
 ## License
 
 MIT
+
+### Static per-module memo (`IDRIS2COV_STATIC_MEMO=1`)
+
+With `IDRIS2COV_STATIC_MEMO=1` **and** a persistent `IDRIS2COV_RUNTIME_BUILD_DIR`, the
+chunked static denominator keeps one row per module in `<runtime dir>/static-memo`
+and builds only the modules whose row key changed. A key covers the module's source,
+the source of every project module in its import closure, this idris2-cov's `.so`,
+the fork compiler's `.so` and every installed library `.ttc`. Rows are committed only
+at the end of a run that produced covered hits and whose served universe shows no
+moved compiler counter (`staleHitIds`); otherwise the memo is discarded and the
+denominator recomputed. Each chunk prints its time and memo/recomputed counts.
+
+Measured on luci pkgs/Luci (37 chunks, 503.5 s cold), one unreferenced export added:
+
+| edited module | recomputed modules | static chunks: memo / cold | paths memo / recomputed | universe vs cold |
+|---|---|---|---|---|
+| `Luci.Boundary.DaemonOps` (imported by nobody) | 1 | 20.3 s / 507.2 s | 29724 / 62 | sorted diff 0 |
+| `Luci.Workspace` | 12 | 265.7 s / 512.2 s | 20513 / 9810 | sorted diff 0 |
+| `Luci.Types` (most imported) | 57 | 432.4 s / 500.9 s | 10759 / 19483 | sorted diff 0 |
