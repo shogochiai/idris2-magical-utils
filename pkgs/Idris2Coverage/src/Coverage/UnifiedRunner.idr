@@ -249,29 +249,74 @@ generateTempIpkg pkgName mainMod modules execName depends sourcedir dumpcasesPat
 ||| registered key even for a public repository, and on a machine with no ~/.ssh
 ||| the clone waited on the host-key prompt for 44+ minutes with no timeout while
 ||| the same `git ls-remote` over HTTPS took 1 s (clean NixOS box).
+||| The coverage stack's dependency closure, as (pack name, package dir under
+||| pkgs/, ipkg). idris2-coverage depends on idris2-coverage-core, which depends
+||| on idris2-coverage-standardization and idris2-delivery-kind; a probe
+||| pack.toml that names only idris2-coverage fails dep resolution with
+||| `Unknown package idris2-coverage-core` (clean NixOS, 2026-09-30, the fourth
+||| distinct cause of `coverage_percent=unknown` on that box). Kept in one place
+||| so the local and the HTTPS blocks cannot drift.
+export
+coverageClosure : List (String, String, String)
+coverageClosure =
+  [ ("idris2-coverage",                 "Idris2Coverage",                "idris2-coverage.ipkg")
+  , ("idris2-coverage-core",            "Idris2CoverageCore",            "idris2-coverage-core.ipkg")
+  , ("idris2-coverage-standardization", "Idris2CoverageStandardization", "idris2-coverage-standardization.ipkg")
+  , ("idris2-delivery-kind",            "Idris2DeliveryKind",            "idris2-delivery-kind.ipkg")
+  ]
+
+||| Parent directory of a path (`/a/b/c` → `/a/b`; no slash → `.`).
+parentDir : String -> String
+parentDir p = case break (== '/') (unpack (reverse p)) of
+  (_, '/' :: rest) => if null rest then "/" else reverse (pack rest)
+  _                => "."
+
+||| One `[custom.all.<name>]` block for every package of the closure. Local: the
+||| given dir is pkgs/Idris2Coverage of a checkout, and its siblings are the
+||| other packages. HTTPS: the same GitHub repository, one ipkg path each.
 export
 coverageDepBlock : Maybe String -> String
-coverageDepBlock (Just dir) = unlines
-  [ "# Auto-generated: idris2-coverage dependency for test profiling (local checkout)"
-  , "[custom.all.idris2-coverage]"
-  , "type   = \"local\""
-  , "path   = \"" ++ dir ++ "\""
-  , "ipkg   = \"idris2-coverage.ipkg\""
-  ]
-coverageDepBlock Nothing = unlines
-  [ "# Auto-generated: idris2-coverage dependency for test profiling"
-  , "# This enables Coverage.Profiler to track function hits during test execution"
-  , "[custom.all.idris2-coverage]"
-  , "type   = \"github\""
-  , "url    = \"https://github.com/shogochiai/idris2-magical-utils.git\""
-  , "commit = \"latest\""
-  , "ipkg   = \"pkgs/Idris2Coverage/idris2-coverage.ipkg\""
-  ]
+coverageDepBlock (Just dir) =
+  "# Auto-generated: idris2-coverage and its dependency closure for test profiling (local checkout)\n"
+  ++ concatMap (\(name, pkgDir, ipkg) => unlines
+       [ "[custom.all." ++ name ++ "]"
+       , "type   = \"local\""
+       , "path   = \"" ++ (if name == "idris2-coverage" then dir else parentDir dir ++ "/" ++ pkgDir) ++ "\""
+       , "ipkg   = \"" ++ ipkg ++ "\""
+       , "" ]) coverageClosure
+coverageDepBlock Nothing =
+  "# Auto-generated: idris2-coverage and its dependency closure for test profiling\n"
+  ++ "# This enables Coverage.Profiler to track function hits during test execution\n"
+  ++ concatMap (\(name, pkgDir, ipkg) => unlines
+       [ "[custom.all." ++ name ++ "]"
+       , "type   = \"github\""
+       , "url    = \"https://github.com/shogochiai/idris2-magical-utils.git\""
+       , "commit = \"latest\""
+       , "ipkg   = \"pkgs/" ++ pkgDir ++ "/" ++ ipkg ++ "\""
+       , "" ]) coverageClosure
+
+||| Drop the closure blocks the project's own pack.toml already declares (a
+||| duplicate `[custom.all.<name>]` table is a TOML error, and a project that
+||| vendors idris2-coverage declares it itself).
+export
+withoutDeclared : (projectPackToml : String) -> (block : String) -> String
+withoutDeclared conf block = unlines (go False (lines block))
+  where
+    declared : String -> Bool
+    declared header = isInfixOf header conf
+    -- skipping = inside a block the project already declares; a blank line ends it
+    go : (skipping : Bool) -> List String -> List String
+    go _     []        = []
+    go True  (l :: ls) = if trim l == "" then go False ls else go True ls
+    go False (l :: ls) =
+      if isPrefixOf "[custom.all." (trim l) && declared (trim l)
+        then go True ls
+        else l :: go False ls
 
 export
 generateTempPackTomlWith : Maybe String -> String -> String
 generateTempPackTomlWith localCoverage projectPackToml =
-  let coverageDef = coverageDepBlock localCoverage
+  let coverageDef = withoutDeclared projectPackToml (coverageDepBlock localCoverage)
   in if projectPackToml == ""
        then coverageDef
        else projectPackToml ++ "\n\n" ++ coverageDef
@@ -450,8 +495,7 @@ localDepEntries content = go (lines content) Nothing Nothing Nothing Nothing []
 ||| hardcodes idris2-coverage; it depends on these). Always install these.
 export
 coverageStackDeps : List String
-coverageStackDeps =
-  [ "idris2-coverage", "idris2-coverage-core", "idris2-coverage-standardization" ]
+coverageStackDeps = map (\(n, _, _) => n) coverageClosure
 
 ||| Install ONLY the local deps this project needs into the FORKED compiler's
 ||| package path so a direct `idris2 --build` (the only path that honours

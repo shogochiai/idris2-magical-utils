@@ -1071,12 +1071,43 @@ test_REQ_COV_PATHS_ARTIFACTS_ONLY_001 =
 -- =============================================================================
 -- All Tests
 -- =============================================================================
+||| REQ_COV_PROBE_CLOSURE_001: the probe pack.toml declares idris2-coverage's whole
+||| dependency closure (core, standardization, delivery-kind), local and HTTPS
+||| alike, never SSH, and does not duplicate a block the project already declares.
+test_REQ_COV_PROBE_CLOSURE_001 : IO Bool
+test_REQ_COV_PROBE_CLOSURE_001 =
+  let localB = coverageDepBlock (Just "/home/u/idris2-magical-utils/pkgs/Idris2Coverage")
+      httpsB = coverageDepBlock Nothing
+      names  = map (\(n, _, _) => n) coverageClosure
+      has : String -> String -> Bool
+      has b n = isInfixOf ("[custom.all." ++ n ++ "]") b
+      conf   = "[custom.all.idris2-coverage-core]\ntype = \"local\"\npath = \"x\"\nipkg = \"y\"\n"
+      merged = generateTempPackTomlWith (Just "/r/pkgs/Idris2Coverage") conf
+      count : String -> String -> Nat
+      count s sub = length (filter (isInfixOf sub) (lines s))
+  in pure $ all id
+    [ length names == 4
+    , all (has localB) names
+    , all (has httpsB) names
+    , isInfixOf "path   = \"/home/u/idris2-magical-utils/pkgs/Idris2Coverage\"" localB
+    , isInfixOf "path   = \"/home/u/idris2-magical-utils/pkgs/Idris2CoverageCore\"" localB
+    , isInfixOf "path   = \"/home/u/idris2-magical-utils/pkgs/Idris2DeliveryKind\"" localB
+    , isInfixOf "ipkg   = \"pkgs/Idris2DeliveryKind/idris2-delivery-kind.ipkg\"" httpsB
+    , isInfixOf "https://github.com/" httpsB && not (isInfixOf "git@" localB) && not (isInfixOf "git@" httpsB)
+    , count merged "[custom.all.idris2-coverage-core]" == 1     -- declared by the project: not added twice
+    , count merged "[custom.all.idris2-coverage]" == 1
+    , count merged "[custom.all.idris2-delivery-kind]" == 1
+    , isInfixOf "path = \"x\"" merged                            -- the project's own block survives
+    , coverageStackDeps == names
+    , generateTempPackTomlWith Nothing "" == httpsB
+    ]
 
 export
 covering
 allTests : List (String, IO Bool)
 allTests =
   [ ("REQ_COV_LIN_001", test_LIN_001)
+  , ("REQ_COV_PROBE_CLOSURE_001", test_REQ_COV_PROBE_CLOSURE_001)
   , ("REQ_COV_LIN_002", test_LIN_002)
   , ("REQ_COV_LIN_003", test_LIN_003)
   , ("REQ_COV_LIN_004", test_LIN_004)
