@@ -188,6 +188,19 @@ test_REQ_WASM_WASI_005 () =
         go _ [] = Nothing
         go i cs@(_ :: rest) = if isPrefixOf (unpack needle) cs then Just i else go (S i) rest
 
+-- REQ_WASM_RT_005: verifies the completeness rule for runtime sources.
+-- Checked: a text ending in a newline is complete; an empty text, a text cut
+-- mid-line (the truncated-download shape), and a 404 page without a final
+-- newline are not.
+test_REQ_WASM_RT_005 : () -> Bool
+test_REQ_WASM_RT_005 () =
+  all id
+    [ sourceTextComplete "#include <stdint.h>\nint x;\n"
+    , not (sourceTextComplete "")
+    , not (sourceTextComplete "#include <stdint.h>\nint x")
+    , not (sourceTextComplete "404: Not Found")
+    ]
+
 -- =============================================================================
 -- Test Runner
 -- =============================================================================
@@ -208,6 +221,7 @@ allTests =
   , test "REQ_WASM_ENTRY_001" "Endpoints are argument-less IO exports" test_REQ_WASM_ENTRY_001
   , test "REQ_WASM_ENTRY_002" "Canister ipkg is the one whose main is Main" test_REQ_WASM_ENTRY_002
   , test "REQ_WASM_WASI_005" "binaryen found via em-config, EMSDK, real emcc" test_REQ_WASM_WASI_005
+  , test "REQ_WASM_RT_005" "Runtime sources are present only when complete" test_REQ_WASM_RT_005
   ]
 
 ||| Run an indexed slice of tests (for chunked IC coverage probes). Slicing the
