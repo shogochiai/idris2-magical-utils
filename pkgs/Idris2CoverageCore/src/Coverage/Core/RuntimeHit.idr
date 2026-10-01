@@ -11,6 +11,7 @@
 module Coverage.Core.RuntimeHit
 
 import Data.List
+import Coverage.Core.OrdNub
 
 %default total
 
@@ -92,10 +93,13 @@ public export
 isPathCovered : PathRuntimeHit -> Bool
 isPathCovered h = h.hitCount > 0
 
-||| Extract the covered path ids from runtime hits.
+||| Extract the covered path ids from runtime hits: distinct, first occurrence
+||| first. `nubOrd`, not `nub`: a hits file carries one line per execution
+||| (135978 lines for 12185 ids on luci pkgs/Luci), and `nub` compared each line
+||| with every id kept so far.
 public export
 coveredPathIds : List PathRuntimeHit -> List String
 coveredPathIds hits =
-  nub $
+  nubOrd $
     map (.pathId) $
       filter isPathCovered hits
