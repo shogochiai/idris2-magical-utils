@@ -1021,11 +1021,15 @@ findIpkg projectDir = do
       (_, result, _) <- executeCommand cmd
       pure $ if null (trim result) then Nothing else Just (trim result)
 
-resolvePackagesFromIpkg : String -> IO (List String)
-resolvePackagesFromIpkg ipkg = do
-  Right content <- readFile ipkg
-    | Left _ => pure []
-  pure $ parseDepends content
+||| The package names an ipkg's `depends` field lists, version bounds dropped.
+||| `depends = base >= 0.8.0, contrib` gives ["base", "contrib"]: entries are
+||| comma-separated, and each one's name is its text up to the first space or
+||| bound operator, so `base>=0.8` and a continuation line `, pkg >= 1.0` both
+||| give only the name. Only the `=` right after the `depends` keyword is the
+||| field's own; any later `=` belongs to a bound.
+public export
+parseIpkgDepends : String -> List String
+parseIpkgDepends content = collect False (lines content)
   where
     stripComment : String -> String
     stripComment line = pack (takeUntilComment (unpack line))
@@ -1035,49 +1039,44 @@ resolvePackagesFromIpkg ipkg = do
         takeUntilComment ('-' :: '-' :: _) = []
         takeUntilComment (c :: cs) = c :: takeUntilComment cs
 
-    tokenChars : String -> List String
-    tokenChars s =
-      forget $ split (\c => c == ',' || c == ' ' || c == '\t') s
+    isBoundChar : Char -> Bool
+    isBoundChar c = isSpace c || elem c ['<', '>', '=', '&', '|', '"']
 
-    cleanToken : String -> String
-    cleanToken tok =
-      let chars0 = unpack (trim tok)
+    entryName : String -> String
+    entryName e =
+      let chars0 = unpack (trim e)
           chars1 = case chars0 of
                      '"' :: rest => rest
                      _ => chars0
-          chars2 = case reverse chars1 of
-                     '"' :: rest => reverse rest
-                     _ => chars1
-      in pack chars2
+      in pack (takeWhile (not . isBoundChar) chars1)
 
-    parseDependsLine : String -> List String
-    parseDependsLine raw =
-      let line = trim (stripComment raw)
-          afterEquals =
-            case break (== '=') line of
-              (_, "") => line
-              (_, rest) => case unpack rest of
-                              [] => ""
-                              (_ :: chars) => pack chars
-      in filter (\tok => not (null tok) && tok /= "depends" && tok /= "=")
-                (map cleanToken (tokenChars afterEquals))
+    namesIn : String -> List String
+    namesIn field = filter (not . null) (map entryName (forget (split (== ',') field)))
 
-    collectDepends : Bool -> List String -> List String
-    collectDepends _ [] = []
-    collectDepends active (line :: rest) =
+    afterKeyword : String -> String
+    afterKeyword line =
+      let rest = trim (substr 7 (length line) line)   -- drop "depends"
+      in if isPrefixOf "=" rest then substr 1 (length rest) rest else rest
+
+    collect : Bool -> List String -> List String
+    collect _ [] = []
+    collect active (line :: rest) =
       let trimmed = trim (stripComment line)
       in if isPrefixOf "depends" trimmed
-            then parseDependsLine trimmed ++ collectDepends True rest
+            then namesIn (afterKeyword trimmed) ++ collect True rest
          else if active && isPrefixOf "," trimmed
-            then parseDependsLine trimmed ++ collectDepends True rest
+            then namesIn trimmed ++ collect True rest
          else if active && null trimmed
-            then collectDepends active rest
+            then collect active rest
          else if active
             then []
-         else collectDepends False rest
+         else collect False rest
 
-    parseDepends : String -> List String
-    parseDepends content = collectDepends False (lines content)
+resolvePackagesFromIpkg : String -> IO (List String)
+resolvePackagesFromIpkg ipkg = do
+  Right content <- readFile ipkg
+    | Left _ => pure []
+  pure $ parseIpkgDepends content
 
 resolvePackagesFromProject : String -> IO (List String)
 resolvePackagesFromProject projectDir = do

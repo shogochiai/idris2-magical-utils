@@ -109,6 +109,24 @@ test_REQ_WASM_REFC_003 () =
        , isNothing (ipkgNoCodegenReason "p.ipkg" exe)
        ]
 
+-- REQ_WASM_REFC_004: verifies that -p gets package names only.
+-- Checked: bounds with and without spaces, a compound bound, a continuation
+-- line whose bound has its own `=`, a quoted name, a trailing comment, and the
+-- field ending at the next key; the wagyu canister's ipkg shape from 2026-10-02
+-- gives its three names.
+test_REQ_WASM_REFC_004 : () -> Bool
+test_REQ_WASM_REFC_004 () =
+  let wagyu = "package p\ndepends = base >= 0.8.0\n        , contrib >= 0.8.0\n        , idris2-icwasm\nmodules = Main\n"
+  in all id
+       [ parseIpkgDepends "depends = base >= 0.8.0, contrib" == ["base", "contrib"]
+       , parseIpkgDepends "depends = base>=0.8" == ["base"]
+       , parseIpkgDepends "depends = pkg >= 1.0 && < 2.0, other" == ["pkg", "other"]
+       , parseIpkgDepends wagyu == ["base", "contrib", "idris2-icwasm"]
+       , parseIpkgDepends "depends = \"quoted\" -- a comment\nmain = Main\n" == ["quoted"]
+       , parseIpkgDepends "depends = base\n\n, contrib\nmodules = A\n, notadep\n" == ["base", "contrib"]
+       , parseIpkgDepends "package p\nmodules = A\n" == []
+       ]
+
 -- REQ_WASM_ENTRY_001: verifies which exports become canister endpoints.
 -- Checked: `export` and `public export` are both read; an argument-less IO
 -- action is an endpoint; a function taking arguments, a non-IO constant, and
@@ -218,6 +236,7 @@ allTests =
   , test "STABLE_SQL_002" "StableConfig zero version" test_STABLE_002
   , test "REQ_WASM_RT_004" "RefC fetched from a pinned fork commit" test_REQ_WASM_RT_004
   , test "REQ_WASM_REFC_003" "No generated C names the ipkg reason" test_REQ_WASM_REFC_003
+  , test "REQ_WASM_REFC_004" "-p gets package names, never version bounds" test_REQ_WASM_REFC_004
   , test "REQ_WASM_ENTRY_001" "Endpoints are argument-less IO exports" test_REQ_WASM_ENTRY_001
   , test "REQ_WASM_ENTRY_002" "Canister ipkg is the one whose main is Main" test_REQ_WASM_ENTRY_002
   , test "REQ_WASM_WASI_005" "binaryen found via em-config, EMSDK, real emcc" test_REQ_WASM_WASI_005
