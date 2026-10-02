@@ -114,6 +114,26 @@ buildPrelude idris2Override =
       "APP=\"" ++ app ++ "\""
     Nothing => installedIdrisPrelude
 
+||| Idris2's "Failed to resolve the dependencies for X:" error as ONE line: the
+||| header, each `Required …` line, and the `Searched for packages in:` dirs.
+||| The resolver puts the cause on the lines AFTER the colon, so a reader that
+||| keeps only the first line saw nothing after it (Frank's box, 2026-10-02).
+||| Nothing when the log has no such error.
+export
+resolverSummary : String -> Maybe String
+resolverSummary log =
+  let ls = map trim (lines log)
+      header = find (isInfixOf "Failed to resolve the dependencies for") ls
+      required = filter (isPrefixOf "Required ") ls
+      searched = takeWhile (/= "") (drop 1 (dropWhile (not . isPrefixOf "Searched for packages in") ls))
+  in map (\h => h ++ " " ++ joinBy "; " required
+                ++ (if null searched then "" else " | searched: " ++ joinBy ", " searched))
+         header
+
+||| A failed build's log, the resolver summary (if any) first.
+withResolverSummary : String -> String
+withResolverSummary log = maybe log (\s => s ++ "\n" ++ log) (resolverSummary log)
+
 ||| Build an ipkg, preferring direct Idris2 and falling back to pack.
 ||| Returns captured failure logs so downstream callers can surface the real cause.
 buildIpkgWithClean : Bool -> String -> String -> IO (Either String ())
@@ -150,7 +170,7 @@ buildIpkgWithClean cleanFirst projectDir ipkgName = do
          Just _ => do
            removeFileIfExistsSafe directLog
            let directSummary = either (\err => "unable to read direct-build log: " ++ show err)
-                                      trimLog directMsg
+                                      (withResolverSummary . trimLog) directMsg
            pure $ Left $ "direct idris2 build failed: " ++ directSummary
          Nothing => do
            let packCmd = "cd " ++ absProjectDir ++ " && pack build " ++ ipkgName ++ " > " ++ packLog ++ " 2>&1"
@@ -165,7 +185,7 @@ buildIpkgWithClean cleanFirst projectDir ipkgName = do
                 removeFileIfExistsSafe directLog
                 removeFileIfExistsSafe packLog
                 let directSummary = either (\err => "unable to read direct-build log: " ++ show err)
-                                           trimLog directMsg
+                                           (withResolverSummary . trimLog) directMsg
                 let packSummary = either (\err => "unable to read pack-build log: " ++ show err)
                                          trimLog packMsg
                 pure $ Left $
@@ -395,6 +415,33 @@ absolutizePackPaths baseDir content = unlines (map rewriteLine (lines content))
             then line                                    -- already absolute
             else "path = \"" ++ baseDir ++ "/" ++ rel ++ "\""
 
+||| The user pack.toml pack itself reads: $PACK_USER_DIR/pack.toml, else
+||| $XDG_CONFIG_HOME/pack/pack.toml, else $HOME/.config/pack/pack.toml.
+export
+userPackTomlPath : (packUserDir : Maybe String) -> (xdgConfig : Maybe String) -> (home : Maybe String) -> Maybe String
+userPackTomlPath (Just d) _ _ = Just (d ++ "/pack.toml")
+userPackTomlPath Nothing (Just x) _ = Just (x ++ "/pack/pack.toml")
+userPackTomlPath Nothing Nothing (Just h) = Just (h ++ "/.config/pack/pack.toml")
+userPackTomlPath Nothing Nothing Nothing = Nothing
+
+||| Two pack.toml texts as one, either side possibly empty.
+export
+joinPackTomls : String -> String -> String
+joinPackTomls a b =
+  if trim b == "" then a else if trim a == "" then b else a ++ "\n\n" ++ b
+
+readUserPackToml : IO String
+readUserPackToml = do
+  d <- getEnv "PACK_USER_DIR"
+  x <- getEnv "XDG_CONFIG_HOME"
+  h <- getEnv "HOME"
+  case userPackTomlPath d x h of
+    Nothing => pure ""
+    Just p => do
+      Right c <- readFile p
+        | Left _ => pure ""
+      pure (absolutizePackPaths (parentOf p) c)
+
 ||| Read the project's pack.toml, preserving its custom dependency entries.
 ||| If the package has no pack.toml of its own, walk UP to the nearest ancestor
 ||| pack.toml and inherit it — pack resolves custom local deps (e.g.
@@ -417,9 +464,15 @@ readProjectPackToml projectDir = do
   -- duplicate [custom.all.X] blocks are harmless; localDepEntries dedups by name.
   ownContent <- readFile (projectDir ++ "/pack.toml")
   ancestor <- inheritFrom (parentOf absDir) 8
-  case ownContent of
-    Right own => pure $ if ancestor == "" then own else own ++ "\n\n" ++ ancestor
-    Left _    => pure ancestor
+  -- Last, the USER pack.toml: pack reads it for every project, so a local package
+  -- registered only there (the luci installer registers idris2-icwasm there; an
+  -- onboarded project's own local packages may live there too) resolves under
+  -- pack and must be installable into the fork as well.
+  user <- readUserPackToml
+  let projectPart = case ownContent of
+                      Right own => if ancestor == "" then own else own ++ "\n\n" ++ ancestor
+                      Left _    => ancestor
+  pure $ joinPackTomls projectPart user
   where
     inheritFrom : String -> Nat -> IO String
     inheritFrom _ Z = pure ""
@@ -497,6 +550,14 @@ export
 coverageStackDeps : List String
 coverageStackDeps = map (\(n, _, _) => n) coverageClosure
 
+||| The package name of one `depends` entry, version bound dropped:
+||| `wagyu-dao-core >= 0.1.0` and `base>=0.8` give `wagyu-dao-core` and `base`.
+export
+dependName : String -> String
+dependName e =
+  pack (takeWhile (\c => not (isSpace c || elem c ['<', '>', '=', '&', '|', '"']))
+                  (unpack (trim e)))
+
 ||| Install ONLY the local deps this project needs into the FORKED compiler's
 ||| package path so a direct `idris2 --build` (the only path that honours
 ||| --dumppaths-json) can resolve them — fork reads ~/.idris2 / ./depends, not
@@ -509,7 +570,9 @@ installNeededDepsIntoFork : (projectDepends : List String) -> (packTomlContent :
 installNeededDepsIntoFork projectDepends packTomlContent = do
   Just idris2 <- resolveIdris2Override
     | Nothing => pure ()
-  let wanted = projectDepends ++ coverageStackDeps
+  -- Names, not entries: `wagyu-dao-core >= 0.1.0` must match the pack.toml block
+  -- `[custom.all.wagyu-dao-core]`, so the version bound is dropped here.
+  let wanted = map dependName projectDepends ++ coverageStackDeps
   let deps = filter (\(n, _, _) => elem n wanted) (localDepEntries packTomlContent)
   -- Multi-round (no topo-sort): a dep whose own deps aren't installed yet fails
   -- this round but succeeds once they land in a later round (installs idempotent).
@@ -557,19 +620,31 @@ installNeededDepsIntoFork projectDepends packTomlContent = do
       ++ " — a fork build that needs one of these will fail to resolve it and produce"
       ++ " no dumppaths.json while exiting 0. Install it by hand into the fork's"
       ++ " package path, or give it a `path` entry."
-  for_ (replicate rounds ()) $ \_ => traverse_ (installOne idris2) deps
+  for_ (replicate (minus rounds 1) ()) $ \_ => traverse_ (installOne idris2) deps
+  -- The last round says which deps still did not build/install: a failure here
+  -- is what later surfaces as "Failed to resolve the dependencies", so name it.
+  lastRound <- traverse (\d => map (\ok => (d, ok)) (installOne idris2 d)) deps
+  let failed = map (\((n, _, _), _) => n) (filter (not . snd) lastRound)
+  unless (null failed) $
+    ignore $ fPutStrLn stderr $
+      "    [dep-install] FAILED to build/install into the fork after "
+      ++ show rounds ++ " rounds: " ++ show failed
+      ++ " (logs: " ++ joinBy ", " (map forkInstallLog failed) ++ ")"
   where
-    installOne : String -> (String, String, String) -> IO ()
-    installOne idris2 (_, path, ipkg) = do
+    forkInstallLog : String -> String
+    forkInstallLog n = "/tmp/idris2-cov-fork-install-" ++ n ++ ".log"
+
+    installOne : String -> (String, String, String) -> IO Bool
+    installOne idris2 (n, path, ipkg) = do
       -- Always build THEN install with the FORKED compiler, in the dep's own dir.
       -- Build is incremental (cached TTCs), and only a successful build installs a
       -- real package — so a dep whose own deps are missing this round simply fails
       -- here and is retried next round (idempotent). && chains so a failed build
       -- never installs a hollow package.
-      _ <- system $ "cd " ++ path ++ " && " ++ idris2 ++ " --build " ++ ipkg
-                 ++ " > /dev/null 2>&1 && " ++ idris2 ++ " --install " ++ ipkg
-                 ++ " > /dev/null 2>&1"
-      pure ()
+      rc <- system $ "cd " ++ path ++ " && " ++ idris2 ++ " --build " ++ ipkg
+                 ++ " > " ++ forkInstallLog n ++ " 2>&1 && " ++ idris2 ++ " --install " ++ ipkg
+                 ++ " >> " ++ forkInstallLog n ++ " 2>&1"
+      pure (rc == 0)
 
 ||| Check if a file exists
 fileExists : String -> IO Bool
@@ -668,12 +743,12 @@ parseIpkgDepends content =
                         else afterEquals
          in map trim $ filter (/= "") $ forget $ split (== ',') pkgStr
   where
+    -- A line starting with ',' continues the field, bound or not: `, pkg >= 1.0`
+    -- has an '=' that belongs to the bound (no ipkg key line starts with ',').
     isContinuation : String -> Bool
     isContinuation s =
       let trimmed = ltrim s
-      in not (null trimmed) &&
-         (isPrefixOf "," trimmed) &&
-         not (isInfixOf "=" trimmed)
+      in not (null trimmed) && isPrefixOf "," trimmed
 
 ||| Parse sourcedir from ipkg content (defaults to "src")
 parseIpkgSourcedir : String -> String

@@ -1102,11 +1102,65 @@ test_REQ_COV_PROBE_CLOSURE_001 =
     , generateTempPackTomlWith Nothing "" == httpsB
     ]
 
+-- =============================================================================
+-- REQ_COV_FORK_DEPS_001 / REQ_COV_RESOLVE_MSG_001
+-- =============================================================================
+
+||| REQ_COV_FORK_DEPS_001: verifies that the fork install matches deps by name.
+||| Checked: a continuation line with a bound survives parseIpkgDepends; dependName
+||| drops spaced, unspaced and compound bounds; the user pack.toml path follows
+||| PACK_USER_DIR, then XDG_CONFIG_HOME, then HOME; joining with an empty side
+||| leaves the other side as is.
+test_REQ_COV_FORK_DEPS_001 : IO Bool
+test_REQ_COV_FORK_DEPS_001 = pure $
+  let ipkg = "package p\ndepends = base >= 0.8.0\n        , wagyu-dao-core >= 0.1.0\n        , contrib\nmodules = A\n"
+      deps = parseIpkgDepends ipkg
+  in all id
+       [ map dependName deps == ["base", "wagyu-dao-core", "contrib"]
+       , dependName "base>=0.8" == "base"
+       , dependName "pkg >= 1.0 && < 2.0" == "pkg"
+       , dependName "plain" == "plain"
+       , userPackTomlPath (Just "/p") (Just "/x") (Just "/h") == Just "/p/pack.toml"
+       , userPackTomlPath Nothing (Just "/x") (Just "/h") == Just "/x/pack/pack.toml"
+       , userPackTomlPath Nothing Nothing (Just "/h") == Just "/h/.config/pack/pack.toml"
+       , userPackTomlPath Nothing Nothing Nothing == Nothing
+       , joinPackTomls "a" "" == "a"
+       , joinPackTomls "" "b" == "b"
+       , joinPackTomls "a" "b" == "a\n\nb"
+       ]
+
+||| REQ_COV_RESOLVE_MSG_001: verifies the one-line resolver summary.
+||| Checked: the summary carries the header, the Required line and both searched
+||| dirs on one line; a log without the error gives Nothing. The log is the fork's
+||| output captured 2026-10-02 for a temp ipkg needing wagyu-dao-core.
+test_REQ_COV_RESOLVE_MSG_001 : IO Bool
+test_REQ_COV_RESOLVE_MSG_001 = pure $
+  let log = unlines
+              [ "Error: Failed to resolve the dependencies for temp-paths-test_0_1:"
+              , "  Required wagyu-dao-core any but no matching version is installed. Resolved transitive dependencies: base-0.8.0."
+              , ""
+              , "Searched for packages in:"
+              , "  /w/depends"
+              , "  /home/u/.idris2/idris2-0.8.0"
+              , ""
+              , "For more details on what packages Idris2 can locate, run `idris2 --list-packages`" ]
+  in case resolverSummary log of
+       Nothing => False
+       Just s => all id
+         [ not (isInfixOf "\n" s)
+         , isInfixOf "temp-paths-test_0_1:" s
+         , isInfixOf "Required wagyu-dao-core any" s
+         , isInfixOf "searched: /w/depends, /home/u/.idris2/idris2-0.8.0" s
+         , isNothing (resolverSummary "Error: Module A not found\n")
+         ]
+
 export
 covering
 allTests : List (String, IO Bool)
 allTests =
   [ ("REQ_COV_LIN_001", test_LIN_001)
+  , ("REQ_COV_FORK_DEPS_001", test_REQ_COV_FORK_DEPS_001)
+  , ("REQ_COV_RESOLVE_MSG_001", test_REQ_COV_RESOLVE_MSG_001)
   , ("REQ_COV_PROBE_CLOSURE_001", test_REQ_COV_PROBE_CLOSURE_001)
   , ("REQ_COV_LIN_002", test_LIN_002)
   , ("REQ_COV_LIN_003", test_LIN_003)
