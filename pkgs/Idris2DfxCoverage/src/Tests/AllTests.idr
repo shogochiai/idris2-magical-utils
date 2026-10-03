@@ -14,6 +14,9 @@ import DfxCoverage.DumpcasesParser
 import DfxCoverage.PathRuntime
 import DfxCoverage.SourceMap.SourceMapParser
 import DfxCoverage.CanisterCall
+import DfxCoverage.PathCoverage
+import Coverage.Standardization.Types
+import Data.String
 
 %default covering
 
@@ -285,11 +288,41 @@ test_REQ_DFXCOV_REPLICA_001 () =
     , not (replicaStartedHere "ic" False True)
     ]
 
+-- REQ_DFXCOV_EXCL_REASON_001: verifies the excluded-by-reason split.
+-- Checked: a bare record projection, a pattern match and a compiler-classified
+-- path each get their own reason; a product path (with a span, so not a
+-- projection) gets none; a duplicated path id counts once; the observed column
+-- counts only hit excluded paths; rows are most-paths first; the rendered text
+-- never starts a line with "paths_".
+exclPath : String -> String -> ObligationClass -> Maybe String -> PathObligation
+exclPath pid fn cls span = MkPathObligation pid fn "M" cls "reached_clause" Nothing [] span 1
+
+test_REQ_DFXCOV_EXCL_REASON_001 : () -> Bool
+test_REQ_DFXCOV_EXCL_REASON_001 () =
+  let pats = [containsPattern "Tests." "Test harness/spec module"]
+      paths = [ exclPath "a#p0" "M.Rec.field" ReachableObligation Nothing
+              , exclPath "b#p0" "Tests.AllTests.t1" ReachableObligation (Just "s")
+              , exclPath "c#p0" "Tests.AllTests.t2" ReachableObligation (Just "s")
+              , exclPath "c#p0" "Tests.AllTests.t2" ReachableObligation (Just "s")
+              , exclPath "d#p0" "M.gone" LogicallyUnreachable (Just "s")
+              , exclPath "e#p0" "M.product" ReachableObligation (Just "s") ]
+      rows = excludedByReason pats paths ["b#p0", "e#p0", "a#p0"]
+      txt = renderExcludedByReason rows
+  in all id
+       [ rows == [ ("Test harness/spec module", 2, 1)
+                 , ("LogicallyUnreachable (compiler)", 1, 0)
+                 , ("generated record projection (bare)", 1, 1) ]
+       , exclusionReasonOf pats (exclPath "e#p0" "M.product" ReachableObligation (Just "s")) == Nothing
+       , not (any (isPrefixOf "paths_") (lines txt))
+       , isPrefixOf "excluded_by_reason: 3 reason(s), 4 path(s)" txt
+       ]
+
 allTests : List TestDef
 allTests =
   -- Exclusions
   [ test "EXCL_001" "PatternType equality" test_EXCL_001
   , test "REQ_DFXCOV_REPLICA_001" "A run stops only the replica it started" test_REQ_DFXCOV_REPLICA_001
+  , test "REQ_DFXCOV_EXCL_REASON_001" "Excluded paths are split by reason" test_REQ_DFXCOV_EXCL_REASON_001
   , test "EXCL_002" "exactPattern creation" test_EXCL_002
   , test "EXCL_003" "prefixPattern creation" test_EXCL_003
   , test "EXCL_004" "suffixPattern creation" test_EXCL_004

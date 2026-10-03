@@ -1506,6 +1506,12 @@ runPaths opts = do
             Text => do
               -- v2: canonical evidence renderer — raw counts, no percent to fake.
               putStrLn $ renderPathEvidence "DFX " result
+              -- The excluded bucket split by reason, from the same patterns: a
+              -- bare `paths_excluded` count cannot show which rule removed which
+              -- paths, nor which reasons hold the observed-but-excluded ones.
+              case excludedByReasonFromContent (defaultPathExclusions ++ projectExcl) content hits of
+                Right rows => putStr $ renderExcludedByReason rows
+                Left err => putStrLn $ "excluded_by_reason: UNAVAILABLE (" ++ err ++ ")"
               putStrLn $ pathMeasurementSummary result.measurement
 
 main : IO ()

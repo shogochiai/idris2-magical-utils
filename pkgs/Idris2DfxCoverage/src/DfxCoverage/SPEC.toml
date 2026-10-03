@@ -10,3 +10,11 @@ name = "Local replica lifecycle"
 id = "${prefix}_REPLICA_001"
 title = "A run stops the local replica it started, and only that one"
 invariant = "replicaStartedHere holds only for the local network, when no replica was running before, and when the start succeeded. ensureDeployedTracked returns that fact with the deploy result on every branch (build failure: False), and the phase-2 numerator run (runNumeratorInProcess) stops the replica with stopReplica on every outcome when it holds, and never otherwise. Measured 2026-10-01/02 on a NixOS dev machine: three phase-2 runs each left dfx + pocket-ic running after they ended, reparented to the user systemd. test-evidence: test_REQ_DFXCOV_REPLICA_001"
+
+[[spec_area]]
+name = "Excluded bucket"
+
+[[spec]]
+id = "${prefix}_EXCL_REASON_001"
+title = "The excluded bucket is printed split by reason, next to the raw buckets"
+invariant = "In text output, idris2-dfx-cov paths prints after the raw buckets an `excluded_by_reason: N reason(s), M path(s)` header and one line per reason: path count, observed count (excluded paths whose id is in the run's hits), and reason name, most paths first. exclusionReasonOf reads the dumppaths obligation as the compiler wrote it: a path the compiler classified LogicallyUnreachable, CompilerInsertedArtifact or ExternalEffectBoundary keeps that class as its reason; a ReachableObligation gets the reason reclassifyArtifactsBare applies, in its order (bare generated record projection, then the first matching exclusion pattern's reason, project-local patterns included); a path that stays in the denominator gets none. Path ids are counted once. No line starts with `paths_`, so the bucket parsers downstream are unaffected. Requested 2026-10-03 (board seq 134): request 3 printed paths_excluded 38 with 37 observed and no reasons. test-evidence: test_REQ_DFXCOV_EXCL_REASON_001"
