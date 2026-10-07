@@ -115,7 +115,7 @@ buildWebInstrumented projectDir = do
     | Left err => pure $ Left $ "Failed to read ipkg: " ++ show err
   let projectDepends = parseIpkgDepends ipkgContent
   packToml <- readProjectPackToml projectDir
-  installNeededDepsIntoFork projectDepends packToml
+  installNeededDepsIntoFork projectDir projectDepends packToml
 
   -- 2. fork-build instrumented node executable + denominator dumppaths JSON
   let dumppathsPath = projectDir ++ "/build/exec/web-cov-paths.json"
