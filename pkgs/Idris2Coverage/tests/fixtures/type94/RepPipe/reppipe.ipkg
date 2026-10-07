@@ -1,0 +1,7 @@
+package reppipe
+version = 0.1.0
+sourcedir = "src"
+main = RepPipe.Tests.AllTests
+depends = base, repcore
+modules = RepPipe.Pipe
+        , RepPipe.Tests.AllTests

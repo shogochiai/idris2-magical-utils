@@ -24,6 +24,8 @@ import Data.List
 import Data.String
 import Data.Maybe
 import System
+import System.Directory
+import System.File
 
 %default total
 
@@ -1154,6 +1156,75 @@ test_REQ_COV_RESOLVE_MSG_001 = pure $
          , isNothing (resolverSummary "Error: Module A not found\n")
          ]
 
+-- =============================================================================
+-- REQ_COV_FORK_DEPS_SIBLING_001
+-- =============================================================================
+
+||| REQ_COV_FORK_DEPS_SIBLING_001: an ipkg whose package line is `package repcore`
+||| yields repcore, and one with no package line yields Nothing.
+test_REQ_COV_FORK_DEPS_SIBLING_001_package_line : IO Bool
+test_REQ_COV_FORK_DEPS_SIBLING_001_package_line = pure $
+  ipkgPackageName "package repcore\nversion = 0.1.0\n" == Just "repcore"
+
+||| REQ_COV_FORK_DEPS_SIBLING_001: an ipkg with no package line yields Nothing.
+test_REQ_COV_FORK_DEPS_SIBLING_001_no_package_line : IO Bool
+test_REQ_COV_FORK_DEPS_SIBLING_001_no_package_line = pure $
+  ipkgPackageName "version = 0.1.0\nmodules = A\n" == Nothing
+
+||| REQ_COV_FORK_DEPS_SIBLING_001: a candidate list holding repcore and an
+||| unrelated package yields only the wanted one.
+test_REQ_COV_FORK_DEPS_SIBLING_001_wanted_only : IO Bool
+test_REQ_COV_FORK_DEPS_SIBLING_001_wanted_only = pure $
+  siblingDepEntries ["repcore"]
+    [ ("/d1", "a.ipkg", "package repcore\n")
+    , ("/d2", "b.ipkg", "package unrelated\n")
+    ] == [("repcore", "/d1", "a.ipkg")]
+
+||| REQ_COV_FORK_DEPS_SIBLING_001: a name already provided by pack.toml is not
+||| duplicated — missingDepNames drops it so sibling discovery never re-finds it.
+test_REQ_COV_FORK_DEPS_SIBLING_001_no_duplicate : IO Bool
+test_REQ_COV_FORK_DEPS_SIBLING_001_no_duplicate = pure $
+  let provided = ["repcore"]
+      missing = missingDepNames ["repcore", "other"] provided
+  in missing == ["other"] && not (elem "repcore" missing)
+
+||| Locate the type94 RepPipe fixture dir (no pack.toml), trying the paths a
+||| coverage test build is run from (package root, repo root, or deeper).
+findType94RepPipe : IO (Maybe String)
+findType94RepPipe = do
+  cwd <- currentDir
+  let base = fromMaybe "." cwd
+  firstWithIpkg
+    [ base ++ "/tests/fixtures/type94/RepPipe"
+    , base ++ "/pkgs/Idris2Coverage/tests/fixtures/type94/RepPipe"
+    , base ++ "/../tests/fixtures/type94/RepPipe"
+    , base ++ "/../../tests/fixtures/type94/RepPipe"
+    , base ++ "/../../../tests/fixtures/type94/RepPipe"
+    , base ++ "/../../../../tests/fixtures/type94/RepPipe"
+    ]
+  where
+    firstWithIpkg : List String -> IO (Maybe String)
+    firstWithIpkg [] = pure Nothing
+    firstWithIpkg (d :: ds) = do
+      ok <- exists (d ++ "/reppipe.ipkg")
+      if ok then pure (Just d) else firstWithIpkg ds
+
+||| REQ_COV_FORK_DEPS_SIBLING_001: sibling discovery from the RepPipe fixture dir
+||| finds repcore at the RepCore fixture path, with no pack.toml in play.
+covering
+test_REQ_COV_FORK_DEPS_SIBLING_001_sibling_discovery : IO Bool
+test_REQ_COV_FORK_DEPS_SIBLING_001_sibling_discovery = do
+  mdir <- findType94RepPipe
+  case mdir of
+    Nothing => pure False
+    Just repPipeDir => do
+      found <- discoverSiblingDepEntries repPipeDir ["repcore"]
+      pure $ any isRepCore found
+  where
+    isRepCore : (String, String, String) -> Bool
+    isRepCore (name, dir, ipkgFile) =
+      name == "repcore" && ipkgFile == "repcore.ipkg" && isSuffixOf "type94/RepCore" dir
+
 export
 covering
 allTests : List (String, IO Bool)
@@ -1161,6 +1232,11 @@ allTests =
   [ ("REQ_COV_LIN_001", test_LIN_001)
   , ("REQ_COV_FORK_DEPS_001", test_REQ_COV_FORK_DEPS_001)
   , ("REQ_COV_RESOLVE_MSG_001", test_REQ_COV_RESOLVE_MSG_001)
+  , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_package_line)
+  , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_no_package_line)
+  , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_wanted_only)
+  , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_no_duplicate)
+  , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_sibling_discovery)
   , ("REQ_COV_PROBE_CLOSURE_001", test_REQ_COV_PROBE_CLOSURE_001)
   , ("REQ_COV_LIN_002", test_LIN_002)
   , ("REQ_COV_LIN_003", test_LIN_003)

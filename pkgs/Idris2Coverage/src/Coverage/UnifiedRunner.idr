@@ -558,22 +558,182 @@ dependName e =
   pack (takeWhile (\c => not (isSpace c || elem c ['<', '>', '=', '&', '|', '"']))
                   (unpack (trim e)))
 
+-- =============================================================================
+-- Sibling-ipkg dependency discovery (REQ_COV_FORK_DEPS_SIBLING_001)
+-- =============================================================================
+-- A package that depends on ANOTHER package of the same project cannot be
+-- path-measured unless that sibling is registered as a `type = "local"` entry
+-- in a pack.toml. The matching of an ipkg's CONTENT to a package name is pure
+-- and exported here; the IO side only lists candidate ipkg files and reads them.
+
+||| The package name declared by an ipkg's `package <name>` line, or Nothing when
+||| the ipkg has no such line. Pure: takes ipkg CONTENT, not a path.
+export
+ipkgPackageName : String -> Maybe String
+ipkgPackageName content =
+  let ls = map trim (lines content)
+      pkgLine = find (\l => isPrefixOf "package " l) ls
+  in map (\l => trim (pack (drop 8 (unpack l)))) pkgLine
+
+||| Wanted dep names with those already provided by pack.toml local entries
+||| removed. Sibling discovery only runs for these, so a name pack.toml already
+||| covers is never discovered a second time (no duplicate install).
+export
+missingDepNames : List String -> List String -> List String
+missingDepNames wanted provided = filter (\w => not (elem w provided)) wanted
+
+||| From (dir, ipkgFile, content) candidates, the (name, dir, ipkgFile) local
+||| entries whose declared package name is one of `wanted`. Pure matching of ipkg
+||| CONTENT to wanted names, deduped by name (first candidate wins).
+export
+siblingDepEntries : List String -> List (String, String, String) -> List (String, String, String)
+siblingDepEntries wanted candidates = go (mapMaybe entryFor candidates) []
+  where
+    nameOf : (String, String, String) -> String
+    nameOf (n, _, _) = n
+
+    entryFor : (String, String, String) -> Maybe (String, String, String)
+    entryFor (dir, ipkgFile, content) =
+      case ipkgPackageName content of
+        Nothing => Nothing
+        Just name => if elem name wanted then Just (name, dir, ipkgFile) else Nothing
+
+    go : List (String, String, String) -> List (String, String, String) -> List (String, String, String)
+    go [] acc = reverse acc
+    go (e :: es) acc =
+      if any (\x => nameOf x == nameOf e) acc
+        then go es acc
+        else go es (e :: acc)
+
+||| Directory names skipped when walking a project for sibling ipkg files.
+siblingSkipDirs : List String
+siblingSkipDirs = ["build", ".git", ".luci", "node_modules", "depends"]
+
+||| Is `path` an existing directory? (openDir succeeds only for directories.)
+pathIsDirectory : String -> IO Bool
+pathIsDirectory path = do
+  Right d <- openDir path
+    | Left _ => pure False
+  closeDir d
+  pure True
+
+||| Does `dir` carry a git marker (a `.git` directory or, for a worktree, the
+||| `.git` file that points at the real gitdir)?
+hasGitMarker : String -> IO Bool
+hasGitMarker dir = do
+  f <- exists (dir ++ "/.git")
+  if f then pure True else pathIsDirectory (dir ++ "/.git")
+
+||| The discovery roots for sibling ipkg search: the git top-level of
+||| `projectDir` if found, else `projectDir` and its ancestors up to 3 levels.
+siblingDiscoveryRoots : String -> IO (List String)
+siblingDiscoveryRoots projectDir = do
+  absDir <- toAbsolutePath projectDir
+  mroot <- gitRootUp absDir 10
+  case mroot of
+    Just root => pure [root]
+    Nothing => pure (selfAndParents absDir 3)
+  where
+    gitRootUp : String -> Nat -> IO (Maybe String)
+    gitRootUp _ Z = pure Nothing
+    gitRootUp dir (S fuel) = do
+      has <- hasGitMarker dir
+      if has then pure (Just dir)
+             else if dir == "" || dir == "/" then pure Nothing
+                  else gitRootUp (parentOf dir) fuel
+
+    selfAndParents : String -> Nat -> List String
+    selfAndParents dir Z = [dir]
+    selfAndParents dir (S k) =
+      if dir == "" || dir == "/" then [dir] else dir :: selfAndParents (parentOf dir) k
+
+||| Recursively collect every `(dir, ipkgFile)` under `root`, skipping the
+||| `siblingSkipDirs` directories.
+collectIpkgCandidates : String -> IO (List (String, String))
+collectIpkgCandidates root = go [root] []
+  where
+    filterDirs : String -> List String -> IO (List String)
+    filterDirs _ [] = pure []
+    filterDirs dir (e :: es) = do
+      rest <- filterDirs dir es
+      isD <- pathIsDirectory (dir ++ "/" ++ e)
+      pure (if isD then e :: rest else rest)
+
+    go : List String -> List (String, String) -> IO (List (String, String))
+    go [] acc = pure acc
+    go (dir :: rest) acc = do
+      Right entries <- listDir dir
+        | Left _ => go rest acc
+      let ipkgs = filter (isSuffixOf ".ipkg") entries
+      let acc' = map (\f => (dir, f)) ipkgs ++ acc
+      subdirs <- filterDirs dir (filter (\e => not (elem e siblingSkipDirs)) entries)
+      go (rest ++ map (\e => dir ++ "/" ++ e) subdirs) acc'
+
+||| Discover sibling dependency entries: for each wanted dep NAME with no
+||| pack.toml local entry, find an ipkg in the same project whose `package` line
+||| declares it. The IO part only lists candidate ipkg files and reads them.
+export
+discoverSiblingDepEntries : String -> List String -> IO (List (String, String, String))
+discoverSiblingDepEntries projectDir wanted =
+  if null wanted
+    then pure []
+    else do
+      roots <- siblingDiscoveryRoots projectDir
+      candidates <- traverse collectIpkgCandidates roots
+      contents <- traverse readCandidate (concat candidates)
+      pure (siblingDepEntries wanted contents)
+  where
+    readCandidate : (String, String) -> IO (String, String, String)
+    readCandidate (dir, ipkgFile) = do
+      Right content <- readFile (dir ++ "/" ++ ipkgFile)
+        | Left _ => pure (dir, ipkgFile, "")
+      pure (dir, ipkgFile, content)
+
+||| Run `cmd`, redirecting stdout+stderr to `outFile`, and return the trimmed
+||| output ("" on any failure). Used to read `idris2 --libdir`.
+captureCommand : String -> String -> IO String
+captureCommand cmd outFile = do
+  _ <- system (cmd ++ " > " ++ outFile ++ " 2>&1")
+  Right content <- readFile outFile
+    | Left _ => pure ""
+  pure (trim content)
+
+||| Is dep `name` visible to a build that resolves against `libdir` (some
+||| `<libdir>/<name>-*` entry exists)?
+visibleInLibdir : String -> String -> IO Bool
+visibleInLibdir libdir name = do
+  Right entries <- listDir libdir
+    | Left _ => pure False
+  pure (any (\e => isPrefixOf (name ++ "-") e) entries)
+
+||| One per-dep install line: name, where it came from (pack.toml or the sibling
+||| ipkg path), the compiler path, the libdir, the result and the install log.
+renderDepLine : String -> String -> String -> String -> Bool -> String -> String
+renderDepLine name source compiler libdir ok logPath =
+  "    [dep-install] " ++ name
+  ++ " source=" ++ source
+  ++ " compiler=" ++ compiler ++ " libdir=" ++ libdir
+  ++ " result=" ++ (if ok then "installed" else "FAILED")
+  ++ " log=" ++ logPath
+
 ||| Install ONLY the local deps this project needs into the FORKED compiler's
 ||| package path so a direct `idris2 --build` (the only path that honours
 ||| --dumppaths-json) can resolve them — fork reads ~/.idris2 / ./depends, not
 ||| pack.toml / pack's store. Filtered to (project ipkg `depends` ∪ coverage
 ||| stack) so we don't build unrelated heavyweight monorepo packages (e.g. the
-||| canister). Best-effort + multi-round for dep ordering. No-op when IDRIS2_BIN
-||| is unset (pack resolves deps itself then).
+||| canister). A wanted dep with no pack.toml local entry is looked up as a
+||| SIBLING ipkg in the same project (REQ_COV_FORK_DEPS_SIBLING_001). Best-effort
+||| + multi-round for dep ordering. No-op when IDRIS2_BIN is unset (pack resolves
+||| deps itself then).
 export
-installNeededDepsIntoFork : (projectDepends : List String) -> (packTomlContent : String) -> IO ()
-installNeededDepsIntoFork projectDepends packTomlContent = do
+installNeededDepsIntoFork : (projectDir : String) -> (projectDepends : List String) -> (packTomlContent : String) -> IO ()
+installNeededDepsIntoFork projectDir projectDepends packTomlContent = do
   Just idris2 <- resolveIdris2Override
     | Nothing => pure ()
   -- Names, not entries: `wagyu-dao-core >= 0.1.0` must match the pack.toml block
   -- `[custom.all.wagyu-dao-core]`, so the version bound is dropped here.
   let wanted = map dependName projectDepends ++ coverageStackDeps
-  let deps = filter (\(n, _, _) => elem n wanted) (localDepEntries packTomlContent)
+  let packDeps = filter (\(n, _, _) => elem n wanted) (localDepEntries packTomlContent)
   -- Multi-round (no topo-sort): a dep whose own deps aren't installed yet fails
   -- this round but succeeds once they land in a later round (installs idempotent).
   let rounds = 4
@@ -609,33 +769,61 @@ installNeededDepsIntoFork projectDepends packTomlContent = do
   --     its reader to skip the line that will one day carry the real `toml`.
   let compilerBundled = ["prelude", "base", "contrib", "network", "test", "linear", "papers"]
   let wantedNames = nub (filter (\w => not (elem w compilerBundled)) wanted)
-  let foundNames  = nub (filter (\n => elem n wantedNames) (map (\(n, _, _) => n) deps))
-  let missing = filter (\w => not (elem w foundNames)) wantedNames
+  let packNames   = nub (filter (\n => elem n wantedNames) (map (\(n, _, _) => n) packDeps))
+  -- Sibling discovery: a wanted name with no pack.toml local entry is looked for
+  -- as an ipkg in the same project (git top-level, else up to 3 parent levels)
+  -- whose `package` line declares it. Each found ipkg becomes a (name, absdir,
+  -- ipkg) local entry exactly like a pack.toml local entry, so a sibling is no
+  -- longer reported as NOT INSTALLABLE.
+  let missing = missingDepNames wantedNames packNames
+  siblings <- discoverSiblingDepEntries projectDir missing
+  let siblingNames = nub (map (\(n, _, _) => n) siblings)
+  let deps = packDeps ++ siblings
+  let foundNames = nub (packNames ++ siblingNames)
+  let stillMissing = filter (\w => not (elem w foundNames)) wantedNames
   ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length foundNames) ++ " of "
                               ++ show (length wantedNames) ++ " required deps installable locally"
-  unless (null missing) $
+  unless (null stillMissing) $
     ignore $ fPutStrLn stderr $
-      "    [dep-install] NOT INSTALLABLE (no local path in pack.toml): "
-      ++ show missing
+      "    [dep-install] NOT INSTALLABLE (no local path in pack.toml or sibling ipkg): "
+      ++ show stillMissing
       ++ " — a fork build that needs one of these will fail to resolve it and produce"
       ++ " no dumppaths.json while exiting 0. Install it by hand into the fork's"
       ++ " package path, or give it a `path` entry."
-  for_ (replicate (minus rounds 1) ()) $ \_ => traverse_ (installOne idris2) deps
+  libdir <- captureCommand (idris2 ++ " --libdir") "/tmp/idris2-cov-libdir.txt"
+  let targets = map (\(n, p, i) => (n, p, i, "pack.toml")) packDeps
+                ++ map (\(n, p, i) => (n, p, i, "sibling:" ++ p ++ "/" ++ i)) siblings
+  for_ (replicate (minus rounds 1) ()) $ \_ => traverse_ (installOne idris2) targets
   -- The last round says which deps still did not build/install: a failure here
-  -- is what later surfaces as "Failed to resolve the dependencies", so name it.
-  lastRound <- traverse (\d => map (\ok => (d, ok)) (installOne idris2 d)) deps
-  let failed = map (\((n, _, _), _) => n) (filter (not . snd) lastRound)
+  -- is what later surfaces as "Failed to resolve the dependencies", so name it,
+  -- and print ONE per-dep install line (name, source, compiler, libdir, result,
+  -- log path) for every dependency on every run.
+  lastRound <- traverse (\t => map (\ok => (t, ok)) (installOne idris2 t)) targets
+  let failed = map (\((n, _, _, _), _) => n) (filter (not . snd) lastRound)
+  traverse_ (\((n, _, _, source), ok) =>
+      ignore $ fPutStrLn stderr $ renderDepLine n source idris2 libdir ok (forkInstallLog n))
+    lastRound
   unless (null failed) $
     ignore $ fPutStrLn stderr $
       "    [dep-install] FAILED to build/install into the fork after "
       ++ show rounds ++ " rounds: " ++ show failed
       ++ " (logs: " ++ joinBy ", " (map forkInstallLog failed) ++ ")"
+  -- Before the instrumented build, every non-bundled wanted dep must be VISIBLE
+  -- to that build (<libdir>/<name>-* exists). Report any miss now, so a later
+  -- `Required <name> ... no matching version is installed` is never the first sign.
+  traverse_ (\name => do
+      vis <- visibleInLibdir libdir name
+      unless vis $
+        ignore $ fPutStrLn stderr $
+          "    [dep-install] NOT VISIBLE to the instrumented build: " ++ name
+          ++ " (libdir " ++ libdir ++ "; install log " ++ forkInstallLog name ++ ")"
+    ) wantedNames
   where
     forkInstallLog : String -> String
     forkInstallLog n = "/tmp/idris2-cov-fork-install-" ++ n ++ ".log"
 
-    installOne : String -> (String, String, String) -> IO Bool
-    installOne idris2 (n, path, ipkg) = do
+    installOne : String -> (String, String, String, String) -> IO Bool
+    installOne idris2 (n, path, ipkg, _) = do
       -- Always build THEN install with the FORKED compiler, in the dep's own dir.
       -- Build is incremental (cached TTCs), and only a successful build installs a
       -- real package — so a dep whose own deps are missing this round simply fails
@@ -1345,7 +1533,7 @@ runStaticDumppathsJson ipkgPath = do
   let (staticProjectDir, _) = splitPath ipkgPath
   staticPackToml <- readProjectPackToml staticProjectDir
   staticDepends  <- readProjectDepends staticProjectDir
-  installNeededDepsIntoFork staticDepends staticPackToml
+  installNeededDepsIntoFork staticProjectDir staticDepends staticPackToml
   -- Peek the module count: large packages skip the OOM-prone whole-package build
   -- and chunk directly (chunks run sequentially in groups of 8 — bounded memory).
   modCount <- do
@@ -2601,7 +2789,7 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       let packTomlContent = generateTempPackToml projectPackToml
       -- Install the project's needed local deps into the forked compiler so the
       -- direct --dumppaths-json build resolves them (fork ignores pack.toml).
-      installNeededDepsIntoFork projectDepends packTomlContent
+      installNeededDepsIntoFork projectDir projectDepends packTomlContent
       let dumppathsPath = "/tmp/idris2_dumppaths_runtime_" ++ uid ++ ".json"
       let pathHitsPath = "/tmp/idris2_pathhits_runtime_" ++ uid ++ ".txt"
       let relExecPath = "./" ++ tempBuildDir ++ "/exec/" ++ tempExecName
