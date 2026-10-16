@@ -59,6 +59,21 @@ public export
 Eq HumanoidConfig where
   a == b = a.unitId == b.unitId && a.platform == b.platform
 
+||| Esp32-layer-only config (the microcontroller delivery's layer-specific settings).
+||| The BOARD lives here, not in the constructor: every ESP32 board shares one
+||| toolchain (Idris2 RefC → ESP-IDF), so a new board is a new value, not a new
+||| constructor that every total match would have to answer for.
+public export
+record Esp32Config where
+  constructor MkEsp32Config
+  board  : String   -- the dev board: "esp32-s3-box" | "esp32-s3-box-3" | …
+  target : String   -- the ESP-IDF target (`idf.py set-target`): "esp32s3" | …
+  port   : String   -- the flash/monitor serial port: "/dev/cu.usbmodem1101" | …
+
+public export
+Eq Esp32Config where
+  a == b = a.board == b.board && a.target == b.target && a.port == b.port
+
 -- =============================================================================
 -- The canonical DeliveryKind
 -- =============================================================================
@@ -75,6 +90,7 @@ data DeliveryKind
   | Android                    -- idris2-react-native: phone layer (MVU → signed APK)
   | IOS                        -- idris2-react-native: phone layer (MVU → signed IPA)
   | Humanoid (Maybe HumanoidConfig)  -- embodiment layer (robot; config optional)
+  | Esp32 (Maybe Esp32Config)  -- device layer (RefC → ESP-IDF firmware; board in config)
   | Core                       -- a pure Idris2 library
 
 public export
@@ -86,6 +102,7 @@ Eq DeliveryKind where
   Android      == Android      = True
   IOS          == IOS          = True
   (Humanoid _) == (Humanoid _) = True
+  (Esp32 _)    == (Esp32 _)    = True
   Core         == Core         = True
   _            == _            = False
 
@@ -111,6 +128,7 @@ coverageFamilyOf Web          = WebMVU
 coverageFamilyOf Android      = AndroidDevice  -- ONLY real-device coverage is honest for Android (no node surrogate)
 coverageFamilyOf IOS          = WebMVU      -- iOS MVU layer measured under node (same as Web)
 coverageFamilyOf (Humanoid _) = Humanoid
+coverageFamilyOf (Esp32 _)    = Esp32Device  -- ONLY on-device runs are honest (no host-RefC surrogate)
 coverageFamilyOf Core         = CoreLib
 
 ||| The COVERAGE-family wire tag for a delivery (the string callers that historically
@@ -134,6 +152,7 @@ deliveryTag Web          = "web"
 deliveryTag Android      = "android"
 deliveryTag IOS          = "ios"
 deliveryTag (Humanoid _) = "humanoid"
+deliveryTag (Esp32 _)    = "esp32-s3-box"
 deliveryTag Core         = "core"
 
 public export
@@ -153,10 +172,11 @@ deliveryKindFromString "web"      = Web
 deliveryKindFromString "android"  = Android
 deliveryKindFromString "ios"      = IOS
 deliveryKindFromString "humanoid" = Humanoid Nothing
+deliveryKindFromString "esp32-s3-box" = Esp32 Nothing
 deliveryKindFromString _          = Core   -- "core" + unknown → Core
 
 ||| Every delivery kind (payload-free representatives) — for UIs that enumerate
 ||| deliveries (the app's release-wiring picker) and exhaustiveness-style iteration.
 public export
 allDeliveryKinds : List DeliveryKind
-allDeliveryKinds = [EVM, ICP Nothing, CLI, Web, Android, IOS, Humanoid Nothing, Core]
+allDeliveryKinds = [EVM, ICP Nothing, CLI, Web, Android, IOS, Humanoid Nothing, Esp32 Nothing, Core]

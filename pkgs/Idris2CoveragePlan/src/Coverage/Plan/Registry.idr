@@ -112,6 +112,10 @@ coverageStatusFor Humanoid      =
   DeclaredUnimplemented (MkUnimplementedReason
     "embodiment hit-stream (actuator/sensor path evidence) not yet specified"
     (Just "ETHERCLAW-humanoid-coverage"))
+coverageStatusFor Esp32Device   =
+  DeclaredUnimplemented (MkUnimplementedReason
+    "on-device RefC hit collector (path hits streamed over USB-Serial-JTAG) not yet built; host-RefC re-execution would be a surrogate runtime"
+    (Just "ETHERCLAW-esp32-coverage"))
 
 ||| Is a family's coverage story a runnable backend (vs declared-unimplemented)?
 public export

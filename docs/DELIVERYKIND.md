@@ -46,6 +46,7 @@ data DeliveryKind
   | Android                    -- idris2-react-native: phone layer (MVU → signed APK)
   | IOS                        -- idris2-react-native: phone layer (MVU → signed IPA)
   | Humanoid (Maybe HumanoidConfig)  -- embodiment layer (robot)
+  | Esp32 (Maybe Esp32Config)  -- device layer (RefC → ESP-IDF firmware; board in config)
   | Core                       -- a pure Idris2 library
 ```
 
@@ -64,6 +65,7 @@ data CoverageFamily
   | AndroidDevice  -- pre-collected ON-DEVICE id-file; the ONLY honest Android coverage
   | CoreLib        -- forked --dumppaths-json denominator; CLI / pure-library coverage
   | Humanoid       -- embodiment layer; NO runnable backend yet (declared-unimplemented)
+  | Esp32Device    -- on-device RefC hits over serial; declared-unimplemented until the collector lands
 ```
 
 This is the **measurement** axis — which denominator source, which numerator-join
@@ -81,7 +83,10 @@ They are **not** 1:1, and collapsing them would lose information:
   surrogate runtime. So Android is its own coverage family precisely to refuse that
   substitution — `AndroidDevice` is the single source of Android numerator/denominator.
 
-So the relation is **many-to-one-or-its-own** (Web/iOS→WebMVU; Android→AndroidDevice;
+- **`Esp32` measures ONLY as `Esp32Device`**, for the same reason as Android: running
+  the RefC output on the host is not running the firmware on the board.
+
+So the relation is **many-to-one-or-its-own** (Web/iOS→WebMVU; Android→AndroidDevice; Esp32→Esp32Device;
 each native family→its own), and each enum stays the single source of truth for its own
 axis. This separation is itself an instance of the Totality-anchor discipline
 (see [TOTALITY_ANCHOR.md](./TOTALITY_ANCHOR.md) §"don't merge distinct concerns") — the
