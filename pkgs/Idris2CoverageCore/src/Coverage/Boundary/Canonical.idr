@@ -66,3 +66,7 @@ boundarySpecsFor Humanoid =
   -- Declared-unimplemented embodiment layer: no runnable backend yet, so it opens
   -- no harness-measurable boundary. Stated explicitly (Totality), not skipped.
   []
+boundarySpecsFor Esp32Device =
+  -- Declared-unimplemented device layer: the ESP-IDF FFI holes (GPIO/I2S/Wi-Fi)
+  -- get their specs together with the on-device collector, not guessed ahead.
+  []

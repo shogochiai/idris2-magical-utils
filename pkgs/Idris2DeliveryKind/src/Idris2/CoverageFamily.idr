@@ -37,6 +37,7 @@ data CoverageFamily
   | AndroidDevice  -- real on-device id-file denominator; the ONLY honest Android coverage (no node surrogate)
   | CoreLib        -- forked --dumppaths-json denominator; string-identity join; CLI / pure-library coverage
   | Humanoid       -- embodiment layer; NO runnable backend yet (declared-unimplemented with a rationale)
+  | Esp32Device    -- on-device RefC hits over serial; the ONLY honest ESP32 coverage (declared-unimplemented for now)
 
 public export
 Eq CoverageFamily where
@@ -46,6 +47,7 @@ Eq CoverageFamily where
   AndroidDevice == AndroidDevice = True
   CoreLib       == CoreLib       = True
   Humanoid      == Humanoid      = True
+  Esp32Device   == Esp32Device   = True
   _             == _             = False
 
 ||| The established wire/string tag for each coverage family. Total: adding a
@@ -59,6 +61,7 @@ coverageFamilyTag WebMVU        = "web"
 coverageFamilyTag AndroidDevice = "android-device"
 coverageFamilyTag CoreLib       = "core"
 coverageFamilyTag Humanoid      = "humanoid"
+coverageFamilyTag Esp32Device   = "esp32-device"
 
 ||| Parse a coverage-family tag back to its `CoverageFamily`. Round-trips with
 ||| `coverageFamilyTag` over `allCoverageFamilies` (see the contract test). Unknown →
@@ -70,6 +73,7 @@ coverageFamilyFromString "dfx"            = DfxWasm
 coverageFamilyFromString "web"            = WebMVU
 coverageFamilyFromString "android-device" = AndroidDevice
 coverageFamilyFromString "humanoid"       = Humanoid
+coverageFamilyFromString "esp32-device"   = Esp32Device
 coverageFamilyFromString _                = CoreLib   -- "core" + unknown → CoreLib
 
 public export
@@ -95,7 +99,8 @@ data SpecScopeMethod
     ||| hook forwards the enterTest label through logcat. Named — not silently
     ||| EnterTestLabel — so this gap is visible in the type, not a false pass.
     DeviceRunWholeTargetOnly
-  | ||| No runnable numerator at all (Humanoid): per-SpecId is vacuous.
+  | ||| No runnable numerator at all (Humanoid; Esp32Device until its on-device
+    ||| hit collector lands): per-SpecId is vacuous.
     NoNumerator
 
 public export
@@ -119,6 +124,7 @@ specScopeMethod WebMVU        = EnterTestLabel
 specScopeMethod AndroidDevice = DeviceRunWholeTargetOnly
 specScopeMethod CoreLib       = EnterTestLabel
 specScopeMethod Humanoid      = NoNumerator
+specScopeMethod Esp32Device   = NoNumerator  -- no device hit-stream collector yet
 
 ||| Does this family support a genuine per-SpecId Step 4 numerator? A local QEQ
 ||| gate MUST consult this: for a family that does NOT (android device today),
@@ -174,6 +180,7 @@ denominatorScopeMethod WebMVU        = WholeTargetDenominator
 denominatorScopeMethod AndroidDevice = WholeTargetDenominator
 denominatorScopeMethod CoreLib       = WholeTargetDenominator
 denominatorScopeMethod Humanoid      = WholeTargetDenominator
+denominatorScopeMethod Esp32Device   = WholeTargetDenominator
 
 ||| Is a per-SpecId Step 4 verdict actually ABOUT that SpecId? Only when BOTH
 ||| ends are scoped to it. Today this is False for every family, which is the
@@ -193,4 +200,4 @@ perSpecIdVerdictIsSpecScoped f =
 ||| no-silent-gap contract tests, and any UI that enumerates coverage mechanisms.
 public export
 allCoverageFamilies : List CoverageFamily
-allCoverageFamilies = [EvmHash, DfxWasm, WebMVU, AndroidDevice, CoreLib, Humanoid]
+allCoverageFamilies = [EvmHash, DfxWasm, WebMVU, AndroidDevice, CoreLib, Humanoid, Esp32Device]
