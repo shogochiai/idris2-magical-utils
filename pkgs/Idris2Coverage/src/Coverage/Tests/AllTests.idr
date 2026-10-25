@@ -1073,6 +1073,19 @@ test_REQ_COV_PATHS_ARTIFACTS_ONLY_001 =
 -- =============================================================================
 -- All Tests
 -- =============================================================================
+||| REQ_COV_STATIC_UNIVERSE_001: whether the project already has a build/ttc changes
+||| neither the build dir a static chunk compiles into nor the prebuilt assumption
+||| used to size the chunks, so the denominator cannot depend on an earlier build.
+test_REQ_COV_STATIC_UNIVERSE_001 : IO Bool
+test_REQ_COV_STATIC_UNIVERSE_001 =
+  pure $ all id
+    [ staticChunkBuildDir True ".tmp-build" == ".tmp-build"
+    , staticChunkBuildDir False ".tmp-build" == ".tmp-build"
+    , staticChunkBuildDir True ".tmp-build" /= "build"
+    , staticChunkPrebuilt True == False
+    , staticChunkPrebuilt False == False
+    ]
+
 ||| REQ_COV_PROBE_CLOSURE_001: the probe pack.toml declares idris2-coverage's whole
 ||| dependency closure (core, standardization, delivery-kind), local and HTTPS
 ||| alike, never SSH, and does not duplicate a block the project already declares.
@@ -1238,6 +1251,7 @@ allTests =
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_no_duplicate)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_sibling_discovery)
   , ("REQ_COV_PROBE_CLOSURE_001", test_REQ_COV_PROBE_CLOSURE_001)
+  , ("REQ_COV_STATIC_UNIVERSE_001", test_REQ_COV_STATIC_UNIVERSE_001)
   , ("REQ_COV_LIN_002", test_LIN_002)
   , ("REQ_COV_LIN_003", test_LIN_003)
   , ("REQ_COV_LIN_004", test_LIN_004)

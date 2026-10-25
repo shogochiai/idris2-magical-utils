@@ -181,6 +181,10 @@ id = "REQ_COV_PROBE_CLOSURE_001"
 description = "The probe pack.toml (generateTempPackTomlWith / coverageDepBlock) SHALL declare idris2-coverage AND its dependency closure — idris2-coverage-core, idris2-coverage-standardization, idris2-delivery-kind (coverageClosure) — as [custom.all.<name>] blocks: local (the given pkgs/Idris2Coverage dir and its sibling package dirs) when a checkout is known, else HTTPS from GitHub with one ipkg path each, never SSH. withoutDeclared SHALL drop a closure block whose table the project's pack.toml already declares, so no [custom.all.<name>] table is duplicated. coverageStackDeps SHALL be the closure's names. Measured 2026-09-30 on a clean NixOS box: a probe naming only idris2-coverage failed with `Unknown package idris2-coverage-core` — the fourth distinct cause of coverage_percent=unknown there. test-evidence: test_REQ_COV_PROBE_CLOSURE_001."
 
 [[spec]]
+id = "REQ_COV_STATIC_UNIVERSE_001"
+description = "The chunked static path denominator (runStaticDumppathsJsonChunk / runStaticDumppathsJsonChunks) SHALL NOT depend on whether the project already has a build/ttc: staticChunkBuildDir SHALL return the run's temp build dir for both values of projectHasBuild, and staticChunkPrebuilt SHALL be False for both, so chunks are sized and compiled the same way. Measured 2026-10-26 (Luci tree 7a490ebaae8e, compiler and source unchanged): --dumppaths-json lists different paths for a module loaded from a .ttc than for the same module compiled in-process (3 Luci.Boundary modules: 281 vs 224 paths; Error.== 32 vs 11, HaltMapping.show 11 vs 1), so a step4 run that reused the project's prebuilt build and one that did not reported 25187 vs 24928 paths, 487 path ids only in the first. test-evidence: test_REQ_COV_STATIC_UNIVERSE_001."
+
+[[spec]]
 id = "REQ_COV_COL_001"
 description = "${module_self}/Collector SHALL parse profile.html Hot Spots table"
 

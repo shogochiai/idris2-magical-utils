@@ -1199,6 +1199,32 @@ runStaticDumppathsJsonWhole ipkgPath = do
       in pure $ Left $ "Failed to read static dumppaths JSON: " ++ show err
                     ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
 
+||| REQ_COV_STATIC_UNIVERSE_001: the build dir a static chunk compiles into. It does
+||| NOT depend on whether the project already has a `build/ttc`.
+|||
+||| Why. `--dumppaths-json` enumerates a definition's paths differently when the
+||| module is LOADED from a .ttc than when it is compiled in the same process:
+||| measured 2026-10-26 on three Luci.Boundary modules (Error, Retry, HaltMapping),
+||| same compiler and source, 281 paths from a prebuilt build dir against 224
+||| compiled in-process (`Luci.Boundary.Error.==` 32 vs 11, `HaltMapping.show` 11 vs 1).
+||| A step4 run that reused the project's prebuilt `build` and one that did not
+||| therefore measured two different denominators for the SAME tree (pkgs/Luci
+||| tree 7a490ebaae8e: 25187 paths with the prebuilt TTC, 24928 without; 487 path
+||| ids only in the first, none only in the second among the dumppaths files).
+||| The temp build dir is shared by the chunks of one run and chunks run leaf-first,
+||| so each module is compiled in-process by the first chunk that needs it and is
+||| deduplicated by path id in that chunk's output: the universe no longer depends
+||| on what an earlier build left behind.
+export
+staticChunkBuildDir : (projectHasBuild : Bool) -> (tempBuildDir : String) -> String
+staticChunkBuildDir _ tempBuildDir = tempBuildDir
+
+||| REQ_COV_STATIC_UNIVERSE_001: whether chunk sizing may assume a prebuilt TTC
+||| cache. Never, for the same reason as `staticChunkBuildDir`.
+export
+staticChunkPrebuilt : (projectHasBuild : Bool) -> Bool
+staticChunkPrebuilt _ = False
+
 runStaticDumppathsJsonChunk : String -> String -> String -> List String -> String -> List String -> Nat -> IO (Either String (List PathObligation))
 runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends packTomlContent modules idx = do
   uid <- getUniqueId
@@ -1224,8 +1250,10 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
   -- builddir, Idris hash-checks and reuses the already-compiled module TTCs
   -- (from a prior `pack build`), compiling only the tiny temp wrapper. Falls back
   -- to a fresh tempBuildDir transparently if the project hasn't been built yet.
+  -- REQ_COV_STATIC_UNIVERSE_001: the project's prebuilt `build` is NOT reused (see
+  -- staticChunkBuildDir): a module loaded from its .ttc enumerates different paths.
   hasPrebuilt <- exists (projectDir ++ "/build/ttc")
-  let buildDirForChunk = if hasPrebuilt then "build" else tempBuildDir
+  let buildDirForChunk = staticChunkBuildDir hasPrebuilt tempBuildDir
   let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just ("--dumppaths-json " ++ dumppathsPath)) (Just buildDirForChunk)
   Right () <- writeFile tempIpkgPath ipkgContent
     | Left err => do
@@ -1406,7 +1434,8 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        let tailCount = if n > 16 then 16 else n
        let headMods = take (minus n tailCount) sortedModules
        let tailMods = drop (minus n tailCount) sortedModules
-       hasPrebuiltForSizing <- exists (projectDir ++ "/build/ttc")
+       hasBuildDir <- exists (projectDir ++ "/build/ttc")
+       let hasPrebuiltForSizing = staticChunkPrebuilt hasBuildDir
        chunkSize <- resolveStaticChunkSize hasPrebuiltForSizing
        let chunks = chunkList chunkSize headMods ++ map (\m => [m]) tailMods
        putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons, chunk size " ++ show chunkSize ++ (if hasPrebuiltForSizing then " (prebuilt TTC found)" else " (no prebuilt TTC — colder/smaller chunks)") ++ ")..."
