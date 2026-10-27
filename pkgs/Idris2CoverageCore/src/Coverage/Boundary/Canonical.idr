@@ -31,6 +31,11 @@ boundarySpecsFor CoreLib =
   [ MkEffectBoundarySpec "core" ProcessSpawn   ["popen2", "system"]        True
   , MkEffectBoundarySpec "core" NetworkOutcall ["curl", "http"]            True
   , MkEffectBoundarySpec "core" FileSystemIO   ["idris2_openFile", "fopen"] True
+  -- Concurrency prims of base's System.Concurrency (mutex / thread) and the libc `sleep`: the Chez harness EXECUTES them on every
+  -- run (a mutex is created and released in-process, a thread is forked and joined, sleep returns), so reaching one opens no harness
+  -- hole. excludable=False resolves them to PureComputation: the path stays in the DENOMINATOR and needs a real hit (stricter than
+  -- the claim-blocking Unknown it was before). pkgs/LuciBFF, 2026-10-27: 294 paths were Unknown for exactly these four ccs.
+  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep"] False
   ]
 boundarySpecsFor DfxWasm =
   -- WASM canister probe: process/network none; a canister call needs a replica.

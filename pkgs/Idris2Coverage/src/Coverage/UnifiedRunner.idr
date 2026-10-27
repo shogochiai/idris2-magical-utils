@@ -544,6 +544,76 @@ localDepEntries content = go (lines content) Nothing Nothing Nothing Nothing []
                   mipkg' = maybe mipkg Just (tomlStringField "ipkg" l)
               in go ls mname mty' mpath' mipkg' acc
 
+||| Extract (depName, url, commit, ipkgFileName) for every `type = "github"` (or `"git"`) custom dep in pack.toml
+||| content that names a commit (REQ_COV_FORK_DEPS_REMOTE_001). `installNeededDepsIntoFork` used to see only `local`
+||| entries, so a dependency declared by url, such as `toml`, was never installed into the fork's package path: the
+||| instrumented build could not resolve it and produced no dumppaths.json while exiting 0 (2026-08-04, and again for
+||| pkgs/LuciBFF on 2026-10-27: every LuciBFF DevRequest failed localQEQ). A dep without a commit is not pinned and is
+||| left out on purpose.
+export
+remoteDepEntries : String -> List (String, String, String, String)
+remoteDepEntries content = go (lines content) Nothing Nothing Nothing Nothing Nothing []
+  where
+    blockName : String -> Maybe String
+    blockName line =
+      let t = trim line in
+      if isPrefixOf "[custom." t
+        then let inner = pack (filter (\c => c /= '[' && c /= ']') (unpack t))
+             in case reverse (forget (split (== '.') inner)) of
+                  (n :: _) => Just (trim n)
+                  []       => Nothing
+        else Nothing
+
+    flush : Maybe String -> Maybe String -> Maybe String -> Maybe String -> Maybe String
+          -> List (String, String, String, String) -> List (String, String, String, String)
+    flush (Just n) (Just ty) (Just u) (Just c) (Just i) acc =
+      if ty == "github" || ty == "git" then (n, u, c, i) :: acc else acc
+    flush _ _ _ _ _ acc = acc
+
+    go : List String -> Maybe String -> Maybe String -> Maybe String -> Maybe String -> Maybe String
+      -> List (String, String, String, String) -> List (String, String, String, String)
+    go [] mname mty murl mcommit mipkg acc = reverse (flush mname mty murl mcommit mipkg acc)
+    go (l :: ls) mname mty murl mcommit mipkg acc =
+      let t = trim l in
+      case blockName l of
+        Just n  => go ls (Just n) Nothing Nothing Nothing Nothing (flush mname mty murl mcommit mipkg acc)
+        Nothing =>
+          if isPrefixOf "[" t
+            then go ls Nothing Nothing Nothing Nothing Nothing (flush mname mty murl mcommit mipkg acc)
+            else
+              let mty'     = maybe mty     Just (tomlStringField "type" l)
+                  murl'    = maybe murl    Just (tomlStringField "url" l)
+                  mcommit' = maybe mcommit Just (tomlStringField "commit" l)
+                  mipkg'   = maybe mipkg   Just (tomlStringField "ipkg" l)
+              in go ls mname mty' murl' mcommit' mipkg' acc
+
+||| Where a remote dep is cloned: <root>/<name>-<commit>. The commit is in the name, so a changed pin is a new directory.
+export
+remoteDepDir : (root, name, commit : String) -> String
+remoteDepDir root name commit = root ++ "/" ++ name ++ "-" ++ commit
+
+||| The cache root of cloned remote deps: IDRIS2_COV_DEPS_DIR, else $HOME/.cache/idris2-cov/deps.
+remoteDepsRoot : IO String
+remoteDepsRoot = do
+  e <- getEnv "IDRIS2_COV_DEPS_DIR"
+  h <- getEnv "HOME"
+  pure (case e of
+          Just d => if d == "" then fromMaybe "" h ++ "/.cache/idris2-cov/deps" else d
+          Nothing => fromMaybe "" h ++ "/.cache/idris2-cov/deps")
+
+||| Clone a remote dep at its pinned commit (once) and give back the (name, dir, ipkg) of a local entry. Nothing when the
+||| clone or the checkout failed (offline, a wrong commit): the dep then stays in the NOT INSTALLABLE list, loudly.
+fetchRemoteDep : (root : String) -> (String, String, String, String) -> IO (Maybe (String, String, String))
+fetchRemoteDep root (name, url, commit, ipkg) = do
+  let dir = remoteDepDir root name commit
+  Right _ <- readFile (dir ++ "/" ++ ipkg)
+    | Left _ => do
+        rc <- system ("mkdir -p '" ++ root ++ "' && rm -rf '" ++ dir ++ "' && git clone -q '" ++ url ++ "' '" ++ dir
+                      ++ "' > '/tmp/idris2-cov-fetch-" ++ name ++ ".log' 2>&1 && git -C '" ++ dir ++ "' checkout -q '" ++ commit
+                      ++ "' >> '/tmp/idris2-cov-fetch-" ++ name ++ ".log' 2>&1")
+        if rc == 0 then pure (Just (name, dir, ipkg)) else pure Nothing
+  pure (Just (name, dir, ipkg))
+
 ||| The coverage stack the temp ipkg always pulls in (generateTempIpkgWithOpts
 ||| hardcodes idris2-coverage; it depends on these). Always install these.
 export
@@ -775,11 +845,19 @@ installNeededDepsIntoFork projectDir projectDepends packTomlContent = do
   -- whose `package` line declares it. Each found ipkg becomes a (name, absdir,
   -- ipkg) local entry exactly like a pack.toml local entry, so a sibling is no
   -- longer reported as NOT INSTALLABLE.
-  let missing = missingDepNames wantedNames packNames
+  -- Remote (url/github) pack.toml entries at their pinned commit: cloned once into a cache and installed like a local one
+  -- (REQ_COV_FORK_DEPS_REMOTE_001).
+  let missingBeforeRemote = missingDepNames wantedNames packNames
+  let remoteWanted = filter (\(n, _, _, _) => elem n missingBeforeRemote) (remoteDepEntries packTomlContent)
+  cacheRoot <- remoteDepsRoot
+  fetched <- traverse (fetchRemoteDep cacheRoot) remoteWanted
+  let remoteDeps = catMaybes fetched
+  let remoteNames = nub (map (\(n, _, _) => n) remoteDeps)
+  let missing = missingDepNames wantedNames (packNames ++ remoteNames)
   siblings <- discoverSiblingDepEntries projectDir missing
   let siblingNames = nub (map (\(n, _, _) => n) siblings)
-  let deps = packDeps ++ siblings
-  let foundNames = nub (packNames ++ siblingNames)
+  let deps = packDeps ++ remoteDeps ++ siblings
+  let foundNames = nub (packNames ++ remoteNames ++ siblingNames)
   let stillMissing = filter (\w => not (elem w foundNames)) wantedNames
   ignore $ fPutStrLn stderr $ "    [dep-install] " ++ show (length foundNames) ++ " of "
                               ++ show (length wantedNames) ++ " required deps installable locally"
@@ -792,6 +870,7 @@ installNeededDepsIntoFork projectDir projectDepends packTomlContent = do
       ++ " package path, or give it a `path` entry."
   libdir <- captureCommand (idris2 ++ " --libdir") "/tmp/idris2-cov-libdir.txt"
   let targets = map (\(n, p, i) => (n, p, i, "pack.toml")) packDeps
+                ++ map (\(n, p, i) => (n, p, i, "pack.toml:" ++ p)) remoteDeps
                 ++ map (\(n, p, i) => (n, p, i, "sibling:" ++ p ++ "/" ++ i)) siblings
   for_ (replicate (minus rounds 1) ()) $ \_ => traverse_ (installOne idris2) targets
   -- The last round says which deps still did not build/install: a failure here
@@ -1199,6 +1278,32 @@ runStaticDumppathsJsonWhole ipkgPath = do
       in pure $ Left $ "Failed to read static dumppaths JSON: " ++ show err
                     ++ if null logTail then "" else "\nBuild log tail:\n" ++ logTail
 
+||| REQ_COV_STATIC_UNIVERSE_001: the build dir a static chunk compiles into. It does
+||| NOT depend on whether the project already has a `build/ttc`.
+|||
+||| Why. `--dumppaths-json` enumerates a definition's paths differently when the
+||| module is LOADED from a .ttc than when it is compiled in the same process:
+||| measured 2026-10-26 on three Luci.Boundary modules (Error, Retry, HaltMapping),
+||| same compiler and source, 281 paths from a prebuilt build dir against 224
+||| compiled in-process (`Luci.Boundary.Error.==` 32 vs 11, `HaltMapping.show` 11 vs 1).
+||| A step4 run that reused the project's prebuilt `build` and one that did not
+||| therefore measured two different denominators for the SAME tree (pkgs/Luci
+||| tree 7a490ebaae8e: 25187 paths with the prebuilt TTC, 24928 without; 487 path
+||| ids only in the first, none only in the second among the dumppaths files).
+||| The temp build dir is shared by the chunks of one run and chunks run leaf-first,
+||| so each module is compiled in-process by the first chunk that needs it and is
+||| deduplicated by path id in that chunk's output: the universe no longer depends
+||| on what an earlier build left behind.
+export
+staticChunkBuildDir : (projectHasBuild : Bool) -> (tempBuildDir : String) -> String
+staticChunkBuildDir _ tempBuildDir = tempBuildDir
+
+||| REQ_COV_STATIC_UNIVERSE_001: whether chunk sizing may assume a prebuilt TTC
+||| cache. Never, for the same reason as `staticChunkBuildDir`.
+export
+staticChunkPrebuilt : (projectHasBuild : Bool) -> Bool
+staticChunkPrebuilt _ = False
+
 runStaticDumppathsJsonChunk : String -> String -> String -> List String -> String -> List String -> Nat -> IO (Either String (List PathObligation))
 runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends packTomlContent modules idx = do
   uid <- getUniqueId
@@ -1224,8 +1329,10 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
   -- builddir, Idris hash-checks and reuses the already-compiled module TTCs
   -- (from a prior `pack build`), compiling only the tiny temp wrapper. Falls back
   -- to a fresh tempBuildDir transparently if the project hasn't been built yet.
+  -- REQ_COV_STATIC_UNIVERSE_001: the project's prebuilt `build` is NOT reused (see
+  -- staticChunkBuildDir): a module loaded from its .ttc enumerates different paths.
   hasPrebuilt <- exists (projectDir ++ "/build/ttc")
-  let buildDirForChunk = if hasPrebuilt then "build" else tempBuildDir
+  let buildDirForChunk = staticChunkBuildDir hasPrebuilt tempBuildDir
   let ipkgContent = generateTempIpkgWithOpts tempExecName tempModName allModules tempExecName projectDepends sourcedir (Just ("--dumppaths-json " ++ dumppathsPath)) (Just buildDirForChunk)
   Right () <- writeFile tempIpkgPath ipkgContent
     | Left err => do
@@ -1406,7 +1513,8 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
        let tailCount = if n > 16 then 16 else n
        let headMods = take (minus n tailCount) sortedModules
        let tailMods = drop (minus n tailCount) sortedModules
-       hasPrebuiltForSizing <- exists (projectDir ++ "/build/ttc")
+       hasBuildDir <- exists (projectDir ++ "/build/ttc")
+       let hasPrebuiltForSizing = staticChunkPrebuilt hasBuildDir
        chunkSize <- resolveStaticChunkSize hasPrebuiltForSizing
        let chunks = chunkList chunkSize headMods ++ map (\m => [m]) tailMods
        putStrLn $ "    Static whole-package fallback failed; trying chunked static path obligations (" ++ show (length projectModules) ++ " modules, leaf-first, " ++ show tailCount ++ " tail singletons, chunk size " ++ show chunkSize ++ (if hasPrebuiltForSizing then " (prebuilt TTC found)" else " (no prebuilt TTC — colder/smaller chunks)") ++ ")..."

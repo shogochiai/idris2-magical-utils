@@ -477,6 +477,26 @@ test_PATH_BOUNDARY_003 () =
                                   && p.classification == UnknownClassification) paths
   in withFamily && withoutFamily
 
+||| The Chez harness executes mutex / thread / sleep prims on every run: under the CoreLib specs a path reaching one is a
+||| ReachableObligation (back in the denominator, needs a real hit), never a claim-blocking Unknown. A cc no row names (the
+||| PATH_BOUNDARY_002 `some_new_prim`) still stays Unknown under the SAME specs.
+concurrencyBoundaryJson : String
+concurrencyBoundaryJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"W.lock\",\"effect_boundary\":\"UnclassifiedForeign(scheme:blodwen-make-mutex)\",\"paths\":[{\"path_id\":\"W.lock#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.nap\",\"effect_boundary\":\"UnclassifiedForeign(C__collect_safe:sleep,libc 6)\",\"paths\":[{\"path_id\":\"W.nap#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+
+test_PATH_BOUNDARY_004 : () -> Bool
+test_PATH_BOUNDARY_004 () =
+  let reachable = case parseDumppathsJsonWithSpecs (boundarySpecsFor CoreLib) concurrencyBoundaryJson of
+                    Left _ => False
+                    Right paths =>
+                      any (\p => p.pathId == "W.lock#p0" && p.classification == ReachableObligation) paths
+                      && any (\p => p.pathId == "W.nap#p0" && p.classification == ReachableObligation) paths
+      stillUnknown = case parseDumppathsJsonWithSpecs (boundarySpecsFor CoreLib) unclassifiedBoundaryJson of
+                       Left _ => False
+                       Right paths =>
+                         any (\p => p.pathId == "App.mystery#p0" && p.classification == UnknownClassification) paths
+  in reachable && stillUnknown
+
 test_PATH_002 : () -> Bool
 test_PATH_002 () =
   case parseDumppathsJson sampleDumppathsJson of
@@ -666,6 +686,7 @@ allTests =
   , test "PATH_BOUNDARY_001" "effect_boundary reclassifies ProcessSpawn to ExternalEffectBoundary, keeps Pure" test_PATH_BOUNDARY_001
   , test "PATH_BOUNDARY_002" "unrecognised UnclassifiedForeign boundary stays UnknownClassification (soundness)" test_PATH_BOUNDARY_002
   , test "PATH_BOUNDARY_003" "evm: opcode hole is Reachable under EvmHash specs, Unknown without a family" test_PATH_BOUNDARY_003
+  , test "PATH_BOUNDARY_004" "mutex/thread/sleep prims are Reachable under CoreLib specs; an unnamed cc stays Unknown" test_PATH_BOUNDARY_004
   , test "BOUNDARY_PERFAMILY_001" "canonical boundary policy differs per family (core vs evm vs web)" test_BOUNDARY_PERFAMILY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003
