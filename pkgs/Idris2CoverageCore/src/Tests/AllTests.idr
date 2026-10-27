@@ -482,7 +482,7 @@ test_PATH_BOUNDARY_003 () =
 ||| PATH_BOUNDARY_002 `some_new_prim`) still stays Unknown under the SAME specs.
 concurrencyBoundaryJson : String
 concurrencyBoundaryJson =
-  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"W.lock\",\"effect_boundary\":\"UnclassifiedForeign(scheme:blodwen-make-mutex)\",\"paths\":[{\"path_id\":\"W.lock#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.srv\",\"effect_boundary\":\"UnclassifiedForeign(C:idrnet_errno, libidris2_support, idris_net.h)\",\"paths\":[{\"path_id\":\"W.srv#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.buf\",\"effect_boundary\":\"UnclassifiedForeign(scheme:blodwen-new-buffer)\",\"paths\":[{\"path_id\":\"W.buf#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.nap\",\"effect_boundary\":\"UnclassifiedForeign(C__collect_safe:sleep,libc 6)\",\"paths\":[{\"path_id\":\"W.nap#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"W.lock\",\"effect_boundary\":\"UnclassifiedForeign(scheme:blodwen-make-mutex)\",\"paths\":[{\"path_id\":\"W.lock#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.srv\",\"effect_boundary\":\"UnclassifiedForeign(C:idrnet_errno, libidris2_support, idris_net.h)\",\"paths\":[{\"path_id\":\"W.srv#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.buf\",\"effect_boundary\":\"UnclassifiedForeign(scheme:blodwen-new-buffer)\",\"paths\":[{\"path_id\":\"W.buf#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.nap\",\"effect_boundary\":\"UnclassifiedForeign(C__collect_safe:sleep,libc 6)\",\"paths\":[{\"path_id\":\"W.nap#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.opt\",\"effect_boundary\":\"UnclassifiedForeign(C:setsockopt,libc 6)\",\"paths\":[{\"path_id\":\"W.opt#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
 
 test_PATH_BOUNDARY_004 : () -> Bool
 test_PATH_BOUNDARY_004 () =
@@ -493,6 +493,7 @@ test_PATH_BOUNDARY_004 () =
                       && any (\p => p.pathId == "W.nap#p0" && p.classification == ReachableObligation) paths
                       && any (\p => p.pathId == "W.srv#p0" && p.classification == ReachableObligation) paths
                       && any (\p => p.pathId == "W.buf#p0" && p.classification == ReachableObligation) paths
+                      && any (\p => p.pathId == "W.opt#p0" && p.classification == ReachableObligation) paths
       stillUnknown = case parseDumppathsJsonWithSpecs (boundarySpecsFor CoreLib) unclassifiedBoundaryJson of
                        Left _ => False
                        Right paths =>

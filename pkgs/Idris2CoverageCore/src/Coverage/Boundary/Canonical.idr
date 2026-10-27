@@ -38,7 +38,9 @@ boundarySpecsFor CoreLib =
   -- Second measurement (same day): idrnet_errno (libidris2_support's errno read after a socket call) and the in-memory buffer prims
   -- (blodwen-new-buffer / -buffer-setint32: setsockopt's argument) were the last 25 Unknown paths, all in LuciBFF.Main's HTTP server. A
   -- localhost socket and a buffer are executable by the Chez harness too: they stay in the denominator and need a test that hits them.
-  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer"] False
+  -- Third (2026-10-28, main 96a47448): `C:setsockopt,libc 6` of LuciBFF.Main.setReuseAddr was the one Unknown left (claim_admissible
+  -- False); the same localhost socket, the same rule.
+  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer", "setsockopt"] False
   ]
 boundarySpecsFor DfxWasm =
   -- WASM canister probe: process/network none; a canister call needs a replica.
