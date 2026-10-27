@@ -18,6 +18,8 @@ import Coverage.UnifiedRunner
 import Coverage.TestCoverage
 import Coverage.Config
 import Coverage.DumpcasesParser
+import Coverage.PathCoverage
+import Coverage.Exclusions
 import Coverage.Standardization.Types
 import Coverage.Standardization.Model
 import Data.List
@@ -1227,6 +1229,19 @@ test_REQ_COV_FORK_DEPS_SIBLING_001_no_duplicate = pure $
       missing = missingDepNames ["repcore", "other"] provided
   in missing == ["other"] && not (elem "repcore" missing)
 
+||| REQ_COV_CORE_BOUNDARY_WIRING_001: the project parse used by step4 applies the CoreLib boundary specs. A path that reaches a Chez
+||| mutex / thread / sleep prim (the Core table says the harness executes them) is a ReachableObligation in the denominator; before the
+||| wiring the family-agnostic parse left it claim-blocking Unknown (pkgs/LuciBFF, 2026-10-27: 231 paths, "unknown_ids=231").
+covering
+test_REQ_COV_CORE_BOUNDARY_WIRING_001 : IO Bool
+test_REQ_COV_CORE_BOUNDARY_WIRING_001 = pure $
+  let json = "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"W.lock\",\"effect_boundary\":\"UnclassifiedForeign(scheme:blodwen-make-mutex)\",\"paths\":[{\"path_id\":\"W.lock#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.mystery\",\"effect_boundary\":\"UnclassifiedForeign(C:some_new_prim)\",\"paths\":[{\"path_id\":\"W.mystery#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+  in case parseProjectDumppathsJson emptyExclusions emptyExclusionConfig json of
+       Left _ => False
+       Right paths =>
+         any (\p => p.pathId == "W.lock#p0" && p.classification == ReachableObligation) paths
+         && any (\p => p.pathId == "W.mystery#p0" && p.classification == UnknownClassification) paths
+
 ||| Locate the type94 RepPipe fixture dir (no pack.toml), trying the paths a
 ||| coverage test build is run from (package root, repo root, or deeper).
 findType94RepPipe : IO (Maybe String)
@@ -1271,6 +1286,7 @@ allTests =
   [ ("REQ_COV_LIN_001", test_LIN_001)
   , ("REQ_COV_FORK_DEPS_001", test_REQ_COV_FORK_DEPS_001)
   , ("REQ_COV_FORK_DEPS_REMOTE_001", test_REQ_COV_FORK_DEPS_REMOTE_001)
+  , ("REQ_COV_CORE_BOUNDARY_WIRING_001", test_REQ_COV_CORE_BOUNDARY_WIRING_001)
   , ("REQ_COV_RESOLVE_MSG_001", test_REQ_COV_RESOLVE_MSG_001)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_package_line)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_no_package_line)

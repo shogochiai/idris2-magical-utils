@@ -9,6 +9,8 @@ import System.File
 import Coverage.Exclusions
 import Coverage.DumpcasesParser
 import Coverage.Core.DumppathsJson
+import Coverage.Boundary.Canonical
+import Idris2.CoverageFamily
 import public Coverage.Core.PathCoverage
 import public Coverage.Core.RuntimeHit
 
@@ -119,7 +121,7 @@ renderExclusionBreakdown bd =
 export
 parseProjectDumppathsJson : LoadedExclusions -> ExclusionConfig -> String -> Either String (List PathObligation)
 parseProjectDumppathsJson excl config content = do
-  paths <- parseDumppathsJson content
+  paths <- parseDumppathsJsonWithSpecs (boundarySpecsFor CoreLib) content   -- the Chez harness executes mutex/thread/sleep (Canonical.idr)
   pure $ filterPathObligations excl config paths
 
 export
