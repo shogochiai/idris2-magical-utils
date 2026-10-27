@@ -1175,6 +1175,18 @@ test_REQ_COV_RESOLVE_MSG_001 = pure $
 -- REQ_COV_FORK_DEPS_REMOTE_001
 -- =============================================================================
 
+||| REQ_COV_TEST_DISCOVERY_002: a found test file is named relative to the package; a nested-worktree path
+||| whose prefix does not match baseDir still gives the module after its last "src/"; a name that would not
+||| be a dotted identifier (a leading ".luci", a run id with "-") is Nothing and never reaches an ipkg.
+test_REQ_COV_TEST_DISCOVERY_002 : IO Bool
+test_REQ_COV_TEST_DISCOVERY_002 = pure $ all id
+  [ testModuleFromPath "/a/b/pkgs/P" "/a/b/pkgs/P/src/P/Tests/AllTests.idr" == Just "P.Tests.AllTests"
+  , testModuleFromPath "/x/other" "/home/u/repo/.luci/worktrees/luci-SUBAGENT-1/pkgs/LuciBFF/src/LuciBFF/Tests/AllTests.idr" == Just "LuciBFF.Tests.AllTests"
+  , testModuleFromPath "pkgs/P" "pkgs/P/src/P/Tests/AllTests.idr" == Just "P.Tests.AllTests"
+  , testModuleFromPath "/x" ".luci/worktrees/luci-SUBAGENT-1/pkgs/P/Tests/AllTests.idr" == Nothing
+  , testModuleFromPath "/x" "" == Nothing
+  ]
+
 ||| REQ_COV_FORK_DEPS_REMOTE_001: a pack.toml dependency declared by url (type = "github") with a commit is found by
 ||| remoteDepEntries, so the fork's install can clone and install it; a local entry, an entry with no commit and a
 ||| non-custom block are not; two blocks are two entries in order; the clone directory carries the commit.
@@ -1286,6 +1298,7 @@ allTests =
   [ ("REQ_COV_LIN_001", test_LIN_001)
   , ("REQ_COV_FORK_DEPS_001", test_REQ_COV_FORK_DEPS_001)
   , ("REQ_COV_FORK_DEPS_REMOTE_001", test_REQ_COV_FORK_DEPS_REMOTE_001)
+  , ("REQ_COV_TEST_DISCOVERY_002", test_REQ_COV_TEST_DISCOVERY_002)
   , ("REQ_COV_CORE_BOUNDARY_WIRING_001", test_REQ_COV_CORE_BOUNDARY_WIRING_001)
   , ("REQ_COV_RESOLVE_MSG_001", test_REQ_COV_RESOLVE_MSG_001)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_package_line)
