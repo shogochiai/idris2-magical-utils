@@ -7,6 +7,8 @@ import public Coverage.Collector
 import public Coverage.DumpcasesParser
 import public Coverage.Core.RuntimeHit
 import public Coverage.Core.PathCoverage
+import Coverage.Boundary.Canonical
+import Idris2.CoverageFamily
 import Coverage.Core.DumppathsJson
 import Coverage.Exclusions
 import Coverage.PathCoverage
@@ -1385,7 +1387,7 @@ runStaticDumppathsJsonChunk projectDir sourcedir tempBuildDir projectDepends pac
       if null (trim content)
          then pure $ Left $ "Static chunk " ++ show idx ++ " (" ++ joinStrings ", " modules
                           ++ ") produced empty dumppaths JSON"
-         else case parseDumppathsJson content of
+         else case parseDumppathsJsonWithSpecs (boundarySpecsFor CoreLib) content of      -- the family's boundary policy, not the family-agnostic parse
                 Left err => pure $ Left $ "Static chunk " ++ show idx ++ " produced unparsable dumppaths JSON: " ++ err
                 Right paths => pure $ Right paths
 
