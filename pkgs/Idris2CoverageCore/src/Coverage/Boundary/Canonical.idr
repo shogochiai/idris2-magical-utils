@@ -35,7 +35,10 @@ boundarySpecsFor CoreLib =
   -- run (a mutex is created and released in-process, a thread is forked and joined, sleep returns), so reaching one opens no harness
   -- hole. excludable=False resolves them to PureComputation: the path stays in the DENOMINATOR and needs a real hit (stricter than
   -- the claim-blocking Unknown it was before). pkgs/LuciBFF, 2026-10-27: 294 paths were Unknown for exactly these four ccs.
-  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep"] False
+  -- Second measurement (same day): idrnet_errno (libidris2_support's errno read after a socket call) and the in-memory buffer prims
+  -- (blodwen-new-buffer / -buffer-setint32: setsockopt's argument) were the last 25 Unknown paths, all in LuciBFF.Main's HTTP server. A
+  -- localhost socket and a buffer are executable by the Chez harness too: they stay in the denominator and need a test that hits them.
+  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer"] False
   ]
 boundarySpecsFor DfxWasm =
   -- WASM canister probe: process/network none; a canister call needs a replica.
