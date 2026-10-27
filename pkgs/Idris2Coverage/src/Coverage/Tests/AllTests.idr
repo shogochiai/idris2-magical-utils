@@ -1170,6 +1170,32 @@ test_REQ_COV_RESOLVE_MSG_001 = pure $
          ]
 
 -- =============================================================================
+-- REQ_COV_FORK_DEPS_REMOTE_001
+-- =============================================================================
+
+||| REQ_COV_FORK_DEPS_REMOTE_001: a pack.toml dependency declared by url (type = "github") with a commit is found by
+||| remoteDepEntries, so the fork's install can clone and install it; a local entry, an entry with no commit and a
+||| non-custom block are not; two blocks are two entries in order; the clone directory carries the commit.
+test_REQ_COV_FORK_DEPS_REMOTE_001 : IO Bool
+test_REQ_COV_FORK_DEPS_REMOTE_001 = pure $
+  let toml = unlines
+        [ "# comment", "[custom.all.toml]", "type = \"github\"", "url = \"https://github.com/hydrolarus/toml-idr.git\""
+        , "commit = \"7e5c4f3cc2ff028f665653b43c4c1f9b0a8211e2\"", "ipkg = \"toml.ipkg\""
+        , "", "[custom.all.mine]", "type = \"local\"", "path = \"/p\"", "ipkg = \"mine.ipkg\""
+        , "", "[custom.all.unpinned]", "type = \"github\"", "url = \"https://x/y.git\"", "ipkg = \"y.ipkg\""
+        , "", "[custom.all.other]", "type = \"git\"", "url = \"https://x/o.git\"", "commit = \"abc\"", "ipkg = \"o.ipkg\""
+        , "", "[pack]", "x = 1" ]
+  in all id
+       [ remoteDepEntries toml == [ ("toml", "https://github.com/hydrolarus/toml-idr.git", "7e5c4f3cc2ff028f665653b43c4c1f9b0a8211e2", "toml.ipkg")
+                                  , ("other", "https://x/o.git", "abc", "o.ipkg") ]
+       , remoteDepEntries "" == []
+       , remoteDepEntries "[custom.all.a]\ntype = \"local\"\npath = \"/p\"\nipkg = \"a.ipkg\"\n" == []
+       , remoteDepEntries "[custom.all.a]\ntype = \"github\"\nurl = \"u\"\ncommit = \"c\"\nipkg = \"a.ipkg\"\n" == [("a", "u", "c", "a.ipkg")]   -- the last block, no trailing header
+       , remoteDepDir "/r" "toml" "7e5" == "/r/toml-7e5"
+       , remoteDepDir "/r" "toml" "7e5" /= remoteDepDir "/r" "toml" "7e6"
+       ]
+
+-- =============================================================================
 -- REQ_COV_FORK_DEPS_SIBLING_001
 -- =============================================================================
 
@@ -1244,6 +1270,7 @@ allTests : List (String, IO Bool)
 allTests =
   [ ("REQ_COV_LIN_001", test_LIN_001)
   , ("REQ_COV_FORK_DEPS_001", test_REQ_COV_FORK_DEPS_001)
+  , ("REQ_COV_FORK_DEPS_REMOTE_001", test_REQ_COV_FORK_DEPS_REMOTE_001)
   , ("REQ_COV_RESOLVE_MSG_001", test_REQ_COV_RESOLVE_MSG_001)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_package_line)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_no_package_line)
