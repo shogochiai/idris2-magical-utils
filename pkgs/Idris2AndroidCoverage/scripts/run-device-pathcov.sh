@@ -129,8 +129,12 @@ for _try in $(seq 1 $(( SETTLE + 20 ))); do
     /IDRIS_PATHHIT:/ && !/IDRIS_PATHHIT_HOOK_INSTALLED/ {
       i = index($0, "IDRIS_PATHHIT:")
       rest = substr($0, i + length("IDRIS_PATHHIT:"))
-      split(rest, a, /[ \t]/)
-      if (a[1] != "") print a[1]
+      # The whole rest of the line is the id: compiled path ids contain spaces ("Mod.case block in f#p3",
+      # "Mod.Eq implementation at Mod:1:1--2:9#p0"). Cutting at the first space (as this did until 2026-11-07)
+      # dropped every such hit: on pkgs/LuciApp 0 of 1197 counted hits had a space while 2411 of 2821 missing ids
+      # did, so the device number could never pass 40%. Only trailing whitespace / CR is removed.
+      sub(/[ \t\r]+$/, "", rest)
+      if (rest != "") print rest
     }' | sort -u > "$HITS"
   # Keep polling a few more rounds after the first hits appear: recordPathHit
   # lines land incrementally as the View renders, so an early break undercounts
