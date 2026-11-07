@@ -17,13 +17,15 @@ allTagsNonEmpty : Bool
 allTagsNonEmpty = all (\cf => coverageFamilyTag cf /= "") allCoverageFamilies
 
 -- the distinct tags are stable and not accidentally collapsed: web vs android-device
--- (the two android measurement mechanisms) and humanoid are all separate.
+-- (the two android measurement mechanisms), humanoid and esp32-device are all separate.
 distinctMechanisms : Bool
 distinctMechanisms =
   coverageFamilyTag WebMVU == "web"
   && coverageFamilyTag AndroidDevice == "android-device"
   && coverageFamilyTag Humanoid == "humanoid"
+  && coverageFamilyTag Esp32Device == "esp32-device"
   && WebMVU /= AndroidDevice
+  && Esp32Device /= CoreLib
 
 main : IO ()
 main = do

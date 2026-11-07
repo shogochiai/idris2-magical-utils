@@ -18,6 +18,8 @@ import Coverage.UnifiedRunner
 import Coverage.TestCoverage
 import Coverage.Config
 import Coverage.DumpcasesParser
+import Coverage.PathCoverage
+import Coverage.Exclusions
 import Coverage.Standardization.Types
 import Coverage.Standardization.Model
 import Data.List
@@ -1073,6 +1075,19 @@ test_REQ_COV_PATHS_ARTIFACTS_ONLY_001 =
 -- =============================================================================
 -- All Tests
 -- =============================================================================
+||| REQ_COV_STATIC_UNIVERSE_001: whether the project already has a build/ttc changes
+||| neither the build dir a static chunk compiles into nor the prebuilt assumption
+||| used to size the chunks, so the denominator cannot depend on an earlier build.
+test_REQ_COV_STATIC_UNIVERSE_001 : IO Bool
+test_REQ_COV_STATIC_UNIVERSE_001 =
+  pure $ all id
+    [ staticChunkBuildDir True ".tmp-build" == ".tmp-build"
+    , staticChunkBuildDir False ".tmp-build" == ".tmp-build"
+    , staticChunkBuildDir True ".tmp-build" /= "build"
+    , staticChunkPrebuilt True == False
+    , staticChunkPrebuilt False == False
+    ]
+
 ||| REQ_COV_PROBE_CLOSURE_001: the probe pack.toml declares idris2-coverage's whole
 ||| dependency closure (core, standardization, delivery-kind), local and HTTPS
 ||| alike, never SSH, and does not duplicate a block the project already declares.
@@ -1157,6 +1172,44 @@ test_REQ_COV_RESOLVE_MSG_001 = pure $
          ]
 
 -- =============================================================================
+-- REQ_COV_FORK_DEPS_REMOTE_001
+-- =============================================================================
+
+||| REQ_COV_TEST_DISCOVERY_002: a found test file is named relative to the package; a nested-worktree path
+||| whose prefix does not match baseDir still gives the module after its last "src/"; a name that would not
+||| be a dotted identifier (a leading ".luci", a run id with "-") is Nothing and never reaches an ipkg.
+test_REQ_COV_TEST_DISCOVERY_002 : IO Bool
+test_REQ_COV_TEST_DISCOVERY_002 = pure $ all id
+  [ testModuleFromPath "/a/b/pkgs/P" "/a/b/pkgs/P/src/P/Tests/AllTests.idr" == Just "P.Tests.AllTests"
+  , testModuleFromPath "/x/other" "/home/u/repo/.luci/worktrees/luci-SUBAGENT-1/pkgs/LuciBFF/src/LuciBFF/Tests/AllTests.idr" == Just "LuciBFF.Tests.AllTests"
+  , testModuleFromPath "pkgs/P" "pkgs/P/src/P/Tests/AllTests.idr" == Just "P.Tests.AllTests"
+  , testModuleFromPath "/x" ".luci/worktrees/luci-SUBAGENT-1/pkgs/P/Tests/AllTests.idr" == Nothing
+  , testModuleFromPath "/x" "" == Nothing
+  ]
+
+||| REQ_COV_FORK_DEPS_REMOTE_001: a pack.toml dependency declared by url (type = "github") with a commit is found by
+||| remoteDepEntries, so the fork's install can clone and install it; a local entry, an entry with no commit and a
+||| non-custom block are not; two blocks are two entries in order; the clone directory carries the commit.
+test_REQ_COV_FORK_DEPS_REMOTE_001 : IO Bool
+test_REQ_COV_FORK_DEPS_REMOTE_001 = pure $
+  let toml = unlines
+        [ "# comment", "[custom.all.toml]", "type = \"github\"", "url = \"https://github.com/hydrolarus/toml-idr.git\""
+        , "commit = \"7e5c4f3cc2ff028f665653b43c4c1f9b0a8211e2\"", "ipkg = \"toml.ipkg\""
+        , "", "[custom.all.mine]", "type = \"local\"", "path = \"/p\"", "ipkg = \"mine.ipkg\""
+        , "", "[custom.all.unpinned]", "type = \"github\"", "url = \"https://x/y.git\"", "ipkg = \"y.ipkg\""
+        , "", "[custom.all.other]", "type = \"git\"", "url = \"https://x/o.git\"", "commit = \"abc\"", "ipkg = \"o.ipkg\""
+        , "", "[pack]", "x = 1" ]
+  in all id
+       [ remoteDepEntries toml == [ ("toml", "https://github.com/hydrolarus/toml-idr.git", "7e5c4f3cc2ff028f665653b43c4c1f9b0a8211e2", "toml.ipkg")
+                                  , ("other", "https://x/o.git", "abc", "o.ipkg") ]
+       , remoteDepEntries "" == []
+       , remoteDepEntries "[custom.all.a]\ntype = \"local\"\npath = \"/p\"\nipkg = \"a.ipkg\"\n" == []
+       , remoteDepEntries "[custom.all.a]\ntype = \"github\"\nurl = \"u\"\ncommit = \"c\"\nipkg = \"a.ipkg\"\n" == [("a", "u", "c", "a.ipkg")]   -- the last block, no trailing header
+       , remoteDepDir "/r" "toml" "7e5" == "/r/toml-7e5"
+       , remoteDepDir "/r" "toml" "7e5" /= remoteDepDir "/r" "toml" "7e6"
+       ]
+
+-- =============================================================================
 -- REQ_COV_FORK_DEPS_SIBLING_001
 -- =============================================================================
 
@@ -1187,6 +1240,19 @@ test_REQ_COV_FORK_DEPS_SIBLING_001_no_duplicate = pure $
   let provided = ["repcore"]
       missing = missingDepNames ["repcore", "other"] provided
   in missing == ["other"] && not (elem "repcore" missing)
+
+||| REQ_COV_CORE_BOUNDARY_WIRING_001: the project parse used by step4 applies the CoreLib boundary specs. A path that reaches a Chez
+||| mutex / thread / sleep prim (the Core table says the harness executes them) is a ReachableObligation in the denominator; before the
+||| wiring the family-agnostic parse left it claim-blocking Unknown (pkgs/LuciBFF, 2026-10-27: 231 paths, "unknown_ids=231").
+covering
+test_REQ_COV_CORE_BOUNDARY_WIRING_001 : IO Bool
+test_REQ_COV_CORE_BOUNDARY_WIRING_001 = pure $
+  let json = "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"W.lock\",\"effect_boundary\":\"UnclassifiedForeign(scheme:blodwen-make-mutex)\",\"paths\":[{\"path_id\":\"W.lock#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.mystery\",\"effect_boundary\":\"UnclassifiedForeign(C:some_new_prim)\",\"paths\":[{\"path_id\":\"W.mystery#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+  in case parseProjectDumppathsJson emptyExclusions emptyExclusionConfig json of
+       Left _ => False
+       Right paths =>
+         any (\p => p.pathId == "W.lock#p0" && p.classification == ReachableObligation) paths
+         && any (\p => p.pathId == "W.mystery#p0" && p.classification == UnknownClassification) paths
 
 ||| Locate the type94 RepPipe fixture dir (no pack.toml), trying the paths a
 ||| coverage test build is run from (package root, repo root, or deeper).
@@ -1231,6 +1297,9 @@ allTests : List (String, IO Bool)
 allTests =
   [ ("REQ_COV_LIN_001", test_LIN_001)
   , ("REQ_COV_FORK_DEPS_001", test_REQ_COV_FORK_DEPS_001)
+  , ("REQ_COV_FORK_DEPS_REMOTE_001", test_REQ_COV_FORK_DEPS_REMOTE_001)
+  , ("REQ_COV_TEST_DISCOVERY_002", test_REQ_COV_TEST_DISCOVERY_002)
+  , ("REQ_COV_CORE_BOUNDARY_WIRING_001", test_REQ_COV_CORE_BOUNDARY_WIRING_001)
   , ("REQ_COV_RESOLVE_MSG_001", test_REQ_COV_RESOLVE_MSG_001)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_package_line)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_no_package_line)
@@ -1238,6 +1307,7 @@ allTests =
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_no_duplicate)
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_sibling_discovery)
   , ("REQ_COV_PROBE_CLOSURE_001", test_REQ_COV_PROBE_CLOSURE_001)
+  , ("REQ_COV_STATIC_UNIVERSE_001", test_REQ_COV_STATIC_UNIVERSE_001)
   , ("REQ_COV_LIN_002", test_LIN_002)
   , ("REQ_COV_LIN_003", test_LIN_003)
   , ("REQ_COV_LIN_004", test_LIN_004)

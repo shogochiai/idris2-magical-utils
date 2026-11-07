@@ -31,6 +31,16 @@ boundarySpecsFor CoreLib =
   [ MkEffectBoundarySpec "core" ProcessSpawn   ["popen2", "system"]        True
   , MkEffectBoundarySpec "core" NetworkOutcall ["curl", "http"]            True
   , MkEffectBoundarySpec "core" FileSystemIO   ["idris2_openFile", "fopen"] True
+  -- Concurrency prims of base's System.Concurrency (mutex / thread) and the libc `sleep`: the Chez harness EXECUTES them on every
+  -- run (a mutex is created and released in-process, a thread is forked and joined, sleep returns), so reaching one opens no harness
+  -- hole. excludable=False resolves them to PureComputation: the path stays in the DENOMINATOR and needs a real hit (stricter than
+  -- the claim-blocking Unknown it was before). pkgs/LuciBFF, 2026-10-27: 294 paths were Unknown for exactly these four ccs.
+  -- Second measurement (same day): idrnet_errno (libidris2_support's errno read after a socket call) and the in-memory buffer prims
+  -- (blodwen-new-buffer / -buffer-setint32: setsockopt's argument) were the last 25 Unknown paths, all in LuciBFF.Main's HTTP server. A
+  -- localhost socket and a buffer are executable by the Chez harness too: they stay in the denominator and need a test that hits them.
+  -- Third (2026-10-28, main 96a47448): `C:setsockopt,libc 6` of LuciBFF.Main.setReuseAddr was the one Unknown left (claim_admissible
+  -- False); the same localhost socket, the same rule.
+  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer", "setsockopt"] False
   ]
 boundarySpecsFor DfxWasm =
   -- WASM canister probe: process/network none; a canister call needs a replica.
@@ -65,4 +75,8 @@ boundarySpecsFor EvmHash =
 boundarySpecsFor Humanoid =
   -- Declared-unimplemented embodiment layer: no runnable backend yet, so it opens
   -- no harness-measurable boundary. Stated explicitly (Totality), not skipped.
+  []
+boundarySpecsFor Esp32Device =
+  -- Declared-unimplemented device layer: the ESP-IDF FFI holes (GPIO/I2S/Wi-Fi)
+  -- get their specs together with the on-device collector, not guessed ahead.
   []

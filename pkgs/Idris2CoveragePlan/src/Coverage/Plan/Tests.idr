@@ -23,11 +23,12 @@ test_no_silent_gap = all ok allCoverageFamilies
               Implemented _           => True
               DeclaredUnimplemented r => r.rationale /= ""   -- empty rationale = silent gap = FAIL
 
-||| The five mechanised families are Implemented; Humanoid is the one declared
-||| unimplemented (its hit-stream is not yet specified) — a KNOWN, reported gap.
+||| The five mechanised families are Implemented; Humanoid and Esp32Device are
+||| declared unimplemented (no hit-stream yet) — KNOWN, reported gaps.
 test_humanoid_declared : Bool
 test_humanoid_declared =
   not (isImplemented (coverageStatusFor Humanoid))
+  && not (isImplemented (coverageStatusFor Esp32Device))
   && isImplemented (coverageStatusFor WebMVU)
   && isImplemented (coverageStatusFor EvmHash)
   && isImplemented (coverageStatusFor DfxWasm)

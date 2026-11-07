@@ -174,22 +174,51 @@ filePathToModule path =
          then dropSourceDirs xs
          else x :: xs
 
+||| REQ_COV_TEST_DISCOVERY_002: the module name of a discovered test file. The found path is made
+||| relative to `baseDir`; when that prefix does not match (measured 2026-10-27: a package inside a
+||| nested subagent worktree, <repo>/.luci/worktrees/<run>/pkgs/LuciBFF, gave the name
+||| ".luci.worktrees.<run>.pkgs.LuciBFF.src.LuciBFF.Tests.AllTests" and the fork refused the generated
+||| ipkg with "Can't recognise token", so every daemon run of that package had step4 UNMEASURED),
+||| the part after the LAST "/src/" is used. A name that is not a dotted sequence of capitalised
+||| identifiers is Nothing: it must never reach an ipkg.
+export
+testModuleFromPath : (baseDir : String) -> (path : String) -> Maybe String
+testModuleFromPath baseDir path =
+  let rel0 = stripPrefix baseDir path
+      rel  = if isInfixOf "/src/" rel0 then afterLastSrc rel0 else rel0
+      name = filePathToModule rel
+  in if validModuleName name then Just name else Nothing
+  where
+    stripPrefix : String -> String -> String
+    stripPrefix pre p =
+      if isPrefixOf pre p
+         then let stripped = pack $ drop (length pre) (unpack p)
+              in if isPrefixOf "/" stripped
+                    then pack $ drop 1 (unpack stripped)
+                    else stripped
+         else p
+    afterLastSrc : String -> String
+    afterLastSrc str =
+      let parts    = forget (split (== '/') str)
+          afterRev = takeWhile (/= "src") (reverse parts)
+      in if length afterRev == length parts then str else joinBy "/" (reverse afterRev)
+    okSeg : String -> Bool
+    okSeg seg = case unpack seg of
+      []        => False
+      (c :: cs) => isUpper c && all (\x => isAlphaNum x || x == '_') cs
+    validModuleName : String -> Bool
+    validModuleName n = n /= "" && all okSeg (forget (split (== '.') n))
+
 ||| Discover test modules from filesystem
-||| Returns module names like "Coverage.Tests.AllTests"
+||| Returns module names like "Coverage.Tests.AllTests"; a file whose name cannot be made a module
+||| name is reported on stderr and left out (REQ_COV_TEST_DISCOVERY_002).
 export
 covering
 discoverTestModules : String -> IO (List String)
 discoverTestModules baseDir = do
   files <- findTestFiles baseDir "*AllTests.idr"
-  -- Convert absolute paths to relative by stripping baseDir prefix
-  let relativePaths = map (stripPrefix baseDir) files
-  pure $ map filePathToModule relativePaths
-  where
-    stripPrefix : String -> String -> String
-    stripPrefix pre path =
-      if isPrefixOf pre path
-         then let stripped = pack $ drop (length pre) (unpack path)
-              in if isPrefixOf "/" stripped
-                    then pack $ drop 1 (unpack stripped)
-                    else stripped
-         else path
+  let named = map (\f => (f, testModuleFromPath baseDir f)) files
+  for_ named $ \(f, m) => case m of
+    Nothing => ignore $ fPutStrLn stderr ("    [test-discovery] IGNORED " ++ f ++ ": no module name relative to " ++ baseDir ++ " (REQ_COV_TEST_DISCOVERY_002)")
+    Just _  => pure ()
+  pure (mapMaybe snd named)

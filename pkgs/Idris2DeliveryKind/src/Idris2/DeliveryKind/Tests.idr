@@ -23,6 +23,7 @@ coverageMapsPreserved =
   && deliveryTag Android == "android"
   && deliveryTag CLI == "cli"
   && coverageFamilyOf (Humanoid Nothing) == Humanoid
+  && coverageFamilyOf (Esp32 Nothing) == Esp32Device
 
 -- the embodiment extension axis.
 humanoidExtension : Bool
@@ -31,10 +32,20 @@ humanoidExtension =
   && elem (Humanoid Nothing) allDeliveryKinds
   && deliveryTag (Humanoid Nothing) == "humanoid"
 
+-- the device extension axis: the board rides in the payload, so two boards are the
+-- same DeliveryKind, and the wire tag round-trips.
+esp32Extension : Bool
+esp32Extension =
+  Esp32 (Just (MkEsp32Config "esp32-s3-box-3" "esp32s3" "/dev/cu.usbmodem1101")) == Esp32 Nothing
+  && elem (Esp32 Nothing) allDeliveryKinds
+  && deliveryTag (Esp32 Nothing) == "esp32-s3-box"
+  && deliveryKindFromString "esp32-s3-box" == Esp32 Nothing
+
 main : IO ()
 main = do
   let checks = [ ("tag-round-trips", tagRoundTrips)
                , ("coverage-maps-preserved", coverageMapsPreserved)
-               , ("humanoid-extension", humanoidExtension) ]
+               , ("humanoid-extension", humanoidExtension)
+               , ("esp32-extension", esp32Extension) ]
   _ <- traverse (\(n, ok) => putStrLn ((if ok then "  PASS " else "  FAIL ") ++ n)) checks
   putStrLn ("Passed " ++ show (length (filter snd checks)) ++ "/" ++ show (length checks))
