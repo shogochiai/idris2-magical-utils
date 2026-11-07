@@ -11,7 +11,17 @@
 #
 # Usage:
 #   run-device-pathcov.sh --package PKG --paths DUMPPATHS_JSON \
-#       [--module-prefix SpcDaoApp] [--driver SCRIPT] [--settle N] [--serial S] [--out FILE]
+#       [--module-prefix SpcDaoApp] [--driver SCRIPT] [--settle N] [--serial S] [--out FILE] \
+#       [--exclusions COVERAGE_EXCLUSIONS_TXT]
+#
+# --exclusions: the package's coverage-exclusions.txt, handed to device-pathcov
+# (Android.Coverage.PathCoverage.projectPatterns: the dfx line format
+# `<exact|prefix|suffix|contains>:<fn> # reason`, a bare line = function-name
+# prefix). A named file that does not exist is an error (exit 2), never a
+# silent "no exclusions".
+#
+# PATHCOV_LOG_BUFFER (default 16M): the device's `main` log ring is set to this
+# for the run and restored afterwards (see the numerator section).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,12 +38,13 @@ while [[ $# -gt 0 ]]; do
     --serial)        SERIAL="$2"; shift 2 ;;
     --out)           OUTFILE="$2"; shift 2 ;;
     --exclusions)    EXCLUSIONS="$2"; shift 2 ;;
-    -h|--help) echo "Usage: run-device-pathcov.sh --package PKG --paths DUMPPATHS_JSON [--module-prefix P] [--driver S] [--settle N] [--serial S] [--out FILE]"; exit 0 ;;
+    -h|--help) echo "Usage: run-device-pathcov.sh --package PKG --paths DUMPPATHS_JSON [--module-prefix P] [--driver S] [--settle N] [--serial S] [--out FILE] [--exclusions FILE]"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$PKG" && -n "$PATHS" ]] || { echo "need --package and --paths" >&2; exit 2; }
 [[ -f "$PATHS" ]] || { echo "dumppaths json not found: $PATHS" >&2; exit 2; }
+[[ -z "$EXCLUSIONS" || -f "$EXCLUSIONS" ]] || { echo "exclusions file not found: $EXCLUSIONS" >&2; exit 2; }
 
 # Locate the Idris2 coverage executable (built from idris2-android-coverage.ipkg).
 PATHCOV_BIN="$(find "$PKGROOT/build/exec" -maxdepth 1 -type f -name device-pathcov -perm -u+x 2>/dev/null | head -1)"
@@ -41,6 +52,53 @@ PATHCOV_BIN="$(find "$PKGROOT/build/exec" -maxdepth 1 -type f -name device-pathc
 
 ADB=(adb); [[ -n "$SERIAL" ]] && ADB=(adb -s "$SERIAL")
 "${ADB[@]}" get-state >/dev/null 2>&1 || { echo "no device" >&2; exit 3; }
+
+# ONE exit trap for everything this run starts. Until 2026-11-07 the stream's
+# trap (kill the `adb logcat` reader, delete its file) was REPLACED by a second
+# `trap ... EXIT` further down (for $WORK), so every run left its `adb logcat`
+# reader running and its file growing after the harness exited. alice ran the
+# parity step4 right after the lazy one (#4467), i.e. with the previous run's
+# reader still streaming the same device over the same adb link.
+STREAM_PID="" STREAM_LOG="" WORK="" LOGBUF_RESTORE=""
+cleanup() {
+  set +e  # a reader that already exited must not stop the rest of the cleanup
+  [[ -n "$STREAM_PID" ]] && kill "$STREAM_PID" 2>/dev/null
+  [[ -n "$STREAM_PID" ]] && wait "$STREAM_PID" 2>/dev/null
+  [[ -n "$STREAM_LOG" ]] && rm -f "$STREAM_LOG"
+  [[ -n "$WORK" ]] && rm -rf "$WORK"
+  [[ -n "$LOGBUF_RESTORE" ]] && "${ADB[@]}" logcat -b main -G "$LOGBUF_RESTORE" >/dev/null 2>&1
+  return 0
+}
+trap cleanup EXIT
+WORK="$(mktemp -d)"
+
+# Every IDRIS_PATHHIT id in a logcat text on stdin, one per line, sorted unique.
+extract_ids() {
+  awk '
+    /IDRIS_PATHHIT:/ && !/IDRIS_PATHHIT_HOOK_INSTALLED/ {
+      i = index($0, "IDRIS_PATHHIT:")
+      rest = substr($0, i + length("IDRIS_PATHHIT:"))
+      # The whole rest of the line is the id: compiled path ids contain spaces ("Mod.case block in f#p3",
+      # "Mod.Eq implementation at Mod:1:1--2:9#p0"). Cutting at the first space (as this did until 2026-11-07)
+      # dropped every such hit: on pkgs/LuciApp 0 of 1197 counted hits had a space while 2411 of 2821 missing ids
+      # did, so the device number could never pass 40%. Only trailing whitespace / CR is removed.
+      sub(/[ \t\r]+$/, "", rest)
+      if (rest != "") print rest
+    }' | LC_ALL=C sort -u
+}
+
+# Enlarge the device's main ring for the run (restored by cleanup). The final
+# `logcat -d` below reads the ring, and a 256 KiB ring holds ~2-3k lines while a
+# replay run logs 5k+ ids, so at the default size the dump would have lost the
+# early ids to eviction. Parsed from `logcat -g`: "main: ring buffer is 256 KiB"
+# (Android 12+) or "...is 256Kb" (11). Unparseable -> left as it is, said so.
+_g="$("${ADB[@]}" logcat -b main -g 2>/dev/null | head -1 || true)"
+_old="$(printf '%s\n' "$_g" | sed -nE 's/.*ring buffer is ([0-9]+) ?([KMG])i?[Bb].*/\1\2/p')"
+if [[ -n "$_old" ]] && "${ADB[@]}" logcat -b main -G "${PATHCOV_LOG_BUFFER:-16M}" >/dev/null 2>&1; then
+  LOGBUF_RESTORE="$_old"
+else
+  echo "note: main log ring not enlarged (logcat -g said: ${_g:-nothing}); the final dump may miss evicted ids" >&2
+fi
 
 # Clear logcat, COLD-start the app, let the View mount (the hook fires as paths
 # run). force-stop first: if the app is already foregrounded, `monkey` just
@@ -57,10 +115,9 @@ sleep 2
 # 107/108/84 where the stream held 130/121/94. The loop below is unchanged in
 # shape — it still polls until the id count stops growing — but it now polls a
 # file that only ever grows, so a hit seen once cannot be lost again.
-STREAM_LOG="$(mktemp)"
+STREAM_LOG="$WORK/stream.txt"
 "${ADB[@]}" logcat > "$STREAM_LOG" 2>/dev/null &
 STREAM_PID=$!
-trap '[ -n "${STREAM_PID:-}" ] && kill "$STREAM_PID" 2>/dev/null; rm -f "$STREAM_LOG"' EXIT
 # Launch via `am start` (deterministic activity start) rather than monkey, which
 # occasionally warm-resumes without remounting. Fall back to monkey.
 "${ADB[@]}" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
@@ -97,8 +154,8 @@ fi
 # the adb client in a state where the NEXT logcat -d returns nothing (the false
 # 0 that dogged this harness). Dump to a var and match with a non-short-circuit
 # test instead — no pipe into a truncating consumer.
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-DENOM="$WORK/denom.txt"; HITS="$WORK/hits.txt"; RAW="$WORK/rawlog.txt"
+DENOM="$WORK/denom.txt"; HITS="$WORK/hits.txt"
+STREAM_IDS="$WORK/stream-ids.txt"; DUMP_IDS="$WORK/dump-ids.txt"
 
 # DENOMINATOR: every dumppaths path_id, one per line. Plain grep/sed (no jq).
 grep -oE '"path_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$PATHS" \
@@ -112,30 +169,29 @@ grep -oE '"path_id"[[:space:]]*:[[:space:]]*"[^"]*"' "$PATHS" \
 # where a SIGPIPE / errexit / locale-backref interaction under `set -euo
 # pipefail` left the extraction empty even though the dump held 58-67 hits.
 # Robust extraction: fixed-string prefix, cut the id up to whitespace.
+#
+# TWO readers, unioned, every round (2026-11-07, alice #4467: the parity run's
+# logcat held 3622 denominator ids, the harness counted 3617):
+#   - the stream file (kept: it is what survives a ring that could not be
+#     enlarged), and
+#   - a fresh `logcat -d -b main` dump of the (enlarged) ring.
+# The stream alone is not a complete record. It is a second, independent logd
+# reader whose position the stop rule never looked at: the driver decides the
+# app is done from its OWN `logcat -d`, and the loop then stopped as soon as
+# the stream's id count was unchanged over one 1 s round, whatever the stream
+# had not delivered yet. logd also skips entries for a streaming reader that
+# falls behind the ring ("Skipping N entries from slow reader") — the stream
+# can lose lines another reader of the same run still has. A dump has neither
+# failure: it is the ring itself, read at that moment. An id is a fact that it
+# was logged, so the union of the two never over-counts.
+# The ids each reader alone saw are printed on stderr, so a stream/dump
+# disagreement shows in the run's own output instead of in a later audit.
 : > "$HITS"
-# Disable errexit/pipefail for the poll: an early iteration legitimately finds
-# ZERO hits (grep exits 1), and under `set -e`/`pipefail` that first empty grep
-# killed the whole harness before the View had mounted — the real cause of the
-# persistent false 0 (the dump held 58-67 hits, but the script had already
-# exited on the first, still-empty poll). A single all-in-one awk does the
-# fixed-string match + id extraction so there is no grep-in-pipe to trip on.
 set +e +o pipefail
 for _try in $(seq 1 $(( SETTLE + 20 ))); do
-  # Pipe adb logcat straight into awk (the form proven to recover 58-67 ids in
-  # this same shell). The prior `> "$RAW"` redirect produced an empty file under
-  # this script's execution context while an identical interactive command did
-  # not — cause never isolated, so avoid the intermediate file entirely.
-  cat "$STREAM_LOG" 2>/dev/null | awk '
-    /IDRIS_PATHHIT:/ && !/IDRIS_PATHHIT_HOOK_INSTALLED/ {
-      i = index($0, "IDRIS_PATHHIT:")
-      rest = substr($0, i + length("IDRIS_PATHHIT:"))
-      # The whole rest of the line is the id: compiled path ids contain spaces ("Mod.case block in f#p3",
-      # "Mod.Eq implementation at Mod:1:1--2:9#p0"). Cutting at the first space (as this did until 2026-11-07)
-      # dropped every such hit: on pkgs/LuciApp 0 of 1197 counted hits had a space while 2411 of 2821 missing ids
-      # did, so the device number could never pass 40%. Only trailing whitespace / CR is removed.
-      sub(/[ \t\r]+$/, "", rest)
-      if (rest != "") print rest
-    }' | sort -u > "$HITS"
+  cat "$STREAM_LOG" 2>/dev/null | extract_ids > "$STREAM_IDS"
+  "${ADB[@]}" logcat -d -b main 2>/dev/null | extract_ids > "$DUMP_IDS"
+  LC_ALL=C sort -u "$STREAM_IDS" "$DUMP_IDS" > "$HITS"
   # Keep polling a few more rounds after the first hits appear: recordPathHit
   # lines land incrementally as the View renders, so an early break undercounts
   # the numerator. Stop once the count stops growing (2 stable rounds) or the
@@ -145,6 +201,11 @@ for _try in $(seq 1 $(( SETTLE + 20 ))); do
   _prev_n="$_n"
   sleep 1
 done
+_s="$(wc -l < "$STREAM_IDS" | tr -d ' ')"
+_d="$(wc -l < "$DUMP_IDS" | tr -d ' ')"
+_so="$(LC_ALL=C comm -23 "$STREAM_IDS" "$DUMP_IDS" | wc -l | tr -d ' ')"
+_do="$(LC_ALL=C comm -13 "$STREAM_IDS" "$DUMP_IDS" | wc -l | tr -d ' ')"
+echo "numerator: union ${_n} ids (stream ${_s}, dump ${_d}; only in stream ${_so}, only in dump ${_do})" >&2
 set -e -o pipefail
 
 # The Idris2 side computes coverage (exclusions, intersection, report) and sets exit.

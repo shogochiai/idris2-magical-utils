@@ -1,9 +1,10 @@
 package idris2-android-coverage-tests
 version = 0.1.0
 sourcedir = "src"
-depends = base, contrib, idris2-react-native-lib
+depends = base, contrib, idris2-react-native-lib, idris2-coverage-core
 
 modules = Android.Coverage.DeviceProbe
+        , Android.Coverage.PathCoverage
         , Android.Coverage.Tests.AllTests
 main = Android.Coverage.Tests.AllTests
 executable = android-coverage-tests

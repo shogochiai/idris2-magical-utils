@@ -4,7 +4,7 @@
 ||| path_ids, one id per line), then calls this. All coverage math is in Idris2
 ||| (Android.Coverage.PathCoverage), keeping lazy/etherclaw portable — no python/jq.
 |||
-|||   device-pathcov <denom-ids-file> <hit-ids-file> [module-prefix]
+|||   device-pathcov <denom-ids-file> <hit-ids-file> [module-prefix] [exclusions-file]
 |||
 ||| denom-ids-file : one dumppaths path_id per line (denominator, pre-exclusion).
 ||| hit-ids-file   : one on-device hit path_id per line (numerator).
@@ -13,6 +13,7 @@
 module Android.Coverage.PathCovMain
 
 import Android.Coverage.PathCoverage
+import Coverage.Core.Exclusions
 import Data.String
 import System
 import System.File
@@ -28,26 +29,19 @@ readIds path = do
     | Left _ => pure []
   pure (nonEmptyLines content)
 
-||| Read a project exclusion file. Format mirrors the dfx side's
-||| coverage-exclusions.txt: one entry per line, `# ...` and blank lines ignored,
-||| an optional `# reason` tail stripped. Kept deliberately simple — a plain
-||| function-name fragment, because the thing being excluded here is "this
-||| function cannot run on a device without mutating a live canister", which is
-||| a property of the function, not of a path id.
+||| Read a project exclusion file (Android.Coverage.PathCoverage.projectPatterns:
+||| the dfx line format, a bare line being a function-name prefix).
 |||
-||| A missing or unreadable file yields [] rather than an error: a target with no
-||| exclusions must measure exactly as it did before this existed.
-readExclusionFragments : String -> IO (List String)
-readExclusionFragments path = do
+||| An EMPTY path means "no file": a target with no exclusions measures exactly
+||| as it did before this existed. A NAMED file that cannot be read is an error,
+||| not []: silently measuring without the file is how android went unexcluded
+||| for months (alice #4467 — lazy never passed it, and nothing said so).
+readProjectPatterns : String -> IO (Either String (List ExclPattern))
+readProjectPatterns "" = pure (Right [])
+readProjectPatterns path = do
   Right content <- readFile path
-    | Left _ => pure []
-  pure $ mapMaybe fragmentOf (lines content)
-  where
-    fragmentOf : String -> Maybe String
-    fragmentOf raw =
-      let noComment = pack (fst (break (== '#') (unpack raw)))
-          frag      = trim noComment
-      in if frag == "" then Nothing else Just frag
+    | Left err => pure (Left ("cannot read exclusions file " ++ path ++ ": " ++ show err))
+  pure (Right (projectPatterns content))
 
 main : IO ()
 main = do
@@ -60,11 +54,15 @@ main = do
       -- Project-supplied exclusions, if the caller named a file. Same role as
       -- GlobalRegistry/coverage-exclusions.txt on the dfx side; absent file →
       -- empty list → byte-identical to the previous behaviour.
-      extra <- case rest of
-                 (_ :: exclF :: _) => readExclusionFragments exclF
-                 _                 => pure []
+      let exclF = case rest of
+                    (_ :: f :: _) => f
+                    _             => ""
+      Right extra <- readProjectPatterns exclF
+        | Left err => do putStrLn ("device-pathcov: " ++ err); exitFailure
       let cov = pathCoverageWith extra denom hits modPrefix
       putStr (report cov)
+      unless (exclF == "") $
+        putStrLn ("exclusions_file: " ++ exclF ++ " (" ++ show (length extra) ++ " pattern(s))")
       -- Exit on ADMISSIBILITY, not on completeness. This producer emits raw
       -- evidence; whether the coverage clears a bar is the consumer's call
       -- against its family threshold (Android = 95.0). Exiting nonzero for

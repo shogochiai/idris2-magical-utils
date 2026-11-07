@@ -28,3 +28,23 @@ invariant = "A hollow View (one text node, no testIDs) yields viewTestIDs == [] 
 id = "${prefix}_005"
 title = "Coverage report mirrors parity-ti shape"
 invariant = "deviceCoverage yields totalElements/coveredElements/missing so the android step4/parity layer can consume device coverage uniformly with path coverage."
+
+[[spec]]
+id = "${prefix}_006"
+title = "Project exclusions use the dfx line format; a bare line is a function-name prefix"
+invariant = "projectPatternOf reads `<exact|prefix|suffix|contains>:<fn> # reason` with the Coverage.Core.Exclusions matcher dfx uses, and a bare `<fn fragment> # reason` line as a PREFIX of the function name; blank and comment-only lines yield no pattern; a bare compiled name holding ':' stays one prefix."
+
+[[spec]]
+id = "${prefix}_007"
+title = "Project-excluded paths are counted in paths_excluded and reported separately"
+invariant = "pathCoverageWith removes ids whose function a project pattern matches from the denominator, adds them to paths_excluded (conservation: paths_total = denominator + excluded + unknown) and reports them as paths_excluded_project; with no patterns the result equals pathCoverage."
+
+[[spec]]
+id = "${prefix}_008"
+title = "The device numerator is the union of the logcat stream and a final ring dump"
+invariant = "run-device-pathcov.sh counts every IDRIS_PATHHIT id that either its streaming logcat reader or a `logcat -d -b main` dump of the (enlarged, then restored) ring holds, polling the union until stable, and prints how many ids only one reader saw; its single EXIT trap stops the stream reader and removes its files."
+
+[[spec]]
+id = "${prefix}_009"
+title = "The harness hands --exclusions to device-pathcov and refuses a missing file"
+invariant = "run-device-pathcov.sh --exclusions FILE passes FILE as device-pathcov's 4th argument (the report then carries exclusions_file and paths_excluded_project); a named FILE that does not exist exits 2 before any device I/O; device-pathcov given an unreadable named file exits nonzero instead of measuring without it."

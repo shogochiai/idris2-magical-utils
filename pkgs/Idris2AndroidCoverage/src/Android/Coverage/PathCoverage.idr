@@ -17,6 +17,7 @@ module Android.Coverage.PathCoverage
 import Data.List
 import Data.List1
 import Data.String
+import Coverage.Core.Exclusions
 
 %default total
 
@@ -78,48 +79,91 @@ record PathCov where
   constructor MkPathCov
   denomTotal : Nat        -- denominator: app path obligations after exclusions
   covered : Nat        -- of those, hit on-device
-  excludedCount : Nat  -- module-scoped ids dropped by isExcluded (kept for conservation)
+  excludedCount : Nat  -- module-scoped ids dropped by isExcluded OR a project pattern (kept for conservation)
+  projectExcludedCount : Nat  -- of excludedCount, the ids only a project pattern (coverage-exclusions.txt) dropped
   missing : List String
 
-||| Compute device path coverage from the raw id lists the harness collected.
-||| `denomIds` = every dumppaths path_id; `hitIds` = every on-device hit path_id;
-||| `modPrefix` = the app's module prefix ("" = all). Exclusions are applied to the
-||| denominator, then it is intersected with the (deduped) hit set. The excluded
-||| count is carried in the report so the consumer can check conservation
-||| (paths_total = denominator + excluded + unknown).
-||| Project-supplied exclusions, on top of the built-in `isExcludedFn` policy.
-||| Each entry is a plain function-name fragment; a path is dropped when its
-||| function name CONTAINS one.
+||| Project-supplied exclusions (a package's coverage-exclusions.txt), on top of
+||| the built-in `isExcludedFn` policy.
 |||
 ||| Why this exists (measured on carl 2026-08-05): the built-in policy drops only
 ||| libraries, tests, record accessors and structural `==` — 13.2% of
 ||| pkgs/Idris2LuciAndroid. dfx drops 47.4% because GlobalRegistry ships a
 ||| `coverage-exclusions.txt`, and android had neither such a file nor any code
-||| that reads one. That is not a regression; android was never wired to the
-||| mechanism the other families use.
+||| that reads one. Leaving IO-only modules (Canister: 106 of 109 functions `IO`)
+||| in the denominator inflates it with obligations no device run may discharge.
 |||
-||| It matters because the denominator is what the family threshold is scored
-||| against. 506 of the 1357 unhit paths are in Parse/Model/MemGraph/Canister,
-||| reachable only by MUTATING a live canister (`Canister.idr`: 106 of its 109
-||| functions are `IO`). Leaving those in the denominator inflates it with
-||| obligations no device run may discharge.
+||| REQ_ANDCOV_006 — ONE line format and ONE matcher with the dfx
+||| family (Coverage.Core.Exclusions, read by idris2-dfx-cov from the project's
+||| coverage-exclusions.txt):
+|||   `<exact|prefix|suffix|contains>:<functionName>  # reason`  — as dfx
+|||   `<functionName fragment>               # reason`  — a bare line is a PREFIX
+|||                                                     of the function name
+||| A `#` starts the reason; blank and comment-only lines are ignored. Until
+||| 2026-11-07 a bare line here was a substring match and a typed dfx line was
+||| read as a literal fragment ("prefix:Foo." matched nothing); no caller ever
+||| passed a file (lazy omitted --exclusions, alice #4467), so no measured
+||| number changes meaning.
 export
-isProjectExcludedFn : (extraPatterns : List String) -> String -> Bool
-isProjectExcludedFn pats fn = any (\p => isInfixOf p fn) pats
+projectPatternOf : String -> Maybe ExclPattern
+projectPatternOf raw =
+  let (body, reasonPart) = break (== '#') (unpack raw)
+      pat    = trim (pack body)
+      rsn    = trim (pack (drop 1 reasonPart))
+      reason = if rsn == "" then "coverage-exclusions.txt" else rsn
+  in if pat == "" then Nothing else Just (typed pat reason)
+  where
+    typeOf : String -> Maybe PatternType
+    typeOf "exact"    = Just Exact
+    typeOf "prefix"   = Just Prefix
+    typeOf "suffix"   = Just Suffix
+    typeOf "contains" = Just Contains
+    typeOf _          = Nothing
+    -- Only the four dfx keywords make a typed line: a compiled function name
+    -- may itself hold ':' ("LuciAndroid.Attach.4221:310:one"), and such a bare
+    -- line stays one prefix fragment.
+    typed : String -> String -> ExclPattern
+    typed pat reason =
+      let (ty, rest) = break (== ':') (unpack pat)
+          name       = trim (pack (drop 1 rest))
+      in case (typeOf (toLower (trim (pack ty))), rest) of
+           (Just t, (_ :: _)) => if name == "" then MkExclPattern pat Prefix reason
+                                               else MkExclPattern name t reason
+           (Just _, [])       => MkExclPattern pat Prefix reason
+           (Nothing, _)       => MkExclPattern pat Prefix reason
 
-||| `pathCoverage` plus project-supplied exclusion fragments. The zero-pattern
-||| call is byte-identical to the old behaviour, so a target with no
-||| coverage-exclusions.txt measures exactly as it did.
+||| The patterns of a whole coverage-exclusions.txt text.
 export
-pathCoverageWith : (extraPatterns : List String) -> (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
-pathCoverageWith extraPatterns denomIds hitIds modPrefix =
-  let scoped  = nub (filter (inModule modPrefix) denomIds)
-      denom   = filter (\pid => not (isExcluded pid)
-                             && not (isProjectExcludedFn extraPatterns (funcOf pid))) scoped
-      excl    = length scoped `minus` length denom
-      hits    = nub hitIds
-      missing = filter (\p => not (elem p hits)) denom
-  in MkPathCov (length denom) (length denom `minus` length missing) excl missing
+projectPatterns : (fileText : String) -> List ExclPattern
+projectPatterns txt = mapMaybe projectPatternOf (lines txt)
+
+||| Does a project pattern drop this function name? The dfx matcher, unchanged.
+export
+isProjectExcludedFn : List ExclPattern -> String -> Bool
+isProjectExcludedFn pats fn = any (\p => matchesPattern p fn) pats
+
+||| Compute device path coverage from the raw id lists the harness collected.
+||| `denomIds` = every dumppaths path_id; `hitIds` = every on-device hit path_id;
+||| `modPrefix` = the app's module prefix ("" = all). Exclusions (built-in, then
+||| the project's patterns) are applied to the denominator, then it is
+||| intersected with the (deduped) hit set. The excluded count is carried in the
+||| report so the consumer can check conservation
+||| (paths_total = denominator + excluded + unknown); `projectExcludedCount` is
+||| the part of it only the project file removed.
+||| The zero-pattern call gives the old counts and missing list exactly, so a
+||| target with no coverage-exclusions.txt measures as it did (its report only
+||| gains `paths_excluded_project: 0`).
+export
+pathCoverageWith : (projectPats : List ExclPattern) -> (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
+pathCoverageWith pats denomIds hitIds modPrefix =
+  let scoped   = nub (filter (inModule modPrefix) denomIds)
+      builtin  = filter (\pid => not (isExcluded pid)) scoped
+      denom    = filter (\pid => not (isProjectExcludedFn pats (funcOf pid))) builtin
+      excl     = length scoped `minus` length denom
+      projExcl = length builtin `minus` length denom
+      hits     = nub hitIds
+      missing  = filter (\p => not (elem p hits)) denom
+  in MkPathCov (length denom) (length denom `minus` length missing) excl projExcl missing
 
 export
 pathCoverage : (denomIds : List String) -> (hitIds : List String) -> (modPrefix : String) -> PathCov
@@ -175,6 +219,8 @@ report c =
     , "paths_denominator: " ++ show c.denomTotal
     , "paths_hit: " ++ show c.covered
     , "paths_excluded: " ++ show c.excludedCount
+      -- the part of paths_excluded that only the project's coverage-exclusions.txt removed
+    , "paths_excluded_project: " ++ show c.projectExcludedCount
     , "paths_unknown: 0"
     , "Missing paths: " ++ show (length c.missing)
     , "evidence_kind: device_dumppaths_path_coverage"
