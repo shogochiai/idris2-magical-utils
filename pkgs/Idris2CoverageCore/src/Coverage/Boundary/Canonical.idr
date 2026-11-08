@@ -40,7 +40,11 @@ boundarySpecsFor CoreLib =
   -- localhost socket and a buffer are executable by the Chez harness too: they stay in the denominator and need a test that hits them.
   -- Third (2026-10-28, main 96a47448): `C:setsockopt,libc 6` of LuciBFF.Main.setReuseAddr was the one Unknown left (claim_admissible
   -- False); the same localhost socket, the same rule.
-  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer", "setsockopt"] False
+  -- Fourth (2026-11-08, Henry #4518): LuciBFF.Host.Part1's Chez timing prims (get-thread-id, current-time 'time-thread,
+  -- sstats-gc-real, collections, bytes-allocated; added 11/7-11/8 for the call-start timing) read the process's own clock and
+  -- counters. The Chez harness executes them on every run, so they open no hole: PureComputation, in the denominator.
+  , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer", "setsockopt"
+                                                  , "get-thread-id", "time-thread", "sstats-gc-real", "(collections)", "bytes-allocated"] False
   ]
 boundarySpecsFor DfxWasm =
   -- WASM canister probe: process/network none; a canister call needs a replica.
