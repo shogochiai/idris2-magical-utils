@@ -1627,8 +1627,26 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
 ||| large packages (e.g. EtherClaw at ~140 modules); attempting it first just
 ||| wastes minutes and risks the kill before the (light, sequential) chunked path
 ||| ever runs. Below this, the whole attempt is cheap and yields a single clean JSON.
+||| 40 -> 100 (Frank, 2026-11-09): chunked obligations leave every path whose class
+||| needs the whole package UnknownClassification (pkgs/LuciBFF at 70 modules: 1791
+||| Unknown, step4 inadmissible), while its whole-package dumppaths took 2.3 GB peak
+||| and 8.5 min on a 4-core 11 GB box with 0 Unknown. A failed whole attempt still
+||| falls back to chunks. IDRIS2COV_STATIC_WHOLE_MAX_MODULES overrides it.
 staticWholeModuleCeiling : Nat
-staticWholeModuleCeiling = 40
+staticWholeModuleCeiling = 100
+
+||| The instrumented whole-suite run (compile + test in one go) keeps the old 40: it
+||| is heavier than the static dumppaths build, and its chunked path still takes the
+||| denominator from runStaticDumppathsJson (whole up to staticWholeModuleCeiling).
+runtimeWholeModuleCeiling : Nat
+runtimeWholeModuleCeiling = 40
+
+staticWholeModuleCeilingIO : IO Nat
+staticWholeModuleCeilingIO = do
+  raw <- getEnv "IDRIS2COV_STATIC_WHOLE_MAX_MODULES"
+  pure $ case raw >>= (parsePositive {a = Nat}) . trim of
+           Just n => n
+           Nothing => staticWholeModuleCeiling
 
 export
 runStaticDumppathsJson : String -> IO (Either String String)
@@ -1650,10 +1668,11 @@ runStaticDumppathsJson ipkgPath = do
     Right c <- readFile ipkgPath
       | Left _ => pure 0
     pure (length (parseIpkgModules c))
-  if modCount > staticWholeModuleCeiling
+  ceiling <- staticWholeModuleCeilingIO
+  if modCount > ceiling
     then do
       putStrLn $ "    Large package (" ++ show modCount
-              ++ " modules > " ++ show staticWholeModuleCeiling
+              ++ " modules > " ++ show ceiling
               ++ "); skipping whole-package dumppaths and chunking directly..."
       runStaticDumppathsJsonChunks ipkgPath
         ("Whole-package dumppaths skipped for large package (" ++ show modCount ++ " modules).")
@@ -2837,7 +2856,7 @@ runTestsWithPathCoverageArtifacts projectDir projectModules testModules timeout 
       -- OOM-kills the COMPILER (exit 137) before any test runs. The whole-suite
       -- path is only safe for genuinely small packages on both axes.
       if length testModules > runtimeChunkTestModuleCeiling
-           || length projectModules > staticWholeModuleCeiling
+           || length projectModules > runtimeWholeModuleCeiling
         then runChunkedPathCoverage projectDir projectModules testModules
         else runWholePathCoverage projectDir projectModules testModules timeout
   where

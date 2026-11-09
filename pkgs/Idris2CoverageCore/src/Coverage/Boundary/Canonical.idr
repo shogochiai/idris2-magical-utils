@@ -43,8 +43,12 @@ boundarySpecsFor CoreLib =
   -- Fourth (2026-11-08, Henry #4518): LuciBFF.Host.Part1's Chez timing prims (get-thread-id, current-time 'time-thread,
   -- sstats-gc-real, collections, bytes-allocated; added 11/7-11/8 for the call-start timing) read the process's own clock and
   -- counters. The Chez harness executes them on every run, so they open no hole: PureComputation, in the denominator.
+  -- Fifth (2026-11-09, Frank): LuciBFF.JsonFast's bounds-checked `string-ref` lambda (748 functions reach it: every JSON
+  -- read), collect-trip-bytes (the GC trip), and the socket `poll` the net tests run: executed by the harness, PureComputation.
+  -- Without them pkgs/LuciBFF step4 held 1088 Unknown paths and its claim was inadmissible.
   , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer", "setsockopt"
-                                                  , "get-thread-id", "time-thread", "sstats-gc-real", "(collections)", "bytes-allocated"] False
+                                                  , "get-thread-id", "time-thread", "sstats-gc-real", "(collections)", "bytes-allocated"
+                                                  , "string-ref", "collect-trip-bytes", "collect_safe:poll"] False
   ]
 boundarySpecsFor DfxWasm =
   -- WASM canister probe: process/network none; a canister call needs a replica.
