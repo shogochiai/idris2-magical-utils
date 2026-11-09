@@ -503,6 +503,32 @@ test_PATH_BOUNDARY_004 () =
                          any (\p => p.pathId == "App.mystery#p0" && p.classification == UnknownClassification) paths
   in reachable && stillUnknown
 
+||| Fourth row of the CoreLib table (2026-11-09, LuciBFF's 1900 Unknown paths): a `scheme:(lambda ...)` cc is the Chez backend's
+||| own code (keyed on the `scheme:` prefix like EvmHash's `evm:`), and the collect-safe poll / malloc / memcpy / free / strdup
+||| libc calls run in-process on every run — all ReachableObligation under the CoreLib specs, back in the denominator. The
+||| PATH_BOUNDARY_002 control (`some_new_prim`) must STAY Unknown under the same specs: the soundness gate for genuinely new
+||| holes is untouched.
+inProcessBoundaryJson : String
+inProcessBoundaryJson =
+  "{\"compiler_version\":\"0.8.0\",\"export_kind\":\"canonical_intrafunction_paths\",\"path_schema_version\":1,\"functions\":[{\"function_name\":\"W.clk\",\"effect_boundary\":\"UnclassifiedForeign(scheme:(lambda () (get-thread-id)))\",\"paths\":[{\"path_id\":\"W.clk#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.io\",\"effect_boundary\":\"UnclassifiedForeign(C__collect_safe:poll,libc 6)\",\"paths\":[{\"path_id\":\"W.io#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.mem\",\"effect_boundary\":\"UnclassifiedForeign(C:malloc,libc 6)\",\"paths\":[{\"path_id\":\"W.mem#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.cpy\",\"effect_boundary\":\"UnclassifiedForeign(C:memcpy,libc 6)\",\"paths\":[{\"path_id\":\"W.cpy#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.rel\",\"effect_boundary\":\"UnclassifiedForeign(C:free,libc 6)\",\"paths\":[{\"path_id\":\"W.rel#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]},{\"function_name\":\"W.dup\",\"effect_boundary\":\"UnclassifiedForeign(C:strdup,libc 6)\",\"paths\":[{\"path_id\":\"W.dup#p0\",\"classification\":\"ReachableObligation\",\"terminal_kind\":\"reached_clause\",\"steps\":[]}]}]}"
+
+test_PATH_BOUNDARY_005 : () -> Bool
+test_PATH_BOUNDARY_005 () =
+  let reachable = case parseDumppathsJsonWithSpecs (boundarySpecsFor CoreLib) inProcessBoundaryJson of
+                    Left _ => False
+                    Right paths =>
+                      any (\p => p.pathId == "W.clk#p0" && p.classification == ReachableObligation) paths
+                      && any (\p => p.pathId == "W.io#p0" && p.classification == ReachableObligation) paths
+                      && any (\p => p.pathId == "W.mem#p0" && p.classification == ReachableObligation) paths
+                      && any (\p => p.pathId == "W.cpy#p0" && p.classification == ReachableObligation) paths
+                      && any (\p => p.pathId == "W.rel#p0" && p.classification == ReachableObligation) paths
+                      && any (\p => p.pathId == "W.dup#p0" && p.classification == ReachableObligation) paths
+      stillUnknown = case parseDumppathsJsonWithSpecs (boundarySpecsFor CoreLib) unclassifiedBoundaryJson of
+                       Left _ => False
+                       Right paths =>
+                         any (\p => p.pathId == "App.mystery#p0" && p.classification == UnknownClassification) paths
+  in reachable && stillUnknown
+
 test_PATH_002 : () -> Bool
 test_PATH_002 () =
   case parseDumppathsJson sampleDumppathsJson of
@@ -693,6 +719,7 @@ allTests =
   , test "PATH_BOUNDARY_002" "unrecognised UnclassifiedForeign boundary stays UnknownClassification (soundness)" test_PATH_BOUNDARY_002
   , test "PATH_BOUNDARY_003" "evm: opcode hole is Reachable under EvmHash specs, Unknown without a family" test_PATH_BOUNDARY_003
   , test "PATH_BOUNDARY_004" "mutex/thread/sleep prims are Reachable under CoreLib specs; an unnamed cc stays Unknown" test_PATH_BOUNDARY_004
+  , test "PATH_BOUNDARY_005" "scheme: lambdas and in-process libc (poll/malloc/memcpy/free/strdup) are Reachable under CoreLib specs" test_PATH_BOUNDARY_005
   , test "BOUNDARY_PERFAMILY_001" "canonical boundary policy differs per family (core vs evm vs web)" test_BOUNDARY_PERFAMILY_001
   , test "PATH_002" "path coverage tracks missing path ids" test_PATH_002
   , test "PATH_003" "unknown path blocks admissible claim" test_PATH_003

@@ -45,6 +45,15 @@ boundarySpecsFor CoreLib =
   -- counters. The Chez harness executes them on every run, so they open no hole: PureComputation, in the denominator.
   , MkEffectBoundarySpec "core" PureComputation ["blodwen-make-mutex", "blodwen-mutex", "blodwen-thread", "collect_safe:sleep", "idrnet_errno", "blodwen-new-buffer", "blodwen-buffer", "setsockopt"
                                                   , "get-thread-id", "time-thread", "sstats-gc-real", "(collections)", "bytes-allocated"] False
+  -- Fifth (2026-11-09, LuciBFF step4 at luci worktree SUBAGENT-1794173654, measured independently of the fourth row's box): 1900
+  -- paths UnknownClassification, claim_admissible False across every per-SpecId run. The taint roots are ccs LuciBFF gained
+  -- 2026-10-29..11-08, all executed in-process by the Chez harness on every run, the same rule as the rows above:
+  --   * `scheme:(lambda ...)` (Host.Part1 stageClock/threadIdNow/threadCpuMs 22c95f17, collect-trip-bytes, JsonFast string-ref
+  --     43322f64): a scheme: cc IS the backend's own code, never a harness hole — keyed on the `scheme:` prefix exactly as
+  --     EvmHash keys on `evm:` (this subsumes the fourth row's five per-symbol keys and covers the next scheme lambda too).
+  --   * `C__collect_safe:poll,libc 6` (Net.waitReadable 16753d10): the collect-safe poll on a localhost socket, same as sleep.
+  --   * `C:malloc/memcpy/free,libc 6` (Net 383bcc42: the pollfd in malloc'd memory) and `C:strdup,libc 6` (Proc): in-process libc.
+  , MkEffectBoundarySpec "core" PureComputation ["scheme:", "collect_safe:poll", "C:malloc", "C:memcpy", "C:free", "C:strdup"] False
   ]
 boundarySpecsFor DfxWasm =
   -- WASM canister probe: process/network none; a canister call needs a replica.
