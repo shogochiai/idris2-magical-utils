@@ -15,6 +15,7 @@ import Coverage.TestHint
 import Coverage.Aggregator
 import Coverage.TestRunner
 import Coverage.UnifiedRunner
+import Coverage.StaticParts
 import Coverage.TestCoverage
 import Coverage.Config
 import Coverage.DumpcasesParser
@@ -22,6 +23,7 @@ import Coverage.PathCoverage
 import Coverage.Exclusions
 import Coverage.Standardization.Types
 import Coverage.Standardization.Model
+import Data.Either
 import Data.List
 import Data.String
 import Data.Maybe
@@ -1088,6 +1090,72 @@ test_REQ_COV_STATIC_UNIVERSE_001 =
     , staticChunkPrebuilt False == False
     ]
 
+partsEntry : (name : String) -> (labels : List String) -> String
+partsEntry name labels =
+  "{ \"function_name\": \"" ++ name ++ "\", \"effect_boundary\": \"PureComputation\", \"paths\": [ "
+  ++ joinBy ", " (map onePath (zip [0 .. length labels] labels)) ++ " ] }"
+  where
+    onePath : (Nat, String) -> String
+    onePath (i, label) =
+      "{ \"path_id\": \"" ++ name ++ "#p" ++ show i ++ "\", \"classification\": \"ReachableObligation\", "
+      ++ "\"terminal_kind\": \"reached_clause\", \"path_length\": 1, \"steps\": [ { \"node_id\": \""
+      ++ name ++ "#0:" ++ show i ++ "\", \"case_index\": 0, \"branch_index\": " ++ show i
+      ++ ", \"branch_label\": \"" ++ label ++ "\", \"origin\": \"user_clause\" } ], \"terminal_clause_id\": " ++ show i ++ " }"
+
+||| REQ_COV_STATIC_PARTS_001: the parts are folded by the compiler's rule. The first
+||| entry of a function name is the one kept; an identical copy and a DIFFERENT
+||| function under the same name are both dropped, and the second kind is counted
+||| on its own; the order of the kept entries is the order they were written in; a
+||| blank line is not an entry; an entry that cannot be parsed fails the fold.
+covering
+test_REQ_COV_STATIC_PARTS_001_fold : IO Bool
+test_REQ_COV_STATIC_PARTS_001_fold = pure $
+  let a  = partsEntry "M.f" ["A", "B"]
+      b  = partsEntry "M.==" ["X"]
+      b' = partsEntry "M.==" ["P", "Q", "R"]
+      c  = partsEntry "M.case block in g" ["Just", "Nothing"]
+  in case foldParts [] [a, b, "", a, b', c, ""] of
+       Left _ => False
+       Right st =>
+         map (.pathId) (partsObligations st)
+           == ["M.f#p0", "M.f#p1", "M.==#p0", "M.case block in g#p0", "M.case block in g#p1"]
+         && st.entries == 5 && st.repeated == 2 && st.repeatedDifferent == 1 && partsKept st == 3
+         && partEntryName a == Just "M.f"
+         && partEntryName c == Just "M.case block in g"
+         && partEntryName "{ \"paths\": [  ] }" == Nothing
+         && isLeft (foldParts [] [a, "{ \"function_name\": \"M.h\", \"paths\": [ { \"path_id\": "])
+         && (case foldParts [] [b', b] of
+               Right st2 => length (partsObligations st2) == 3
+               Left _ => False)
+
+||| REQ_COV_STATIC_PARTS_001: the compiler is given a library — no `main`, no
+||| `executable` — with every module, the package's own dependencies and its own
+||| build dir; and the parts count as a universe only if the build ended with rc 0
+||| and compiled every module in this process.
+test_REQ_COV_STATIC_PARTS_001_build : IO Bool
+test_REQ_COV_STATIC_PARTS_001_build = pure $
+  let ipkg = staticPartsIpkg "temp-x" ".tmp-build" "src" ["base", "toml >= 0.1"] ["A.B", "A.Main"]
+      ls   = lines ipkg
+      log  = "1/3: Building A.B (src/A/B.idr)\n2/3: Building A.C (src/A/C.idr)\nWarning: x\n3/3: Building A.Main (src/A/Main.idr)\n"
+  in all id
+       [ elem "builddir = \".tmp-build\"" ls
+       , elem "sourcedir = \"src\"" ls
+       , elem "depends = base, toml >= 0.1" ls
+       , elem "modules = A.B, A.Main" ls
+       , not (any (isPrefixOf "main") ls)
+       , not (any (isPrefixOf "executable") ls)
+       , elem "depends = base" (lines (staticPartsIpkg "t" "b" "src" [] ["A"]))
+       , modulesBuilt log == 3
+       , partsBuildComplete 0 3 3 == Right ()
+       , isLeft (partsBuildComplete 0 3 2)
+       , isLeft (partsBuildComplete 137 3 3)
+       , isLeft (partsBuildComplete 1 3 0)
+       , staticLargeUsesChunks Nothing == False
+       , staticLargeUsesChunks (Just " Chunks ") == True
+       , staticLargeUsesChunks (Just "parts") == False
+       , staticLargeUsesChunks (Just "") == False
+       ]
+
 ||| REQ_COV_PROBE_CLOSURE_001: the probe pack.toml declares idris2-coverage's whole
 ||| dependency closure (core, standardization, delivery-kind), local and HTTPS
 ||| alike, never SSH, and does not duplicate a block the project already declares.
@@ -1308,6 +1376,8 @@ allTests =
   , ("REQ_COV_FORK_DEPS_SIBLING_001", test_REQ_COV_FORK_DEPS_SIBLING_001_sibling_discovery)
   , ("REQ_COV_PROBE_CLOSURE_001", test_REQ_COV_PROBE_CLOSURE_001)
   , ("REQ_COV_STATIC_UNIVERSE_001", test_REQ_COV_STATIC_UNIVERSE_001)
+  , ("REQ_COV_STATIC_PARTS_001", test_REQ_COV_STATIC_PARTS_001_fold)
+  , ("REQ_COV_STATIC_PARTS_001", test_REQ_COV_STATIC_PARTS_001_build)
   , ("REQ_COV_LIN_002", test_LIN_002)
   , ("REQ_COV_LIN_003", test_LIN_003)
   , ("REQ_COV_LIN_004", test_LIN_004)

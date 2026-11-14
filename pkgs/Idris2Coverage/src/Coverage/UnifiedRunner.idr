@@ -13,6 +13,7 @@ import Coverage.Core.DumppathsJson
 import Coverage.Exclusions
 import Coverage.PathCoverage
 import Coverage.Standardization.Types
+import Coverage.StaticParts
 import System
 import System.Clock
 import System.File
@@ -1231,10 +1232,10 @@ pathObligationFunctionToJson path =
     ++ "\"paths\":[" ++ pathToJson path ++ "]"
     ++ "}"
 
-pathObligationsToDumppathsJson : List PathObligation -> String
-pathObligationsToDumppathsJson paths =
+pathObligationsToDumppathsJson : (producer : String) -> List PathObligation -> String
+pathObligationsToDumppathsJson producer paths =
   "{"
-    ++ "\"compiler_version\":\"chunked-static-fallback\","
+    ++ "\"compiler_version\":\"" ++ producer ++ "\","
     ++ "\"export_kind\":\"canonical_intrafunction_paths\","
     ++ "\"path_schema_version\":1,"
     ++ "\"functions\":["
@@ -1577,7 +1578,7 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
                 -- the count is attributable rather than a second opaque number.
                 traverse_ putStrLn $ renderExclusionBreakdown
                                    $ exclusionBreakdown excl emptyExclusionConfig deduped
-                pure $ Right $ pathObligationsToDumppathsJson filtered
+                pure $ Right $ pathObligationsToDumppathsJson "chunked-static-fallback" filtered
   where
     runChunks : String -> String -> String -> List String -> String -> List (List String) -> Nat -> List PathObligation -> IO (Either String (List PathObligation))
     runChunks _ _ _ _ _ [] _ acc = pure $ Right acc
@@ -1616,6 +1617,120 @@ runStaticDumppathsJsonChunks ipkgPath wholeErr = do
       case result of
         Left err => pure $ Left err
         Right paths => runChunks projectDir sourcedir tempBuildDir deps packTomlContent rest (idx + 1) (paths ++ acc)
+
+||| REQ_COV_STATIC_PARTS_001: read the compiler's parts file one entry at a time.
+readPartsFile : (partsPath : String) -> IO (Either String PartsFold)
+readPartsFile partsPath = do
+  Right h <- openFile partsPath Read
+    | Left err => pure $ Left $ "no parts file " ++ partsPath ++ ": " ++ show err
+  result <- loop h emptyPartsFold
+  closeFile h
+  pure result
+  where
+    loop : File -> PartsFold -> IO (Either String PartsFold)
+    loop h st = do
+      eof <- fEOF h
+      if eof
+         then pure (Right st)
+         else do
+           Right line <- fGetLine h
+             | Left err => pure $ Left $ "reading " ++ partsPath ++ ": " ++ show err
+           case stepPart (boundarySpecsFor CoreLib) st line of
+             Left err => pure $ Left err
+             Right st' => loop h st'
+
+||| REQ_COV_STATIC_PARTS_001: the static path universe of a large package from ONE
+||| build of the package, without the compiler's executable stage (see
+||| Coverage.StaticParts for the measurement behind it). The package is built as a
+||| library in a build dir of this run; the compiler leaves one function entry per
+||| line in `<json>.parts`; the entries are deduplicated by function name (first
+||| wins, the compiler's own rule) and go through the same exclusions as the chunked
+||| path. Nothing here falls back to another method: a different method lists a
+||| different universe, and a figure must not change its meaning because a build
+||| failed.
+runStaticDumppathsJsonParts : String -> IO (Either String String)
+runStaticDumppathsJsonParts ipkgPath = do
+  let (projectDir, _) = splitPath ipkgPath
+  Right ipkgContent <- readFile ipkgPath
+    | Left err => pure $ Left $ "Static parts: could not read ipkg: " ++ show err
+  let projectModules = parseIpkgModules ipkgContent
+  if null projectModules
+     then pure $ Left "Static parts: no modules in ipkg."
+     else do
+       uid <- getUniqueId
+       idris2Override <- resolveIdris2Override
+       absProjectDir <- toAbsolutePath projectDir
+       let tempBuildDir = ".idris2-static-dumppaths-build-" ++ uid
+       let tempPkgName = "temp-static-dumppaths-" ++ uid
+       let tempIpkgName = tempPkgName ++ ".ipkg"
+       let tempIpkgPath = projectDir ++ "/" ++ tempIpkgName
+       let dumppathsPath = "/tmp/idris2_static_dumppaths_" ++ uid ++ ".json"
+       let partsPath = dumppathsPath ++ ".parts"
+       let logPath = "/tmp/idris2_static_dumppaths_" ++ uid ++ ".log"
+       let cleanup : IO ()
+           cleanup = do
+             removeFileIfExists tempIpkgPath
+             removeFileIfExistsSafe partsPath
+             removeFileIfExistsSafe dumppathsPath
+             removeFileIfExistsSafe logPath
+             _ <- system $ "cd " ++ absProjectDir ++ " && rm -rf " ++ tempBuildDir
+             pure ()
+       Right () <- writeFile tempIpkgPath
+                     (staticPartsIpkg tempPkgName tempBuildDir (parseIpkgSourcedir ipkgContent)
+                                      (parseIpkgDepends ipkgContent) projectModules)
+         | Left err => pure $ Left $ "Static parts: could not write " ++ tempIpkgPath ++ ": " ++ show err
+       putStrLn $ "    Static path obligations from one library build (" ++ show (length projectModules)
+               ++ " modules, own build dir, no executable stage)..."
+       let cmd = buildPrelude idris2Override
+              ++ " && cd " ++ absProjectDir
+              ++ " && rm -rf " ++ tempBuildDir
+              ++ " && \"$APP\" --dumppaths-json " ++ dumppathsPath
+              ++ " --build " ++ tempIpkgName
+              ++ " > " ++ logPath ++ " 2>&1"
+       rc <- system cmd
+       logResult <- readFile logPath
+       let buildLog = either (const "") id logResult
+       let logTail = unlines (reverse (take 12 (reverse (lines buildLog))))
+       case partsBuildComplete rc (length projectModules) (modulesBuilt buildLog) of
+         Left err => do
+           cleanup
+           pure $ Left $ "Static parts: " ++ err
+                      ++ (if null (trim logTail) then "" else "\nBuild log tail:\n" ++ logTail)
+         Right () => do
+           folded <- readPartsFile partsPath
+           cleanup
+           case folded of
+             Left err => pure $ Left $ "Static parts: " ++ err
+             Right st =>
+               let excl     = MkLoadedExclusions idris2FullExclusions "builtin"
+                   paths    = partsObligations st
+                   filtered = filterPathObligations excl emptyExclusionConfig paths
+                   dropped  = length paths `minus` length filtered in
+               if null filtered
+                  then pure $ Left "Static parts: zero path obligations."
+                  else do
+                    putStrLn ("    static parts: " ++ show st.entries ++ " function entries, "
+                              ++ show (partsKept st) ++ " kept (first entry of a name); "
+                              ++ show st.repeated ++ " repeated, of which "
+                              ++ show st.repeatedDifferent
+                              ++ " are another function under the same name (its paths are not in the universe)")
+                    putStrLn ("    dumppaths exclusions: dropped " ++ show dropped
+                              ++ " of " ++ show (length paths) ++ " obligations"
+                              ++ (if dropped == 0
+                                     then " (no pattern matched — exclusion set inert here)"
+                                     else ""))
+                    traverse_ putStrLn $ renderExclusionBreakdown
+                                       $ exclusionBreakdown excl emptyExclusionConfig paths
+                    pure $ Right $ pathObligationsToDumppathsJson "static-parts" filtered
+
+||| How a package above the whole-package ceiling gets its static universe:
+||| `parts` (default, REQ_COV_STATIC_PARTS_001) or `chunks` (the method before it).
+||| The two list different universes for the same tree (pkgs/Luci 58646b28: the
+||| chunked one has 674 path ids more), so the choice is never made silently.
+export
+staticLargeUsesChunks : (envValue : Maybe String) -> Bool
+staticLargeUsesChunks (Just v) = toLower (trim v) == "chunks"
+staticLargeUsesChunks Nothing = False
 
 ||| Build an ipkg with forked Idris2 `--dumppaths-json` and return the static
 ||| path-obligation JSON. This is a conservative fallback for projects whose
@@ -1671,11 +1786,18 @@ runStaticDumppathsJson ipkgPath = do
   ceiling <- staticWholeModuleCeilingIO
   if modCount > ceiling
     then do
-      putStrLn $ "    Large package (" ++ show modCount
-              ++ " modules > " ++ show ceiling
-              ++ "); skipping whole-package dumppaths and chunking directly..."
-      runStaticDumppathsJsonChunks ipkgPath
-        ("Whole-package dumppaths skipped for large package (" ++ show modCount ++ " modules).")
+      largeMode <- getEnv "IDRIS2COV_STATIC_LARGE_MODE"
+      if staticLargeUsesChunks largeMode
+         then do
+           putStrLn $ "    Large package (" ++ show modCount
+                   ++ " modules > " ++ show ceiling
+                   ++ "); IDRIS2COV_STATIC_LARGE_MODE=chunks: chunking directly..."
+           runStaticDumppathsJsonChunks ipkgPath
+             ("Whole-package dumppaths skipped for large package (" ++ show modCount ++ " modules).")
+         else do
+           putStrLn $ "    Large package (" ++ show modCount
+                   ++ " modules > " ++ show ceiling ++ ")."
+           runStaticDumppathsJsonParts ipkgPath
     else do
       whole <- runStaticDumppathsJsonWhole ipkgPath
       case whole of
