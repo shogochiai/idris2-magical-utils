@@ -2758,6 +2758,93 @@ runtimeBuildDirCleanup : RuntimeBuildDir -> String
 runtimeBuildDirCleanup (EphemeralRuntimeDir d) = "rm -rf " ++ d
 runtimeBuildDirCleanup (PersistentRuntimeDir _) = ":"
 
+||| REQ_COV_UNI_CHEZ_PERDEF_001. How Chez compiles the instrumented test program.
+||| The compiler writes the program as ONE `(let () <every definition> <main>)`
+||| and has Chez `compile-program` it, so Chez holds the whole program at once.
+||| Measured 2026-11-14 on luci pkgs/Luci (14.5 MB of Scheme, 13856 definitions,
+||| N5030): 215 s, 5.2 GB peak — with the compiler still resident beside it that
+||| is the ~7 GB which kills a 12 GB box. The same file without the wrapper, each
+||| top-level form its own compilation unit (`compile-file`): 26 s, 0.6 GB.
+public export
+data ChezCompileMode = ChezPerDefinition | ChezWholeProgram
+
+public export
+Eq ChezCompileMode where
+  ChezPerDefinition == ChezPerDefinition = True
+  ChezWholeProgram == ChezWholeProgram = True
+  _ == _ = False
+
+||| Per definition unless IDRIS2COV_CHEZ_WHOLE_PROGRAM is set to something other
+||| than blank or `0` (the way back, should a program ever need the old compile).
+export
+resolveChezCompileMode : (envValue : Maybe String) -> ChezCompileMode
+resolveChezCompileMode Nothing = ChezPerDefinition
+resolveChezCompileMode (Just v) =
+  if trim v == "" || trim v == "0" then ChezPerDefinition else ChezWholeProgram
+
+||| The script the compiler is given as its Chez (`CHEZ`) for the instrumented
+||| build. The compiler's ONE call that compiles the program (`--script <file>`
+||| holding `(compile-program "<x>.ss")`) is rewritten: the `(let ()` line and the
+||| closing `)` line are dropped from `<x>.ss` and the call becomes
+||| `(compile-file "<x>.ss" "<x>.so")` with its parameters untouched. A program
+||| that does not have that shape is compiled as the compiler asked. Every other
+||| call (the version probe, the launcher running the program) goes to the real
+||| Chez unchanged. Which of the two happened is written to `modeFile`.
+||| `realChez`: the CHEZ the caller had, when it had one; otherwise the script
+||| looks Chez up under the names the compiler tries, in the compiler's order.
+export
+chezPerDefinitionWrapper : (realChez : Maybe String) -> (modeFile : String) -> String
+chezPerDefinitionWrapper realChez modeFile = unlines
+  [ "#!/bin/sh"
+  , "# written by idris2-cov (REQ_COV_UNI_CHEZ_PERDEF_001): Chez compiles the test program one definition at a time"
+  , "real=" ++ q (fromMaybe "" (map trim realChez))
+  , "mode=" ++ q modeFile
+  , "if [ -z \"$real\" ]; then"
+  , "  for c in chez chezscheme chez-scheme chezscheme9.5 scheme; do"
+  , "    if command -v \"$c\" >/dev/null 2>&1; then real=$(command -v \"$c\"); break; fi"
+  , "  done"
+  , "fi"
+  , "[ -n \"$real\" ] || { echo 'idris2-cov chez wrapper: no Chez Scheme found' >&2; exit 127; }"
+  , "if [ \"$1\" = \"--script\" ] && [ -f \"$2\" ] && grep -q '(compile-program \"' \"$2\"; then"
+  , "  why=''"
+  , "  ss=$(sed -n 's/.*(compile-program \"\\(.*\\)\")).*/\\1/p' \"$2\" | head -n 1)"
+  , "  if [ -z \"$ss\" ] || [ ! -f \"$ss\" ]; then why='the program file of the compile call was not found'; fi"
+  , "  if [ -z \"$why\" ]; then"
+  , "    open=$(grep -n '^(let ()$' \"$ss\" | head -n 1 | cut -d: -f1)"
+  , "    total=$(awk 'END { print NR }' \"$ss\")"
+  , "    last=$(tail -n 1 \"$ss\" | tr -d ' \\t\\r')"
+  , "    if [ -z \"$open\" ] || [ \"$last\" != ')' ]; then why='the program is not one (let () ...) form'; fi"
+  , "  fi"
+  , "  if [ -z \"$why\" ]; then"
+  , "    awk -v a=\"$open\" -v z=\"$total\" 'NR != a && NR != z' \"$ss\" > \"$ss.perdef\" || why='the program could not be rewritten'"
+  , "  fi"
+  , "  if [ -z \"$why\" ]; then"
+  , "    sed 's/(compile-program \"\\(.*\\)\\.ss\")/(compile-file \"\\1.ss\" \"\\1.so\")/' \"$2\" > \"$2.perdef\""
+  , "    grep -q '(compile-file \"' \"$2.perdef\" || why='the compile call could not be rewritten'"
+  , "  fi"
+  , "  if [ -z \"$why\" ] && mv \"$ss.perdef\" \"$ss\"; then"
+  , "    echo 'per-definition' > \"$mode\""
+  , "    exec \"$real\" --script \"$2.perdef\""
+  , "  fi"
+  , "  rm -f \"$ss.perdef\" \"$2.perdef\""
+  , "  echo \"whole-program (${why:-the rewritten program could not be put in place})\" > \"$mode\""
+  , "fi"
+  , "exec \"$real\" \"$@\""
+  ]
+  where
+    q : String -> String
+    q s = "'" ++ concatMap (\c => if c == '\'' then "'\\''" else singleton c) (unpack s) ++ "'"
+
+||| The line the run prints after the build: how Chez compiled the program, read
+||| from what the wrapper recorded. Nothing recorded is said as such, never
+||| reported as per-definition.
+export
+chezCompileModeLine : ChezCompileMode -> (recorded : Maybe String) -> String
+chezCompileModeLine ChezWholeProgram _ = "whole-program (IDRIS2COV_CHEZ_WHOLE_PROGRAM is set)"
+chezCompileModeLine ChezPerDefinition (Just r) =
+  if trim r == "" then "not recorded (the compile call did not reach the wrapper)" else trim r
+chezCompileModeLine ChezPerDefinition Nothing = "not recorded (the compile call did not reach the wrapper)"
+
 ||| The names one runtime chunk uses. Ephemeral: unique per run, as before.
 ||| Persistent: stable per chunk index — the runner module, the executable, and
 ||| the hits file the executable writes (the fork bakes the hits path into the
@@ -2894,6 +2981,11 @@ runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chun
   stored <- readFile inputsFile
   exeThere <- exists (projectDir ++ "/" ++ tempBuildDir ++ "/exec/" ++ tempExecName)
   let reuse = reuseRuntimeExecutable rbd inputsNow (either (const Nothing) Just stored) exeThere
+  chezMode <- map resolveChezCompileMode (getEnv "IDRIS2COV_CHEZ_WHOLE_PROGRAM")
+  callerChez <- map (\m => m >>= \v => if trim v == "" then Nothing else Just v) (getEnv "CHEZ")
+  let absBuildDir = absProjectDir ++ "/" ++ tempBuildDir
+  let chezWrapperPath = absBuildDir ++ "/idris2cov-chez.sh"
+  let chezModeFile = absBuildDir ++ "/idris2cov-chez-mode.txt"
 
   -- Time the build alone: it is the part a persistent build dir can shorten (the
   -- slices that follow run every test however the exe was built).
@@ -2903,7 +2995,28 @@ runRuntimePathHitsChunk projectDir sourcedir projectDepends packTomlContent chun
                    -- a failed or interrupted build must not leave a digest that
                    -- vouches for whatever exe is left behind
                    removeFileIfExists inputsFile
-                   buildIpkgWithClean False projectDir tempIpkgName
+                   -- REQ_COV_UNI_CHEZ_PERDEF_001: the compiler is given the wrapper as its
+                   -- Chez for this build only; the caller's CHEZ is put back after it
+                   removeFileIfExists chezModeFile
+                   wrapped <- case chezMode of
+                     ChezWholeProgram => pure False
+                     ChezPerDefinition => do
+                       _ <- system ("mkdir -p '" ++ absBuildDir ++ "'")
+                       w <- writeFile chezWrapperPath (chezPerDefinitionWrapper callerChez chezModeFile)
+                       rcx <- system ("chmod +x '" ++ chezWrapperPath ++ "'")
+                       pure (either (const False) (const True) w && rcx == 0)
+                   when wrapped $ ignore (setEnv "CHEZ" chezWrapperPath True)
+                   r <- buildIpkgWithClean False projectDir tempIpkgName
+                   when wrapped $ case callerChez of
+                     Just v => ignore (setEnv "CHEZ" v True)
+                     Nothing => ignore (unsetEnv "CHEZ")
+                   recorded <- readFile chezModeFile
+                   putStrLn $ "    Runtime chunk " ++ show idx ++ " Chez compile: "
+                           ++ (if wrapped then chezCompileModeLine chezMode (either (const Nothing) Just recorded)
+                               else case chezMode of
+                                      ChezWholeProgram => chezCompileModeLine chezMode Nothing
+                                      ChezPerDefinition => "whole-program (the wrapper could not be written)")
+                   pure r
   buildEnd <- clockTime Monotonic
   putStrLn $ "    Runtime chunk " ++ show idx ++ " build: "
           ++ show (seconds (timeDifference buildEnd buildStart)) ++ " s in "

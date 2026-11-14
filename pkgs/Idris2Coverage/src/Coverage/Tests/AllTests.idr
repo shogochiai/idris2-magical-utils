@@ -1128,6 +1128,67 @@ test_REQ_COV_STATIC_PARTS_001_fold = pure $
                Right st2 => length (partsObligations st2) == 3
                Left _ => False)
 
+||| REQ_COV_UNI_CHEZ_PERDEF_001: per definition unless the way back is set, and
+||| the printed line never says per-definition when nothing was recorded.
+test_REQ_COV_UNI_CHEZ_PERDEF_001_mode : IO Bool
+test_REQ_COV_UNI_CHEZ_PERDEF_001_mode = pure $ all id
+  [ resolveChezCompileMode Nothing == ChezPerDefinition
+  , resolveChezCompileMode (Just "") == ChezPerDefinition
+  , resolveChezCompileMode (Just " 0 ") == ChezPerDefinition
+  , resolveChezCompileMode (Just "1") == ChezWholeProgram
+  , chezCompileModeLine ChezPerDefinition (Just "per-definition\n") == "per-definition"
+  , isInfixOf "not recorded" (chezCompileModeLine ChezPerDefinition Nothing)
+  , isInfixOf "not recorded" (chezCompileModeLine ChezPerDefinition (Just " \n"))
+  , isInfixOf "IDRIS2COV_CHEZ_WHOLE_PROGRAM" (chezCompileModeLine ChezWholeProgram (Just "per-definition"))
+  ]
+
+||| REQ_COV_UNI_CHEZ_PERDEF_001: the wrapper itself, run against a stand-in Chez
+||| that only records how it was called. A program of the compiler's shape loses
+||| its FIRST `(let ()` line and its closing line and is compiled with
+||| `compile-file` (parameters kept); a program of another shape is left as it
+||| is and compiled as asked; any other call reaches Chez with its arguments.
+covering
+test_REQ_COV_UNI_CHEZ_PERDEF_001_wrapper : IO Bool
+test_REQ_COV_UNI_CHEZ_PERDEF_001_wrapper = do
+  pid <- getPID
+  t <- time
+  let d = "/tmp/idris2cov-perdef-test-" ++ show pid ++ "-" ++ show t
+      rd : String -> IO String
+      rd f = map (either (const "<unreadable>") id) (readFile (d ++ "/" ++ f))
+      params = "(parameterize ([optimize-level 3] [compile-file-message #f]) "
+  _ <- system ("mkdir -p " ++ d)
+  _ <- writeFile (d ++ "/fakechez") ("#!/bin/sh\necho \"$@\" >> " ++ d ++ "/calls.txt\n")
+  _ <- writeFile (d ++ "/w.sh") (chezPerDefinitionWrapper (Just (d ++ "/fakechez")) (d ++ "/mode.txt"))
+  _ <- system ("chmod +x " ++ d ++ "/fakechez " ++ d ++ "/w.sh")
+  _ <- writeFile (d ++ "/a.ss") "#!x --program\n(import (chezscheme))\n(let ()\n(define a 1)\n(let ()\n  2)\n(display a)\n  )"
+  _ <- writeFile (d ++ "/compileA") (params ++ "(compile-program \"" ++ d ++ "/a.ss\"))\n")
+  _ <- writeFile (d ++ "/b.ss") "(define a 1)\n(display a)\n"
+  _ <- writeFile (d ++ "/compileB") (params ++ "(compile-program \"" ++ d ++ "/b.ss\"))\n")
+  rcA <- system ("sh " ++ d ++ "/w.sh --script " ++ d ++ "/compileA")
+  modeA <- rd "mode.txt"
+  ssA <- rd "a.ss"
+  callA <- rd "compileA.perdef"
+  rcB <- system ("sh " ++ d ++ "/w.sh --script " ++ d ++ "/compileB")
+  modeB <- rd "mode.txt"
+  ssB <- rd "b.ss"
+  leftB <- system ("test -e " ++ d ++ "/compileB.perdef")
+  rcC <- system ("sh " ++ d ++ "/w.sh --version && sh " ++ d ++ "/w.sh -q --libdirs x --program y.so arg")
+  calls <- rd "calls.txt"
+  _ <- system ("rm -rf " ++ d)
+  pure $ all id
+    [ rcA == 0, rcB == 0, rcC == 0
+    , trim modeA == "per-definition"
+    , ssA == "#!x --program\n(import (chezscheme))\n(define a 1)\n(let ()\n  2)\n(display a)\n"
+    , callA == params ++ "(compile-file \"" ++ d ++ "/a.ss\" \"" ++ d ++ "/a.so\"))\n"
+    , isPrefixOf "whole-program (the program is not one" (trim modeB)
+    , ssB == "(define a 1)\n(display a)\n"
+    , leftB /= 0
+    , lines calls == [ "--script " ++ d ++ "/compileA.perdef"
+                     , "--script " ++ d ++ "/compileB"
+                     , "--version"
+                     , "-q --libdirs x --program y.so arg" ]
+    ]
+
 ||| REQ_COV_STATIC_PARTS_001: the compiler is given a library — no `main`, no
 ||| `executable` — with every module, the package's own dependencies and its own
 ||| build dir; and the parts count as a universe only if the build ended with rc 0
@@ -1378,6 +1439,8 @@ allTests =
   , ("REQ_COV_STATIC_UNIVERSE_001", test_REQ_COV_STATIC_UNIVERSE_001)
   , ("REQ_COV_STATIC_PARTS_001", test_REQ_COV_STATIC_PARTS_001_fold)
   , ("REQ_COV_STATIC_PARTS_001", test_REQ_COV_STATIC_PARTS_001_build)
+  , ("REQ_COV_UNI_CHEZ_PERDEF_001", test_REQ_COV_UNI_CHEZ_PERDEF_001_mode)
+  , ("REQ_COV_UNI_CHEZ_PERDEF_001", test_REQ_COV_UNI_CHEZ_PERDEF_001_wrapper)
   , ("REQ_COV_LIN_002", test_LIN_002)
   , ("REQ_COV_LIN_003", test_LIN_003)
   , ("REQ_COV_LIN_004", test_LIN_004)
